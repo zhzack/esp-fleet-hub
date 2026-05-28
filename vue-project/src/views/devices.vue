@@ -6,12 +6,20 @@ export const meta = { title: '设备管理' }
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { devicesApi } from '@/api/devices'
+import DeviceControl from './device-control.vue'
 
 const rows = ref([])
 const online = ref([])
 const loading = ref(false)
 const dialog = reactive({ visible: false, form: { device_uuid: '', name: '', capabilities: [] } })
 const editDialog = reactive({ visible: false, form: { id: null, name: '', capabilities: [], owner_user_id: null } })
+const control = reactive({ visible: false, deviceUuid: '', deviceName: '' })
+
+function openControl(row) {
+  control.deviceUuid = row.device_uuid
+  control.deviceName = row.name || row.device_uuid
+  control.visible = true
+}
 const capOptions = ['usb_keyboard', 'usb_mouse', 'ble_keyboard', 'ble_mouse']
 
 async function load() {
@@ -93,10 +101,11 @@ onMounted(load)
         </template>
       </el-table-column>
       <el-table-column prop="last_online_at" label="最后在线" width="180" />
-      <el-table-column label="操作" width="180">
+      <el-table-column label="操作" width="260">
         <template #default="{ row }">
           <el-button v-if="!row.owner_user_id" size="small" type="primary" @click="claimDevice(row)">认领</el-button>
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" type="success" :disabled="!isOnline(row.device_uuid)" @click="openControl(row)">控制</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -138,4 +147,6 @@ onMounted(load)
       <el-button type="primary" @click="submitEdit">保存</el-button>
     </template>
   </el-dialog>
+
+  <DeviceControl v-model="control.visible" :device-uuid="control.deviceUuid" :device-name="control.deviceName" />
 </template>
