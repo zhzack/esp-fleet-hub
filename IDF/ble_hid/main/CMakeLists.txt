@@ -1,0 +1,28 @@
+idf_component_register(
+    SRCS
+        "ble_hid_main.c"
+        "app_config.c"
+        "wifi_mgr.c"
+        "ws_client.c"
+        "protocol.c"
+        "executor.c"
+        "keymap.c"
+        "hid_ble.c"
+        "heartbeat.c"
+        "provision.c"
+        "cmd_router.c"
+        "lan_mode.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_websocket_client
+        esp_http_server
+        esp_hw_support
+        json
+        bt
+        esp_timer
+        lwip
+)

@@ -1,0 +1,28 @@
+# Build outputs
+build/
+sdkconfig
+sdkconfig.old
+
+# Managed components (let idf re-resolve inside the container)
+managed_components/
+dependencies.lock
+
+# VCS / editors
+.git/
+.gitignore
+.vscode/
+.idea/
+.cache/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# OS / misc
+.DS_Store
+Thumbs.db
+*.log
+*.bak
+*.tmp

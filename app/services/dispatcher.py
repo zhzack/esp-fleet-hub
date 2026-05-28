@@ -30,6 +30,7 @@ def build_envelope(
     seq: int = 0,
     priority: int = 0,
     source: str = "web",
+    msg_type: str = "action",
 ) -> dict:
     return {
         "header": {
@@ -39,7 +40,7 @@ def build_envelope(
             "source": source,
             "user_id": str(user_id) if user_id else None,
             "device_id": device_uuid,
-            "type": "action",
+            "type": msg_type,
             "priority": priority,
         },
         "routing": {"target_devices": [device_uuid], "broadcast": False, "group": None},
@@ -133,4 +134,104 @@ async def deliver_to_device(
         "status": "timeout" if code == "E006" else "failed",
         "error_code": code,
         "error_message": message,
+    }
+
+
+async def deliver_command(
+    db: Session,
+    *,
+    device_uuid: str,
+    cmd_type: str,
+    payload: dict,
+    user_id: int | None,
+    timeout_ms: int = 3000,
+    priority: int = 0,
+) -> dict:
+    """下发非 action 命令（status/wifi.*/ble.*/reboot 等），返回设备 ACK 的完整 payload。
+
+    与 deliver_to_device 不同：单次尝试，不重试；ACK 的 payload 直接透传给调用者。
+    """
+    msg_id = str(uuid.uuid4())
+    dev_row = crud_device.get_by_uuid(db, device_uuid)
+    device_db_id = dev_row.id if dev_row else None
+
+    crud_action_log.create_pending(
+        db,
+        msg_id=msg_id,
+        user_id=user_id,
+        device_id=device_db_id,
+        action_type=cmd_type,
+        payload=payload,
+    )
+
+    if not device_registry.is_online(device_uuid):
+        crud_action_log.mark_failed(db, msg_id, code="E002", message="device offline")
+        return {
+            "msg_id": msg_id,
+            "device_id": device_uuid,
+            "status": "failed",
+            "error_code": "E002",
+            "error_message": "device offline",
+            "result": None,
+        }
+
+    envelope = build_envelope(
+        msg_id=msg_id,
+        user_id=user_id,
+        device_uuid=device_uuid,
+        payload=payload,
+        priority=priority,
+        msg_type=cmd_type,
+    )
+
+    try:
+        await queue_backend.push(device_uuid, envelope)
+        crud_action_log.mark_sent(db, msg_id)
+    except Exception as e:
+        logger.exception(f"[dispatcher] push failed: {e}")
+        crud_action_log.mark_failed(db, msg_id, code="E003", message="queue push error")
+        return {
+            "msg_id": msg_id,
+            "device_id": device_uuid,
+            "status": "failed",
+            "error_code": "E003",
+            "error_message": "queue push error",
+            "result": None,
+        }
+
+    try:
+        ack = await ack_tracker.expect(msg_id, timeout=timeout_ms / 1000)
+    except asyncio.TimeoutError:
+        crud_action_log.mark_failed(db, msg_id, code="E006", message="ack timeout")
+        return {
+            "msg_id": msg_id,
+            "device_id": device_uuid,
+            "status": "timeout",
+            "error_code": "E006",
+            "error_message": "ack timeout",
+            "result": None,
+        }
+
+    status = ack.get("status", "ok")
+    exec_ms = int(ack.get("exec_time_ms", 0) or 0)
+    if status == "ok":
+        crud_action_log.mark_acked(db, msg_id, exec_ms)
+        return {
+            "msg_id": msg_id,
+            "device_id": device_uuid,
+            "status": "acked",
+            "exec_time_ms": exec_ms,
+            "result": ack,
+        }
+    err = ack.get("error", {}) or {}
+    code = err.get("code", "E000")
+    message = err.get("message", "failed")
+    crud_action_log.mark_failed(db, msg_id, code=code, message=message)
+    return {
+        "msg_id": msg_id,
+        "device_id": device_uuid,
+        "status": "failed",
+        "error_code": code,
+        "error_message": message,
+        "result": ack,
     }

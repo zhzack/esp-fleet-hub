@@ -31,7 +31,12 @@
       "Bash(docker exec *)",
       "Bash(tasklist //FI \"IMAGENAME eq Docker Desktop.exe\")",
       "Bash(tasklist //FI \"IMAGENAME eq com.docker.backend.exe\")",
-      "Bash(grep -E '__pycache__|\\\\.pyc$')"
+      "Bash(grep -E '__pycache__|\\\\.pyc$')",
+      "Bash(docker container *)",
+      "Bash(docker run *)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm -v F:/webpy/py_web/IDF/ble_hid:/project -w /project -e HOME=/tmp espressif/idf:release-v5.4 idf.py set-target esp32s3)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm -v F:/webpy/py_web/IDF/ble_hid:/project -w /project -e HOME=/tmp espressif/idf:release-v5.4 idf.py build)",
+      "Bash(python -c \"from app.api.v2.router import router; from app.api.v2.commands import router as c; print\\('ok', len\\(c.routes\\), 'cmd routes'\\)\")"
     ]
   }
 }
