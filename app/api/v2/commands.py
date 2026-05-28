@@ -133,6 +133,49 @@ async def ble_switch(device_uuid: str, body: BlePeerIn,
     return await _send(db, user, device_uuid, "ble.switch", payload=body.model_dump())
 
 
+class BleScanIn(BaseModel):
+    duration_ms: int | None = 4000
+
+
+@router.post("/{device_uuid}/ble/scan")
+async def ble_scan(device_uuid: str, body: BleScanIn | None = None,
+                   db: Session = Depends(get_db),
+                   user: User = Depends(get_current_user)):
+    payload = body.model_dump(exclude_none=True) if body else {}
+    dur = int(payload.get("duration_ms") or 4000)
+    return await _send(db, user, device_uuid, "ble.scan",
+                       payload=payload, timeout_ms=max(dur + 4000, 8000))
+
+
+# --- usb / transport ---
+
+@router.get("/{device_uuid}/usb/info")
+async def usb_info(device_uuid: str,
+                   db: Session = Depends(get_db),
+                   user: User = Depends(get_current_user)):
+    return await _send(db, user, device_uuid, "usb.info")
+
+
+@router.get("/{device_uuid}/transport")
+async def transport_get(device_uuid: str,
+                        db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    return await _send(db, user, device_uuid, "transport.get")
+
+
+class TransportIn(BaseModel):
+    mode: str  # "ble" | "usb" | "auto"
+
+
+@router.post("/{device_uuid}/transport")
+async def transport_set(device_uuid: str, body: TransportIn,
+                        db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    if body.mode not in ("ble", "usb", "auto"):
+        raise HTTPException(400, "mode must be ble/usb/auto")
+    return await _send(db, user, device_uuid, "transport.set", payload=body.model_dump())
+
+
 # --- system ---
 
 @router.post("/{device_uuid}/reboot")

@@ -41,6 +41,10 @@ static const route_t ROUTES[] = {
     { "/api/ble/unpair_all",  HTTP_POST, "ble.unpair_all" },
     { "/api/ble/disconnect",  HTTP_POST, "ble.disconnect" },
     { "/api/ble/switch",      HTTP_POST, "ble.switch"     },
+    { "/api/ble/scan",        HTTP_POST, "ble.scan"       },
+    { "/api/usb/info",        HTTP_GET,  "usb.info"       },
+    { "/api/transport",       HTTP_GET,  "transport.get"  },
+    { "/api/transport/set",   HTTP_POST, "transport.set"  },
     { "/api/action",          HTTP_POST, "action"         },
     { "/api/reboot",          HTTP_POST, "reboot"         },
 };

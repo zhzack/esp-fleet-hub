@@ -21,6 +21,7 @@
 #include "executor.h"
 #include "heartbeat.h"
 #include "hid_ble.h"
+#include "hid_usb.h"
 #include "provision.h"
 #include "cmd_router.h"
 #include "lan_mode.h"
@@ -44,6 +45,13 @@ void app_main(void)
     ESP_LOGI(TAG, "booting device_id=%s fw=%s", cfg.device_id, FW_VERSION);
 
     ESP_ERROR_CHECK(hid_ble_init(cfg.device_id));
+
+    esp_err_t uerr = hid_usb_init(cfg.device_id);
+    if (uerr == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGI(TAG, "USB HID not supported on this target — BLE only");
+    } else if (uerr != ESP_OK) {
+        ESP_LOGW(TAG, "USB HID init failed: %s — BLE only", esp_err_to_name(uerr));
+    }
 
     if (cfg.wifi_ssid[0] == '\0') {
         ESP_LOGW(TAG, "no wifi configured — entering SoftAP provisioning");

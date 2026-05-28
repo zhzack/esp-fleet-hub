@@ -346,6 +346,104 @@ int hid_ble_switch_to(uint8_t addr_type, const uint8_t addr[6])
     return rc;
 }
 
+/* ---------- scan ---------- */
+
+static hid_ble_scan_entry_t s_scan_buf[HID_BLE_SCAN_MAX];
+static int                  s_scan_count;
+static SemaphoreHandle_t    s_scan_done;
+static SemaphoreHandle_t    s_scan_mutex;
+
+static void parse_adv_name(const uint8_t *data, int len, char *out, int outlen)
+{
+    out[0] = 0;
+    int i = 0;
+    while (i + 1 < len) {
+        int alen = data[i];
+        if (alen <= 0 || i + alen >= len) break;
+        uint8_t ad_type = data[i + 1];
+        const uint8_t *val = &data[i + 2];
+        int vlen = alen - 1;
+        if (ad_type == 0x09 || ad_type == 0x08) {  /* complete or short name */
+            int n = vlen < outlen - 1 ? vlen : outlen - 1;
+            memcpy(out, val, n);
+            out[n] = 0;
+            return;
+        }
+        i += alen + 1;
+    }
+}
+
+static int scan_event(struct ble_gap_event *event, void *arg)
+{
+    if (event->type == BLE_GAP_EVENT_DISC) {
+        const ble_addr_t *a = &event->disc.addr;
+        for (int i = 0; i < s_scan_count; ++i) {
+            if (s_scan_buf[i].addr_type == a->type &&
+                memcmp(s_scan_buf[i].addr, a->val, 6) == 0) {
+                if (event->disc.rssi > s_scan_buf[i].rssi) s_scan_buf[i].rssi = event->disc.rssi;
+                if (!s_scan_buf[i].name[0]) {
+                    parse_adv_name(event->disc.data, event->disc.length_data,
+                                   s_scan_buf[i].name, sizeof s_scan_buf[i].name);
+                }
+                return 0;
+            }
+        }
+        if (s_scan_count < HID_BLE_SCAN_MAX) {
+            hid_ble_scan_entry_t *e = &s_scan_buf[s_scan_count++];
+            e->addr_type = a->type;
+            memcpy(e->addr, a->val, 6);
+            e->rssi = event->disc.rssi;
+            parse_adv_name(event->disc.data, event->disc.length_data, e->name, sizeof e->name);
+        }
+    } else if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+        if (s_scan_done) xSemaphoreGive(s_scan_done);
+    }
+    return 0;
+}
+
+int hid_ble_scan(int duration_ms, hid_ble_scan_entry_t *out, int max)
+{
+    if (!out || max <= 0) return -1;
+    if (duration_ms <= 0)    duration_ms = 4000;
+    if (duration_ms > 10000) duration_ms = 10000;
+
+    if (!s_scan_mutex) s_scan_mutex = xSemaphoreCreateMutex();
+    if (xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return -2;
+    if (!s_scan_done) s_scan_done = xSemaphoreCreateBinary();
+    xSemaphoreTake(s_scan_done, 0);  /* drain */
+
+    s_scan_count = 0;
+    memset(s_scan_buf, 0, sizeof s_scan_buf);
+
+    bool adv_was_on = (s_conn_handle == BLE_HS_CONN_HANDLE_NONE);
+    if (adv_was_on) ble_gap_adv_stop();
+
+    struct ble_gap_disc_params dp = {
+        .itvl = 0,
+        .window = 0,
+        .filter_policy = 0,
+        .limited = 0,
+        .passive = 1,
+        .filter_duplicates = 0,
+    };
+    int rc = ble_gap_disc(s_addr_type, duration_ms, &dp, scan_event, NULL);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "ble_gap_disc rc=%d", rc);
+        if (adv_was_on) start_advertising();
+        xSemaphoreGive(s_scan_mutex);
+        return -3;
+    }
+
+    xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(duration_ms + 1000));
+    ble_gap_disc_cancel();
+    if (adv_was_on) start_advertising();
+
+    int n = s_scan_count < max ? s_scan_count : max;
+    memcpy(out, s_scan_buf, n * sizeof(hid_ble_scan_entry_t));
+    xSemaphoreGive(s_scan_mutex);
+    return n;
+}
+
 
 esp_err_t hid_ble_init(const char *device_name)
 {

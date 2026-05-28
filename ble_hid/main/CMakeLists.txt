@@ -8,6 +8,7 @@ idf_component_register(
         "executor.c"
         "keymap.c"
         "hid_ble.c"
+        "hid_usb.c"
         "heartbeat.c"
         "provision.c"
         "cmd_router.c"
@@ -25,4 +26,5 @@ idf_component_register(
         bt
         esp_timer
         lwip
+        espressif__esp_tinyusb
 )

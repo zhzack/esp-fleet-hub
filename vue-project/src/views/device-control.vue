@@ -19,6 +19,8 @@ const wifiStatusData = ref(null)
 const wifiScanList = ref([])
 const bleInfoData = ref(null)
 const bleBonds = ref([])
+const bleScanList = ref([])
+const transportData = ref(null)
 
 const wifiForm = ref({ ssid: '', password: '' })
 
@@ -95,6 +97,17 @@ async function doUnpairAll() {
   await call(() => commandsApi.bleUnpairAll(props.deviceUuid), '清除全部配对')
   await loadBonds()
 }
+async function doScan() {
+  const r = await call(() => commandsApi.bleScan(props.deviceUuid, 4000), 'BLE 扫描')
+  bleScanList.value = r?.devices || (Array.isArray(r) ? r : [])
+}
+async function loadTransport() {
+  transportData.value = await call(() => commandsApi.transportGet(props.deviceUuid), '查询 transport')
+}
+async function setTransport(mode) {
+  await call(() => commandsApi.transportSet(props.deviceUuid, mode), `transport=${mode}`)
+  await loadTransport()
+}
 async function doReboot() {
   try {
     await ElMessageBox.confirm(`重启设备 ${props.deviceName || props.deviceUuid}？`, '确认', { type: 'warning' })
@@ -115,6 +128,8 @@ watch(() => props.modelValue, (v) => {
     wifiScanList.value = []
     bleInfoData.value = null
     bleBonds.value = []
+    bleScanList.value = []
+    transportData.value = null
     lastResult.value = null
     loadStatus()
   }
@@ -168,6 +183,7 @@ watch(() => props.modelValue, (v) => {
         <el-space>
           <el-button size="small" @click="loadBleInfo">BLE 信息</el-button>
           <el-button size="small" @click="loadBonds">配对列表</el-button>
+          <el-button size="small" @click="doScan">扫描周边</el-button>
           <el-button size="small" @click="doDisconnect">断开当前</el-button>
           <el-button size="small" type="danger" @click="doUnpairAll">清除全部配对</el-button>
         </el-space>
@@ -188,6 +204,38 @@ watch(() => props.modelValue, (v) => {
             </el-table-column>
           </el-table>
         </el-card>
+        <el-card style="margin-top:12px" header="周边可见设备" v-if="bleScanList.length">
+          <el-table :data="bleScanList" size="small">
+            <el-table-column label="名称">
+              <template #default="{ row }">{{ row.name || '(无名)' }}</template>
+            </el-table-column>
+            <el-table-column label="地址">
+              <template #default="{ row }">{{ row.addr || fmtAddr(row.addr) }}</template>
+            </el-table-column>
+            <el-table-column prop="rssi" label="RSSI" width="80" />
+            <el-table-column prop="addr_type" label="类型" width="80" />
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+
+      <el-tab-pane label="传输 / USB" name="transport">
+        <el-button size="small" @click="loadTransport">刷新</el-button>
+        <el-card style="margin-top:12px" header="HID 传输模式" v-if="transportData">
+          <div style="font-size:13px; line-height:1.8">
+            <div>当前模式：<el-tag size="small">{{ transportData.mode || '—' }}</el-tag></div>
+            <div>实际生效：<el-tag size="small" :type="transportData.active === 'usb' ? 'success' : 'warning'">{{ transportData.active || '—' }}</el-tag></div>
+            <div>BLE：<el-tag size="small" :type="transportData.ble_connected ? 'success' : 'info'">{{ transportData.ble_connected ? 'connected' : 'idle' }}</el-tag></div>
+            <div>USB：<el-tag size="small" :type="transportData.usb_mounted ? 'success' : 'info'">{{ transportData.usb_mounted ? 'mounted' : 'unplugged' }}</el-tag></div>
+          </div>
+          <div style="margin-top:12px">
+            <el-button-group>
+              <el-button size="small" :type="transportData.mode === 'auto' ? 'primary' : ''" @click="setTransport('auto')">auto</el-button>
+              <el-button size="small" :type="transportData.mode === 'ble'  ? 'primary' : ''" @click="setTransport('ble')">ble</el-button>
+              <el-button size="small" :type="transportData.mode === 'usb'  ? 'primary' : ''" @click="setTransport('usb')">usb</el-button>
+            </el-button-group>
+          </div>
+        </el-card>
+        <el-empty v-else description="点击刷新加载" :image-size="80" />
       </el-tab-pane>
 
       <el-tab-pane label="原始响应" name="raw">

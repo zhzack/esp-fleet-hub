@@ -23,6 +23,7 @@
 #include "app_config.h"
 #include "executor.h"
 #include "hid_ble.h"
+#include "hid_usb.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "cmdr";
@@ -115,6 +116,13 @@ static int h_get_status(const cJSON *p, cJSON *r, char *err, int errlen)
 
     cJSON *b = cJSON_AddObjectToObject(r, "ble");
     cJSON_AddBoolToObject(b, "connected", hid_ble_connected());
+
+    cJSON *u = cJSON_AddObjectToObject(r, "usb");
+    cJSON_AddBoolToObject(u, "mounted", hid_usb_mounted());
+
+    const char *tr = "ble";
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) tr = "usb";
+    cJSON_AddStringToObject(r, "transport", tr);
     return 0;
 }
 
@@ -264,11 +272,73 @@ static int h_ble_switch(const cJSON *p, cJSON *r, char *err, int errlen)
     return 0;
 }
 
+static int h_ble_scan(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    const cJSON *jd = p ? cJSON_GetObjectItem(p, "duration_ms") : NULL;
+    int dur = cJSON_IsNumber(jd) ? jd->valueint : 4000;
+
+    hid_ble_scan_entry_t arr[HID_BLE_SCAN_MAX];
+    int n = hid_ble_scan(dur, arr, HID_BLE_SCAN_MAX);
+    if (n < 0) { snprintf(err, errlen, "scan rc=%d", n); return 500; }
+
+    cJSON *devs = cJSON_AddArrayToObject(r, "devices");
+    for (int i = 0; i < n; ++i) {
+        cJSON *o = cJSON_CreateObject();
+        char a[20];
+        hex_addr(a, sizeof a, arr[i].addr);
+        cJSON_AddStringToObject(o, "addr",      a);
+        cJSON_AddNumberToObject(o, "addr_type", arr[i].addr_type);
+        cJSON_AddNumberToObject(o, "rssi",      arr[i].rssi);
+        cJSON_AddStringToObject(o, "name",      arr[i].name);
+        cJSON_AddItemToArray(devs, o);
+    }
+    return 0;
+}
+
 static int h_reboot(const cJSON *p, cJSON *r, char *err, int errlen)
 {
     (void)p; (void)r; (void)err; (void)errlen;
     ESP_LOGW(TAG, "reboot requested");
     xTaskCreate(reboot_task, "reboot", 2048, (void *)(intptr_t)500, 5, NULL);
+    return 0;
+}
+
+/* ---------- usb / transport ---------- */
+
+static int h_usb_info(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)err; (void)errlen;
+    cJSON_AddBoolToObject(r, "mounted", hid_usb_mounted());
+    return 0;
+}
+
+static int h_transport_get(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)err; (void)errlen;
+    const char *m = "auto";
+    switch (executor_get_transport()) {
+        case EXECUTOR_TRANSPORT_BLE:  m = "ble"; break;
+        case EXECUTOR_TRANSPORT_USB:  m = "usb"; break;
+        case EXECUTOR_TRANSPORT_AUTO: m = "auto"; break;
+    }
+    const char *active = executor_active_transport() == EXECUTOR_TRANSPORT_USB ? "usb" : "ble";
+    cJSON_AddStringToObject(r, "mode",   m);
+    cJSON_AddStringToObject(r, "active", active);
+    cJSON_AddBoolToObject  (r, "ble_connected", hid_ble_connected());
+    cJSON_AddBoolToObject  (r, "usb_mounted",   hid_usb_mounted());
+    return 0;
+}
+
+static int h_transport_set(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)r;
+    const cJSON *jm = cJSON_GetObjectItem(p, "mode");
+    if (!cJSON_IsString(jm)) { snprintf(err, errlen, "mode missing"); return 400; }
+    const char *m = jm->valuestring;
+    if      (!strcmp(m, "ble"))  executor_set_transport(EXECUTOR_TRANSPORT_BLE);
+    else if (!strcmp(m, "usb"))  executor_set_transport(EXECUTOR_TRANSPORT_USB);
+    else if (!strcmp(m, "auto")) executor_set_transport(EXECUTOR_TRANSPORT_AUTO);
+    else { snprintf(err, errlen, "bad mode (ble|usb|auto)"); return 400; }
     return 0;
 }
 
@@ -295,6 +365,10 @@ void cmd_router_init(void)
     cmd_router_register("ble.unpair_all", h_ble_unpair_all);
     cmd_router_register("ble.disconnect", h_ble_disconnect);
     cmd_router_register("ble.switch",     h_ble_switch);
+    cmd_router_register("ble.scan",       h_ble_scan);
+    cmd_router_register("usb.info",       h_usb_info);
+    cmd_router_register("transport.get",  h_transport_get);
+    cmd_router_register("transport.set",  h_transport_set);
     cmd_router_register("reboot",         h_reboot);
     cmd_router_register("action",         h_action);
 }

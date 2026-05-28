@@ -61,6 +61,9 @@ _SIM_WIFI = {
     "rssi": -52,
 }
 
+_SIM_USB = {"mounted": False}
+_SIM_TRANSPORT_MODE = "auto"  # auto | ble | usb
+
 
 class SimDevice:
     def __init__(self, device_id: str, host: str, port: int):
@@ -183,6 +186,35 @@ class SimDevice:
             _SIM_BONDS.insert(0, _SIM_BONDS.pop(idx))
             return "ok", {"current": _SIM_BONDS[0]}
 
+        if mtype == "ble.scan":
+            return "ok", {"devices": [
+                {"addr": "AA:BB:CC:11:22:33", "addr_type": 0, "rssi": -42, "name": "PC-Alice"},
+                {"addr": "DE:AD:BE:EF:00:01", "addr_type": 0, "rssi": -71, "name": "Phone-Bob"},
+                {"addr": "12:34:56:78:9A:BC", "addr_type": 1, "rssi": -88, "name": ""},
+            ]}
+
+        if mtype == "usb.info":
+            return "ok", dict(_SIM_USB)
+
+        if mtype == "transport.get":
+            active = _SIM_TRANSPORT_MODE
+            if active == "auto":
+                active = "usb" if _SIM_USB["mounted"] else "ble"
+            return "ok", {
+                "mode":          _SIM_TRANSPORT_MODE,
+                "active":        active,
+                "ble_connected": bool(_SIM_BONDS),
+                "usb_mounted":   _SIM_USB["mounted"],
+            }
+
+        if mtype == "transport.set":
+            global _SIM_TRANSPORT_MODE
+            m = payload.get("mode")
+            if m not in ("auto", "ble", "usb"):
+                return "failed", {"code": "E004", "message": "bad mode"}
+            _SIM_TRANSPORT_MODE = m
+            return "ok", {"mode": m}
+
         if mtype == "reboot":
             self._log("  🔁  reboot requested (simulated)")
             return "ok", {"rebooting": True}
@@ -243,7 +275,8 @@ class SimDevice:
             # 非 action 命令（status/wifi/ble/reboot 等）
             if mtype in ("get_status", "wifi.status", "wifi.scan", "wifi.connect",
                          "ble.info", "ble.list_bonds", "ble.unpair", "ble.unpair_all",
-                         "ble.disconnect", "ble.switch", "reboot"):
+                         "ble.disconnect", "ble.switch", "ble.scan",
+                         "usb.info", "transport.get", "transport.set", "reboot"):
                 if msg_id in self.seen_ids:
                     self._log(f"  ⚠️  dup msg_id={msg_id[:8]}…, ignored")
                     continue

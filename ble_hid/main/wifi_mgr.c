@@ -27,12 +27,10 @@ static char s_cur_ip[16]   = {0};
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         s_cur_ip[0] = 0;
-        if (s_retry < s_max_retry) {
+        if (s_cur_ssid[0] && s_retry < s_max_retry) {
             esp_wifi_connect();
             s_retry++;
             ESP_LOGW(TAG, "retry %d/%d", s_retry, s_max_retry);
@@ -90,10 +88,16 @@ esp_err_t wifi_mgr_sta_connect(const char *ssid, const char *pass, int timeout_m
     if (mode == WIFI_MODE_AP) mode = WIFI_MODE_APSTA;
     else if (mode != WIFI_MODE_APSTA) mode = WIFI_MODE_STA;
     esp_wifi_set_mode(mode);
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+
+    /* must be idle before set_config: tear down any in-flight connect first */
+    esp_wifi_disconnect();
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set_config failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     strlcpy(s_cur_ssid, ssid, sizeof s_cur_ssid);
-    esp_wifi_disconnect();
     esp_wifi_connect();
 
     EventBits_t bits = xEventGroupWaitBits(s_eg, BIT_CONNECTED | BIT_FAIL,

@@ -47,6 +47,22 @@ int  hid_ble_disconnect(void);
 /** Disconnect (if connected) and start directed advertising to the given peer. */
 int  hid_ble_switch_to(uint8_t addr_type, const uint8_t addr[6]);
 
+/* ---------- BLE scan (Observer role) ---------- */
+
+#define HID_BLE_SCAN_MAX 16
+
+typedef struct {
+    uint8_t addr_type;
+    uint8_t addr[6];
+    int8_t  rssi;
+    char    name[32];   /* parsed from adv complete/short name; empty if absent */
+} hid_ble_scan_entry_t;
+
+/** Start a synchronous BLE scan for `duration_ms` (capped at 10000), collect up to
+ *  `max` unique advertisers into `out`, and resume HID advertising. Returns the
+ *  count actually written, or <0 on error. */
+int  hid_ble_scan(int duration_ms, hid_ble_scan_entry_t *out, int max);
+
 #ifdef __cplusplus
 }
 #endif

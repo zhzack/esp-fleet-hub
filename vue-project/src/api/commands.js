@@ -17,6 +17,11 @@ export const commandsApi = {
   bleUnpairAll(uuid)  { return http.post(`${base(uuid)}/ble/unpair_all`) },
   bleDisconnect(uuid) { return http.post(`${base(uuid)}/ble/disconnect`) },
   bleSwitch(uuid, addrType, addr)   { return http.post(`${base(uuid)}/ble/switch`,    { addr_type: addrType, addr }) },
+  bleScan(uuid, durationMs = 4000)  { return http.post(`${base(uuid)}/ble/scan`,      { duration_ms: durationMs }, { timeout: durationMs + 8000 }) },
+
+  usbInfo(uuid)        { return http.get(`${base(uuid)}/usb/info`) },
+  transportGet(uuid)   { return http.get(`${base(uuid)}/transport`) },
+  transportSet(uuid, mode) { return http.post(`${base(uuid)}/transport`, { mode }) },
 
   reboot(uuid)        { return http.post(`${base(uuid)}/reboot`) },
 }

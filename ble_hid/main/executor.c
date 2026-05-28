@@ -9,10 +9,35 @@
 
 #include "ws_client.h"
 #include "hid_ble.h"
+#include "hid_usb.h"
 #include "keymap.h"
 
 static const char *TAG = "exec";
 static QueueHandle_t s_q;
+static executor_transport_t s_transport = EXECUTOR_TRANSPORT_AUTO;
+
+void executor_set_transport(executor_transport_t t) { s_transport = t; }
+executor_transport_t executor_get_transport(void)   { return s_transport; }
+
+executor_transport_t executor_active_transport(void)
+{
+    if (s_transport == EXECUTOR_TRANSPORT_USB) return EXECUTOR_TRANSPORT_USB;
+    if (s_transport == EXECUTOR_TRANSPORT_BLE) return EXECUTOR_TRANSPORT_BLE;
+    return hid_usb_mounted() ? EXECUTOR_TRANSPORT_USB : EXECUTOR_TRANSPORT_BLE;
+}
+
+static void hid_tap (uint8_t code, uint8_t mods) {
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_tap (code, mods);
+    else                                                       hid_ble_tap (code, mods);
+}
+static void hid_down(uint8_t code, uint8_t mods) {
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_down(code, mods);
+    else                                                       hid_ble_down(code, mods);
+}
+static void hid_up  (uint8_t code, uint8_t mods) {
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_up  (code, mods);
+    else                                                       hid_ble_up  (code, mods);
+}
 
 uint16_t executor_queue_len(void)
 {
@@ -54,19 +79,19 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
     if (!strcmp(type, "keyboard_tap") && key) {
         uint8_t code = 0, mods = 0;
         if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_ble_tap(code, mods);
+        hid_tap(code, mods);
         return true;
     }
     if (!strcmp(type, "keyboard_down") && key) {
         uint8_t code = 0, mods = 0;
         if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_ble_down(code, mods);
+        hid_down(code, mods);
         return true;
     }
     if (!strcmp(type, "keyboard_up") && key) {
         uint8_t code = 0, mods = 0;
         if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_ble_up(code, mods);
+        hid_up(code, mods);
         return true;
     }
     if (!strcmp(type, "text")) {
@@ -78,7 +103,7 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
         for (const char *p = jc->valuestring; *p; ++p) {
             uint8_t code = 0, mods = 0;
             if (!keymap_ascii(*p, &code, &mods)) continue;
-            hid_ble_tap(code, mods);
+            hid_tap(code, mods);
             if (interval > 0) vTaskDelay(pdMS_TO_TICKS(interval));
         }
         return true;
@@ -89,11 +114,33 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
         if (ms > 0) vTaskDelay(pdMS_TO_TICKS(ms));
         return true;
     }
-    if (!strcmp(type, "mouse_move") || !strcmp(type, "mouse_click")) {
-        /* BLE HID keyboard-only build for V1; mouse to be added with combined HID descriptor */
-        strcpy(err_code, "E004");
-        strcpy(err_msg, "mouse not supported on ble_hid build");
-        return false;
+    if (!strcmp(type, "mouse_move")) {
+        if (executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "mouse needs USB transport");
+            return false;
+        }
+        const cJSON *jx = cJSON_GetObjectItem(step, "x");
+        const cJSON *jy = cJSON_GetObjectItem(step, "y");
+        int dx = cJSON_IsNumber(jx) ? jx->valueint : 0;
+        int dy = cJSON_IsNumber(jy) ? jy->valueint : 0;
+        if (dx >  127) dx =  127;
+        if (dx < -127) dx = -127;
+        if (dy >  127) dy =  127;
+        if (dy < -127) dy = -127;
+        hid_usb_mouse_move((int8_t)dx, (int8_t)dy);
+        return true;
+    }
+    if (!strcmp(type, "mouse_click")) {
+        if (executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "mouse needs USB transport");
+            return false;
+        }
+        const cJSON *jb = cJSON_GetObjectItem(step, "button");
+        int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
+        hid_usb_mouse_click((uint8_t)b);
+        return true;
     }
     if (!strcmp(type, "macro")) {
         const cJSON *steps = cJSON_GetObjectItem(step, "steps");
