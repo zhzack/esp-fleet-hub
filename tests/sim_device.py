@@ -45,7 +45,21 @@ DEFAULT_DEVICE_ID = "esp32_sim_001"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 HEARTBEAT_SEC = 10
-CAPABILITIES = ["usb_keyboard", "usb_mouse"]
+CAPABILITIES = ["usb_keyboard", "usb_mouse", "ble_keyboard", "ble_mouse"]
+
+# 模拟 BLE 配对表（地址按字节数组保存）
+_SIM_BONDS = [
+    {"addr_type": 0, "addr": [0xAA, 0xBB, 0xCC, 0x11, 0x22, 0x33], "name": "PC-Alice"},
+    {"addr_type": 0, "addr": [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01], "name": "Phone-Bob"},
+]
+
+# 模拟 WiFi 状态
+_SIM_WIFI = {
+    "connected": True,
+    "ssid": "SimAP",
+    "ip": "192.168.10.123",
+    "rssi": -52,
+}
 
 
 class SimDevice:
@@ -100,6 +114,81 @@ class SimDevice:
         # 模拟 5~15ms 执行耗时
         return True, 8, None
 
+    # ----- 命令路由（非 action 的 V2.1 命令）-----
+    def _handle_command(self, mtype: str, payload: dict) -> tuple[str, dict]:
+        """返回 (status, result_or_error)。status='ok' 时第二项是 result dict；
+        status='failed' 时第二项是 {code, message}。"""
+        global _SIM_BONDS, _SIM_WIFI
+
+        if mtype == "get_status":
+            return "ok", {
+                "device_id": self.device_id,
+                "uptime": int(time.time() - self.start_ts),
+                "firmware": "sim-1.1.0",
+                "capabilities": CAPABILITIES,
+                "wifi": {"connected": _SIM_WIFI["connected"], "ssid": _SIM_WIFI["ssid"]},
+                "ble": {"bonded": len(_SIM_BONDS), "current": _SIM_BONDS[0] if _SIM_BONDS else None},
+            }
+
+        if mtype == "wifi.status":
+            return "ok", dict(_SIM_WIFI)
+
+        if mtype == "wifi.scan":
+            return "ok", {"aps": [
+                {"ssid": "SimAP",     "rssi": -52, "auth": "WPA2"},
+                {"ssid": "Office-5G", "rssi": -67, "auth": "WPA2"},
+                {"ssid": "Guest",     "rssi": -78, "auth": "OPEN"},
+            ]}
+
+        if mtype == "wifi.connect":
+            ssid = payload.get("ssid")
+            if not ssid:
+                return "failed", {"code": "E004", "message": "missing ssid"}
+            _SIM_WIFI = {"connected": True, "ssid": ssid, "ip": "192.168.10.123", "rssi": -55}
+            return "ok", {"connected": True, "ssid": ssid, "ip": _SIM_WIFI["ip"]}
+
+        if mtype == "ble.info":
+            return "ok", {
+                "advertising": True,
+                "connected": bool(_SIM_BONDS),
+                "current": _SIM_BONDS[0] if _SIM_BONDS else None,
+                "bonded_count": len(_SIM_BONDS),
+            }
+
+        if mtype == "ble.list_bonds":
+            return "ok", {"bonds": list(_SIM_BONDS)}
+
+        if mtype == "ble.unpair":
+            addr = payload.get("addr")
+            atype = payload.get("addr_type")
+            before = len(_SIM_BONDS)
+            _SIM_BONDS = [b for b in _SIM_BONDS if not (b["addr"] == addr and b["addr_type"] == atype)]
+            return "ok", {"removed": before - len(_SIM_BONDS)}
+
+        if mtype == "ble.unpair_all":
+            n = len(_SIM_BONDS)
+            _SIM_BONDS = []
+            return "ok", {"removed": n}
+
+        if mtype == "ble.disconnect":
+            return "ok", {"disconnected": True}
+
+        if mtype == "ble.switch":
+            addr = payload.get("addr")
+            atype = payload.get("addr_type")
+            idx = next((i for i, b in enumerate(_SIM_BONDS)
+                        if b["addr"] == addr and b["addr_type"] == atype), -1)
+            if idx < 0:
+                return "failed", {"code": "E004", "message": "bond not found"}
+            _SIM_BONDS.insert(0, _SIM_BONDS.pop(idx))
+            return "ok", {"current": _SIM_BONDS[0]}
+
+        if mtype == "reboot":
+            self._log("  🔁  reboot requested (simulated)")
+            return "ok", {"rebooting": True}
+
+        return "failed", {"code": "E004", "message": f"unsupported cmd: {mtype}"}
+
     # ----- 主循环 -----
     async def _heartbeat_loop(self):
         while True:
@@ -149,6 +238,24 @@ class SimDevice:
                          "error": {"code": "E004", "message": err}},
                         ref_msg_id=msg_id,
                     ))
+                continue
+
+            # 非 action 命令（status/wifi/ble/reboot 等）
+            if mtype in ("get_status", "wifi.status", "wifi.scan", "wifi.connect",
+                         "ble.info", "ble.list_bonds", "ble.unpair", "ble.unpair_all",
+                         "ble.disconnect", "ble.switch", "reboot"):
+                if msg_id in self.seen_ids:
+                    self._log(f"  ⚠️  dup msg_id={msg_id[:8]}…, ignored")
+                    continue
+                self.seen_ids.append(msg_id)
+                self._log(f"⬇ cmd  msg_id={msg_id[:8]}… type={mtype} {payload}")
+                status, body = self._handle_command(mtype, payload)
+                ack_payload: dict = {"status": status, "exec_time_ms": 5}
+                if status == "ok":
+                    ack_payload["result"] = body
+                else:
+                    ack_payload["error"] = body
+                await self._send(self._envelope("ack", ack_payload, ref_msg_id=msg_id))
                 continue
 
             self._log(f"  ❓ unknown type={mtype}")
