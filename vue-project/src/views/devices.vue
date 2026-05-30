@@ -3,7 +3,7 @@ export const meta = { title: '设备管理' }
 </script>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { devicesApi } from '@/api/devices'
 import DeviceControl from './device-control.vue'
@@ -31,6 +31,21 @@ async function load() {
     loading.value = false
   }
 }
+
+async function silentRefresh() {
+  try {
+    const [list, on] = await Promise.all([devicesApi.list(), devicesApi.online()])
+    rows.value = list
+    online.value = on.online
+  } catch (e) { /* 静默 */ }
+}
+
+let pollTimer = null
+onMounted(() => {
+  load()
+  pollTimer = setInterval(silentRefresh, 5000)
+})
+onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 
 function isOnline(uuid) { return online.value.includes(uuid) }
 
@@ -68,8 +83,6 @@ async function claimDevice(row) {
   ElMessage.success('认领成功')
   load()
 }
-
-onMounted(load)
 </script>
 
 <template>

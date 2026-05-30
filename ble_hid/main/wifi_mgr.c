@@ -146,21 +146,42 @@ void wifi_mgr_ap_stop(void)
 esp_err_t wifi_mgr_scan(wifi_scan_entry_t *out_arr, int *out_n)
 {
     if (!s_inited) wifi_mgr_init();
-    wifi_scan_config_t sc = { 0 };
+
+    /* 注意：BT 启用时 IDF 不允许自定义 active dwell time，必须用默认。
+     * show_hidden 仍可设。 */
+    wifi_scan_config_t sc = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+    ESP_LOGI(TAG, "scan start (active, show_hidden=1)");
     esp_err_t err = esp_wifi_scan_start(&sc, true);
-    if (err != ESP_OK) { *out_n = 0; return err; }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan_start: %s", esp_err_to_name(err));
+        *out_n = 0;
+        return err;
+    }
 
     uint16_t n = 0;
     esp_wifi_scan_get_ap_num(&n);
+    ESP_LOGI(TAG, "scan done: %u APs reported", n);
     if (n > WIFI_SCAN_MAX) n = WIFI_SCAN_MAX;
-    wifi_ap_record_t recs[WIFI_SCAN_MAX];
+    if (n == 0) { *out_n = 0; return ESP_OK; }
+
+    wifi_ap_record_t *recs = malloc((size_t)n * sizeof(wifi_ap_record_t));
+    if (!recs) { *out_n = 0; return ESP_ERR_NO_MEM; }
     esp_wifi_scan_get_ap_records(&n, recs);
 
     for (int i = 0; i < n; ++i) {
         strlcpy(out_arr[i].ssid, (const char *)recs[i].ssid, sizeof out_arr[i].ssid);
         out_arr[i].rssi = recs[i].rssi;
         out_arr[i].auth = recs[i].authmode;
+        ESP_LOGI(TAG, "  [%d] %-32s rssi=%d auth=%d ch=%d",
+                 i, out_arr[i].ssid, out_arr[i].rssi, out_arr[i].auth, recs[i].primary);
     }
+    free(recs);
     *out_n = n;
     return ESP_OK;
 }

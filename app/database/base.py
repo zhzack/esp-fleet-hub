@@ -8,6 +8,8 @@ from app.database.models.vehicle import VehicleModel  # noqa: F401
 # HID Gateway 模型
 from app.database.models.user import User  # noqa: F401
 from app.database.models.device import Device, DeviceConnection  # noqa: F401
+from app.database.models.device_bond_slot import DeviceBondSlot  # noqa: F401
+from app.database.models.device_wifi_known import DeviceWifiKnown  # noqa: F401
 from app.database.models.action_log import ActionLog  # noqa: F401
 from app.database.models.macro import Macro  # noqa: F401
 from app.database.models.device_group import DeviceGroup, DeviceGroupMember  # noqa: F401

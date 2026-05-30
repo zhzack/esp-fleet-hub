@@ -16,6 +16,7 @@ static const char *TAG = "ws";
 static esp_websocket_client_handle_t s_client;
 static QueueHandle_t s_tx_queue;          /* cJSON* envelopes pending send */
 static volatile bool s_online = false;
+static volatile bool s_registered = false;  /* sent register on current TCP session */
 static char s_device_id[64];
 
 static void send_register(void);
@@ -39,11 +40,15 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *data
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
         ESP_LOGI(TAG, "connected");
-        send_register();
+        if (!s_registered) {
+            send_register();
+            s_registered = true;
+        }
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "disconnected");
         s_online = false;
+        s_registered = false;
         break;
     case WEBSOCKET_EVENT_DATA:
         if (e->op_code == 0x1 /* text */ && e->data_len > 0) {
@@ -124,6 +129,9 @@ esp_err_t ws_client_start(const char *host, uint16_t port,
         .network_timeout_ms = 10000,
         .ping_interval_sec = 0,    /* heartbeat handled at app layer */
         .disable_auto_reconnect = false,
+        .task_stack = 8192,        /* default 4K is too small for scan handlers */
+        .task_prio  = 6,
+        .buffer_size = 4096,
     };
     s_client = esp_websocket_client_init(&cfg);
     if (!s_client) return ESP_FAIL;

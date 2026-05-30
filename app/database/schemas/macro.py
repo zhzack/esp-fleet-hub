@@ -20,6 +20,11 @@ class MacroCreate(BaseModel):
     steps: List[Dict[str, Any]]
 
 
+class MacroUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    steps: Optional[List[Dict[str, Any]]] = None
+
+
 class MacroOut(BaseModel):
     id: int
     user_id: int

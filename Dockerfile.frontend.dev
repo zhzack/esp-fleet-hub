@@ -1,0 +1,13 @@
+# Dev frontend image — node 20 + npm 缓存。源码 volume mount，命令跑 vite dev server。
+FROM node:20-alpine
+
+WORKDIR /web
+
+# 只 COPY package*.json，把依赖装进镜像层，避免每次 mount 后还要 install
+COPY vue-project/package*.json ./
+RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+EXPOSE 5173
+
+# dev compose 会 mount 整个 vue-project 进来覆盖；node_modules 由这层提供
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

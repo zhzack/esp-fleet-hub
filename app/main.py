@@ -62,6 +62,11 @@ else:
 
 @app.on_event("startup")
 async def on_startup():
+    # 兜底创建新增的 ORM 表（已有的旧表保留不动）。
+    # 生产建议改 alembic；开发期 create_all 足够。
+    from app.database.base import Base  # noqa: F401 — 拉齐所有 model
+    from app.database.session import engine
+    Base.metadata.create_all(bind=engine)
     logger.info(
         f"🚀 {settings.PROJECT_NAME} v{settings.VERSION} 启动"
         f" | DB={settings.MYSQL_DB} | Queue={settings.QUEUE_BACKEND}"

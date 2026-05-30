@@ -24,4 +24,18 @@ export const commandsApi = {
   transportSet(uuid, mode) { return http.post(`${base(uuid)}/transport`, { mode }) },
 
   reboot(uuid)        { return http.post(`${base(uuid)}/reboot`) },
+
+  // slot CRUD
+  listSlots(uuid)                    { return http.get(`${base(uuid)}/slots`) },
+  putSlot(uuid, idx, body)           { return http.put(`${base(uuid)}/slots/${idx}`, body) },
+  deleteSlot(uuid, idx)              { return http.delete(`${base(uuid)}/slots/${idx}`) },
+
+  // 多目标编排发送
+  send(uuid, body)                   { return http.post(`${base(uuid)}/send`, body, { timeout: 30000 }) },
+
+  // WiFi 已知凭据
+  listKnownWifi(uuid)                { return http.get(`${base(uuid)}/wifi/known`) },
+  upsertKnownWifi(uuid, body)        { return http.put(`${base(uuid)}/wifi/known`, body) },
+  deleteKnownWifi(uuid, ssid)        { return http.delete(`${base(uuid)}/wifi/known/${encodeURIComponent(ssid)}`) },
+  applyKnownWifi(uuid, ssid)         { return http.post(`${base(uuid)}/wifi/apply`, { ssid }, { timeout: 25000 }) },
 }

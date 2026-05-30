@@ -21,19 +21,26 @@ const bleInfoData = ref(null)
 const bleBonds = ref([])
 const bleScanList = ref([])
 const transportData = ref(null)
+const slotsList = ref([])     // {slot_index, addr_type, addr, name, last_used_at}
+const wifiKnownList = ref([]) // [{ssid, label, has_password, last_seen_at}]
 
 const wifiForm = ref({ ssid: '', password: '' })
 
 function close() { emit('update:modelValue', false) }
 
 function extractResult(resp) {
-  // dispatcher.deliver_command 返回 { status, results: [...] } 或 { status: 'acked', result: {...} }
-  // 取出设备 ACK payload 中的 result 字段
+  // 数据流：dispatcher.deliver_command 返回 {status, result: <ACK_payload>}
+  // 设备 ACK_payload 形如 {ok, exec_time_ms, result: {...真正业务数据...}}
+  // 这里把两层都剥掉，只把最里面的业务结果交给调用方。
   if (!resp) return null
-  if (resp.result !== undefined) return resp.result
-  const r = resp.results?.[0]
-  if (r?.result !== undefined) return r.result
-  return resp
+  // 第一层：dispatcher 包的 result
+  let cur = resp.result !== undefined ? resp.result : resp.results?.[0]?.result
+  if (cur === undefined) cur = resp
+  // 第二层：设备 ACK payload 里的 result
+  if (cur && typeof cur === 'object' && cur.result !== undefined) {
+    return cur.result
+  }
+  return cur
 }
 
 async function call(fn, label) {
@@ -62,8 +69,38 @@ async function loadWifiStatus() {
   wifiStatusData.value = await call(() => commandsApi.wifiStatus(props.deviceUuid), 'WiFi 状态')
 }
 async function doWifiScan() {
+  // 同步拉 wifi.status 和 known 列表，扫描结果好对照
+  if (!wifiStatusData.value) await loadWifiStatus()
+  if (!wifiKnownList.value.length) await loadKnownWifi()
   const r = await call(() => commandsApi.wifiScan(props.deviceUuid), 'WiFi 扫描')
-  wifiScanList.value = r?.aps || r?.list || (Array.isArray(r) ? r : [])
+  const list = r?.networks || r?.aps || (Array.isArray(r) ? r : [])
+  const cur = wifiStatusData.value?.ssid
+  const knownSet = new Set(wifiKnownList.value.map(w => w.ssid))
+  wifiScanList.value = list.map(n => ({
+    ...n,
+    _status: cur && n.ssid === cur ? 'using'
+           : knownSet.has(n.ssid) ? 'saved'
+           : null,
+  }))
+}
+
+async function loadKnownWifi() {
+  try { wifiKnownList.value = await commandsApi.listKnownWifi(props.deviceUuid) || [] }
+  catch { wifiKnownList.value = [] }
+}
+
+async function applyKnownWifi(row) {
+  await call(() => commandsApi.applyKnownWifi(props.deviceUuid, row.ssid), `连接 ${row.ssid}`)
+  await loadWifiStatus()
+}
+
+async function deleteKnownWifi(row) {
+  try {
+    await ElMessageBox.confirm(`从已保存列表删除 ${row.ssid}？`, '确认', { type: 'warning' })
+    await commandsApi.deleteKnownWifi(props.deviceUuid, row.ssid)
+    ElMessage.success('已删除')
+    await loadKnownWifi()
+  } catch { /* canceled */ }
 }
 async function doWifiConnect() {
   if (!wifiForm.value.ssid) return ElMessage.warning('SSID 必填')
@@ -98,8 +135,20 @@ async function doUnpairAll() {
   await loadBonds()
 }
 async function doScan() {
+  // 先把"已配对/当前主机"信息备好，用来标 tag
+  if (!bleInfoData.value) await loadBleInfo()
+  if (!bleBonds.value.length) await loadBonds()
   const r = await call(() => commandsApi.bleScan(props.deviceUuid, 4000), 'BLE 扫描')
-  bleScanList.value = r?.devices || (Array.isArray(r) ? r : [])
+  const list = r?.devices || (Array.isArray(r) ? r : [])
+  const curPeer = String(bleInfoData.value?.peer || '').toUpperCase()
+  const bondedAddrs = new Set((bleBonds.value || []).map(b => fmtAddr(b.addr).toUpperCase()))
+  bleScanList.value = list.map(d => {
+    const addr = String(d.addr || '').toUpperCase()
+    let status = null
+    if (addr && addr === curPeer)        status = 'connected'
+    else if (addr && bondedAddrs.has(addr)) status = 'bonded'
+    return { ...d, _status: status }
+  })
 }
 async function loadTransport() {
   transportData.value = await call(() => commandsApi.transportGet(props.deviceUuid), '查询 transport')
@@ -107,6 +156,36 @@ async function loadTransport() {
 async function setTransport(mode) {
   await call(() => commandsApi.transportSet(props.deviceUuid, mode), `transport=${mode}`)
   await loadTransport()
+}
+
+async function loadSlots() {
+  try { slotsList.value = await commandsApi.listSlots(props.deviceUuid) || [] }
+  catch { slotsList.value = [] }
+}
+
+async function assignSlot(bond) {
+  try {
+    const { value: idx } = await ElMessageBox.prompt(
+      `把 ${fmtAddr(bond.addr)} 分配到哪个 slot？(1-9)`,
+      '分配 slot', { inputPattern: /^[1-9]$/, inputErrorMessage: '只能填 1-9' }
+    )
+    await commandsApi.putSlot(props.deviceUuid, parseInt(idx), {
+      addr_type: bond.addr_type ?? 0,
+      addr: fmtAddr(bond.addr),
+      name: null,
+    })
+    ElMessage.success(`已分配到 slot ${idx}`)
+    await loadSlots()
+  } catch { /* canceled */ }
+}
+
+async function clearSlot(s) {
+  try {
+    await ElMessageBox.confirm(`清空 slot ${s.slot_index}？`, '确认', { type: 'warning' })
+    await commandsApi.deleteSlot(props.deviceUuid, s.slot_index)
+    ElMessage.success(`已清空 slot ${s.slot_index}`)
+    await loadSlots()
+  } catch { /* canceled */ }
 }
 async function doReboot() {
   try {
@@ -130,8 +209,11 @@ watch(() => props.modelValue, (v) => {
     bleBonds.value = []
     bleScanList.value = []
     transportData.value = null
+    slotsList.value = []
+    wifiKnownList.value = []
     lastResult.value = null
     loadStatus()
+    loadSlots()
   }
 })
 </script>
@@ -165,11 +247,43 @@ watch(() => props.modelValue, (v) => {
             <el-button type="primary" @click="doWifiConnect">连接</el-button>
           </el-form>
         </el-card>
+        <el-card style="margin-top:12px" header="已保存的网络">
+          <div style="display:flex; gap:8px; margin-bottom:8px">
+            <el-button size="small" @click="loadKnownWifi">刷新</el-button>
+            <span style="font-size:12px; color:#909399; line-height:24px">
+              连接成功后自动落库；可在新设备上一键回放
+            </span>
+          </div>
+          <el-empty v-if="!wifiKnownList.length" description="暂无已保存网络" :image-size="60" />
+          <el-table v-else :data="wifiKnownList" size="small">
+            <el-table-column prop="ssid" label="SSID" />
+            <el-table-column label="密码" width="80">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.has_password ? 'success' : 'info'">
+                  {{ row.has_password ? '已存' : '无' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="last_seen_at" label="上次使用" width="180" />
+            <el-table-column label="操作" width="180">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" @click="applyKnownWifi(row)">连接</el-button>
+                <el-button size="small" type="danger" @click="deleteKnownWifi(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
         <el-card style="margin-top:12px" header="扫描结果" v-if="wifiScanList.length">
           <el-table :data="wifiScanList" size="small">
             <el-table-column prop="ssid" label="SSID" />
             <el-table-column prop="rssi" label="RSSI" width="80" />
             <el-table-column prop="auth" label="加密" width="100" />
+            <el-table-column label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row._status === 'using'" type="success" size="small">正在用</el-tag>
+                <el-tag v-else-if="row._status === 'saved'" type="info" size="small">已保存</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="80">
               <template #default="{ row }">
                 <el-button size="small" @click="wifiForm.ssid = row.ssid">选择</el-button>
@@ -196,10 +310,31 @@ watch(() => props.modelValue, (v) => {
               <template #default="{ row }">{{ fmtAddr(row.addr) }}</template>
             </el-table-column>
             <el-table-column prop="addr_type" label="类型" width="80" />
-            <el-table-column label="操作" width="180">
+            <el-table-column label="操作" width="280">
               <template #default="{ row }">
                 <el-button size="small" @click="doSwitch(row)">切换</el-button>
+                <el-button size="small" @click="assignSlot(row)">分配 slot</el-button>
                 <el-button size="small" type="danger" @click="doUnpair(row)">取消配对</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+        <el-card style="margin-top:12px" header="主机槽位">
+          <div style="display:flex; gap:8px; margin-bottom:8px">
+            <el-button size="small" @click="loadSlots">刷新</el-button>
+            <span style="font-size:12px; color:#909399; line-height:24px">
+              通过 slot 编号在宏页面/console 选择目标主机
+            </span>
+          </div>
+          <el-empty v-if="!slotsList.length" description="尚未分配任何 slot" :image-size="60" />
+          <el-table v-else :data="slotsList" size="small">
+            <el-table-column prop="slot_index" label="Slot" width="60" />
+            <el-table-column prop="addr" label="地址" />
+            <el-table-column prop="name" label="名称" width="120" />
+            <el-table-column prop="last_used_at" label="最近使用" width="180" />
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <el-button size="small" type="danger" @click="clearSlot(row)">清空</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -214,6 +349,12 @@ watch(() => props.modelValue, (v) => {
             </el-table-column>
             <el-table-column prop="rssi" label="RSSI" width="80" />
             <el-table-column prop="addr_type" label="类型" width="80" />
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row._status === 'connected'" type="success" size="small">当前主机</el-tag>
+                <el-tag v-else-if="row._status === 'bonded'" type="info" size="small">已配对</el-tag>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </el-tab-pane>

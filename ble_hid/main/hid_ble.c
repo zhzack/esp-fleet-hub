@@ -39,6 +39,8 @@ static uint16_t s_input_report_handle;
 static SemaphoreHandle_t s_lock;
 static uint8_t s_addr_type;
 static char    s_dev_name[32];
+static volatile bool s_advertising = false;
+static volatile bool s_scanning    = false;
 
 /* 8-byte boot keyboard report: modifier | reserved | k0..k5 */
 static uint8_t s_report[8];
@@ -152,17 +154,22 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             s_conn_handle = event->connect.conn_handle;
+            s_advertising = false;
             ESP_LOGI(TAG, "connected");
         } else {
+            s_advertising = false;
             start_advertising();
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_advertising = false;
         start_advertising();
         break;
     case BLE_GAP_EVENT_ADV_COMPLETE:
+        ESP_LOGI(TAG, "adv complete reason=0x%x", event->adv_complete.reason);
+        s_advertising = false;
         start_advertising();
         break;
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -177,6 +184,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static void start_advertising(void)
 {
+    if (s_advertising) return;
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) return;
+    if (s_scanning) return;
+
     struct ble_hs_adv_fields fields = { 0 };
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.name = (uint8_t *)s_dev_name;
@@ -196,7 +207,13 @@ static void start_advertising(void)
         .disc_mode = BLE_GAP_DISC_MODE_GEN,
     };
     rc = ble_gap_adv_start(s_addr_type, NULL, BLE_HS_FOREVER, &adv, gap_event, NULL);
-    if (rc) ESP_LOGE(TAG, "adv_start rc=%d", rc);
+    if (rc == 0) {
+        s_advertising = true;
+    } else if (rc == BLE_HS_EALREADY) {
+        s_advertising = true;
+    } else {
+        ESP_LOGE(TAG, "adv_start rc=%d", rc);
+    }
 }
 
 static void on_sync(void)
@@ -209,6 +226,18 @@ static void host_task(void *param)
 {
     nimble_port_run();
     nimble_port_freertos_deinit();
+}
+
+static void adv_watchdog_task(void *arg)
+{
+    /* Periodically ensure adv is up whenever we're idle and not scanning. */
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE && !s_advertising && !s_scanning) {
+            ESP_LOGW(TAG, "adv watchdog: kicking restart");
+            start_advertising();
+        }
+    }
 }
 
 bool hid_ble_connected(void)
@@ -394,8 +423,15 @@ static int scan_event(struct ble_gap_event *event, void *arg)
             memcpy(e->addr, a->val, 6);
             e->rssi = event->disc.rssi;
             parse_adv_name(event->disc.data, event->disc.length_data, e->name, sizeof e->name);
+            ESP_LOGI(TAG, "scan: +[%d] %02X:%02X:%02X:%02X:%02X:%02X rssi=%d name=%s",
+                     s_scan_count - 1,
+                     a->val[5], a->val[4], a->val[3], a->val[2], a->val[1], a->val[0],
+                     event->disc.rssi, e->name);
+        } else {
+            ESP_LOGD(TAG, "scan: buffer full, dropping rssi=%d", event->disc.rssi);
         }
     } else if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+        ESP_LOGI(TAG, "scan complete: %d unique advertisers", s_scan_count);
         if (s_scan_done) xSemaphoreGive(s_scan_done);
     }
     return 0;
@@ -417,18 +453,21 @@ int hid_ble_scan(int duration_ms, hid_ble_scan_entry_t *out, int max)
 
     bool adv_was_on = (s_conn_handle == BLE_HS_CONN_HANDLE_NONE);
     if (adv_was_on) ble_gap_adv_stop();
+    s_advertising = false;
+    s_scanning    = true;
 
     struct ble_gap_disc_params dp = {
-        .itvl = 0,
-        .window = 0,
+        .itvl = 0x0050,            /* 80 * 0.625ms = 50ms */
+        .window = 0x0040,          /* 64 * 0.625ms = 40ms — listen 80% of the time */
         .filter_policy = 0,
         .limited = 0,
-        .passive = 1,
+        .passive = 0,              /* active: also reads SCAN_RSP for names */
         .filter_duplicates = 0,
     };
     int rc = ble_gap_disc(s_addr_type, duration_ms, &dp, scan_event, NULL);
     if (rc != 0) {
         ESP_LOGW(TAG, "ble_gap_disc rc=%d", rc);
+        s_scanning = false;
         if (adv_was_on) start_advertising();
         xSemaphoreGive(s_scan_mutex);
         return -3;
@@ -436,6 +475,7 @@ int hid_ble_scan(int duration_ms, hid_ble_scan_entry_t *out, int max)
 
     xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(duration_ms + 1000));
     ble_gap_disc_cancel();
+    s_scanning = false;
     if (adv_was_on) start_advertising();
 
     int n = s_scan_count < max ? s_scan_count : max;
@@ -472,5 +512,6 @@ esp_err_t hid_ble_init(const char *device_name)
     ble_svc_gap_device_name_set(s_dev_name);
 
     nimble_port_freertos_init(host_task);
+    xTaskCreate(adv_watchdog_task, "ble_advwd", 2048, NULL, 3, NULL);
     return ESP_OK;
 }

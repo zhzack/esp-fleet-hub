@@ -5,31 +5,52 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "cfg";
 static app_config_t s_cfg;
 
-/* Compile-time defaults — override via NVS in production. */
-#ifndef DEFAULT_WIFI_SSID
-#define DEFAULT_WIFI_SSID  "MyAP"
+/* Compile-time defaults: 通过 Kconfig 配置（main/Kconfig.projbuild）。
+ * 修改方式：
+ *   docker compose run --rm menuconfig    → "ble_hid app config"
+ * 或直接编辑 sdkconfig.defaults / sdkconfig 后重编。
+ *
+ * 没有 Kconfig（旧 build 缓存）时退回硬编码默认。
+ */
+#ifdef CONFIG_APP_DEFAULT_WIFI_SSID
+#define DEFAULT_WIFI_SSID  CONFIG_APP_DEFAULT_WIFI_SSID
+#else
+#define DEFAULT_WIFI_SSID  "1"
 #endif
-#ifndef DEFAULT_WIFI_PASS
-#define DEFAULT_WIFI_PASS  "changeme"
+
+#ifdef CONFIG_APP_DEFAULT_WIFI_PASS
+#define DEFAULT_WIFI_PASS  CONFIG_APP_DEFAULT_WIFI_PASS
+#else
+#define DEFAULT_WIFI_PASS  "11111111"
 #endif
-#ifndef DEFAULT_SERVER_HOST
-#define DEFAULT_SERVER_HOST "192.168.1.10"
+
+#ifdef CONFIG_APP_DEFAULT_SERVER_HOST
+#define DEFAULT_SERVER_HOST CONFIG_APP_DEFAULT_SERVER_HOST
+#else
+#define DEFAULT_SERVER_HOST "192.168.68.159"
 #endif
-#ifndef DEFAULT_SERVER_PORT
+
+#ifdef CONFIG_APP_DEFAULT_SERVER_PORT
+#define DEFAULT_SERVER_PORT CONFIG_APP_DEFAULT_SERVER_PORT
+#else
 #define DEFAULT_SERVER_PORT 8000
 #endif
-#ifndef DEFAULT_DEVICE_ID
+
+#ifdef CONFIG_APP_DEFAULT_DEVICE_ID
+#define DEFAULT_DEVICE_ID  CONFIG_APP_DEFAULT_DEVICE_ID
+#else
 #define DEFAULT_DEVICE_ID  "esp32_001"
 #endif
 
 static void apply_defaults(app_config_t *cfg)
 {
-    cfg->wifi_ssid[0] = '\0';
-    cfg->wifi_pass[0] = '\0';
+    strlcpy(cfg->wifi_ssid,    DEFAULT_WIFI_SSID,    sizeof cfg->wifi_ssid);
+    strlcpy(cfg->wifi_pass,    DEFAULT_WIFI_PASS,    sizeof cfg->wifi_pass);
     strlcpy(cfg->server_host,  DEFAULT_SERVER_HOST,  sizeof cfg->server_host);
     cfg->server_port = DEFAULT_SERVER_PORT;
     strlcpy(cfg->device_id,    DEFAULT_DEVICE_ID,    sizeof cfg->device_id);

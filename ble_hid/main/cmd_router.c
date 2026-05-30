@@ -142,10 +142,12 @@ static int h_wifi_status(const cJSON *p, cJSON *r, char *err, int errlen)
 static int h_wifi_scan(const cJSON *p, cJSON *r, char *err, int errlen)
 {
     (void)p;
-    wifi_scan_entry_t arr[WIFI_SCAN_MAX];
+    wifi_scan_entry_t *arr = malloc(WIFI_SCAN_MAX * sizeof *arr);
+    if (!arr) { snprintf(err, errlen, "oom"); return 500; }
     int n = WIFI_SCAN_MAX;
     if (wifi_mgr_scan(arr, &n) != ESP_OK) {
         snprintf(err, errlen, "scan failed");
+        free(arr);
         return 500;
     }
     cJSON *nets = cJSON_AddArrayToObject(r, "networks");
@@ -157,6 +159,7 @@ static int h_wifi_scan(const cJSON *p, cJSON *r, char *err, int errlen)
         cJSON_AddNumberToObject(o, "auth", arr[i].auth);
         cJSON_AddItemToArray(nets, o);
     }
+    free(arr);
     return 0;
 }
 
@@ -277,9 +280,14 @@ static int h_ble_scan(const cJSON *p, cJSON *r, char *err, int errlen)
     const cJSON *jd = p ? cJSON_GetObjectItem(p, "duration_ms") : NULL;
     int dur = cJSON_IsNumber(jd) ? jd->valueint : 4000;
 
-    hid_ble_scan_entry_t arr[HID_BLE_SCAN_MAX];
+    hid_ble_scan_entry_t *arr = malloc(HID_BLE_SCAN_MAX * sizeof *arr);
+    if (!arr) { snprintf(err, errlen, "oom"); return 500; }
     int n = hid_ble_scan(dur, arr, HID_BLE_SCAN_MAX);
-    if (n < 0) { snprintf(err, errlen, "scan rc=%d", n); return 500; }
+    if (n < 0) {
+        snprintf(err, errlen, "scan rc=%d", n);
+        free(arr);
+        return 500;
+    }
 
     cJSON *devs = cJSON_AddArrayToObject(r, "devices");
     for (int i = 0; i < n; ++i) {
@@ -292,6 +300,7 @@ static int h_ble_scan(const cJSON *p, cJSON *r, char *err, int errlen)
         cJSON_AddStringToObject(o, "name",      arr[i].name);
         cJSON_AddItemToArray(devs, o);
     }
+    free(arr);
     return 0;
 }
 
@@ -347,7 +356,25 @@ static int h_transport_set(const cJSON *p, cJSON *r, char *err, int errlen)
  * executor queue (handled in protocol.c) and never reaches the router. */
 static int h_action(const cJSON *p, cJSON *r, char *err, int errlen)
 {
-    (void)r;
+    /* 把当前链路状态先填进 result，server 拿到 ack 即可知道这一发究竟打到哪个 peer。
+     * 即便 executor 因 E007 拒绝，也保留 peer 字段方便 server 编排。 */
+    bool ble_conn = hid_ble_connected();
+    bool usb_mnt  = hid_usb_mounted();
+    const char *active = (executor_active_transport() == EXECUTOR_TRANSPORT_USB) ? "usb" : "ble";
+    cJSON_AddStringToObject(r, "transport", active);
+    cJSON_AddBoolToObject  (r, "ble_connected", ble_conn);
+    cJSON_AddBoolToObject  (r, "usb_mounted",   usb_mnt);
+    if (ble_conn) {
+        hid_ble_peer_t cur;
+        if (hid_ble_get_current_peer(&cur)) {
+            char a[20];
+            hex_addr(a, sizeof a, cur.addr);
+            cJSON *peer = cJSON_AddObjectToObject(r, "peer");
+            cJSON_AddStringToObject(peer, "addr",      a);
+            cJSON_AddNumberToObject(peer, "addr_type", cur.addr_type);
+        }
+    }
+
     char ec[8] = {0};
     int rc = executor_run_payload_sync(p, ec, sizeof ec, err, errlen);
     return rc;

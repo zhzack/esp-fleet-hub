@@ -27,7 +27,11 @@ static esp_err_t h_root(httpd_req_t *req)
 
 static esp_err_t h_scan(httpd_req_t *req)
 {
-    wifi_scan_entry_t arr[20];
+    wifi_scan_entry_t *arr = malloc(20 * sizeof *arr);
+    if (!arr) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"oom\"}");
+    }
     int n = 20;
     esp_err_t err = wifi_mgr_scan(arr, &n);
     cJSON *root = cJSON_CreateObject();
@@ -49,6 +53,7 @@ static esp_err_t h_scan(httpd_req_t *req)
     httpd_resp_sendstr(req, s ? s : "{}");
     free(s);
     cJSON_Delete(root);
+    free(arr);
     return ESP_OK;
 }
 

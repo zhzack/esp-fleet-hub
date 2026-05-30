@@ -103,6 +103,15 @@ async def device_ws(websocket: WebSocket):
                     await websocket.send_json(_error_env(msg_id, "E004", "missing device_id"))
                     await websocket.close(code=1008)
                     break
+                # 同一 device 重连：先把旧连接踢掉，避免两路并存导致 ack 路由错乱
+                old_ws = device_registry.get(device_uuid)
+                if old_ws is not None and old_ws is not websocket:
+                    logger.warning(f"[ws/device] {device_uuid} reconnected — closing stale session")
+                    try:
+                        await old_ws.close(code=1012)
+                    except Exception:
+                        pass
+                    device_registry.unregister(device_uuid)
                 caps = payload.get("capabilities") or []
                 name = payload.get("name")
                 dev = crud_device.upsert_from_register(db, device_uuid, name, caps)
@@ -170,9 +179,14 @@ async def device_ws(websocket: WebSocket):
         if sender_task:
             sender_task.cancel()
         if device_uuid:
-            device_registry.unregister(device_uuid)
+            # 只在 registry 里仍然指向自己时才注销，避免老连接清掉新连接的注册
+            if device_registry.get(device_uuid) is websocket:
+                device_registry.unregister(device_uuid)
+                try:
+                    crud_device.mark_offline(db, device_uuid)
+                except Exception:
+                    pass
             try:
-                crud_device.mark_offline(db, device_uuid)
                 crud_device.close_connection(db, session_id)
             except Exception:
                 pass

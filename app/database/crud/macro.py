@@ -18,6 +18,20 @@ def create(db: Session, user_id: int, name: str, steps: list[dict]) -> Macro:
     return m
 
 
+def update(db: Session, macro_id: int, user_id: int,
+           name: str | None = None, steps: list[dict] | None = None) -> Macro | None:
+    m = db.query(Macro).filter(Macro.id == macro_id, Macro.user_id == user_id).first()
+    if not m:
+        return None
+    if name is not None:
+        m.name = name
+    if steps is not None:
+        m.content_json = {"steps": steps}
+    db.commit()
+    db.refresh(m)
+    return m
+
+
 def delete(db: Session, macro_id: int, user_id: int) -> bool:
     m = db.query(Macro).filter(Macro.id == macro_id, Macro.user_id == user_id).first()
     if not m:

@@ -1,0 +1,108 @@
+# 开发编排：前后端分容器，源码 volume mount，HMR / --reload。
+#
+# 用法：
+#   docker compose -f compose.dev.yml up
+#
+# 启完后：
+#   后端 API: http://localhost:8000
+#   前端 dev: http://localhost:5173      （vite 会把 /api、/ws 代理到 backend:8000）
+#
+# 改 .py 文件 → uvicorn --reload 自动重启
+# 改 .vue / .js → vite HMR 即时刷新
+#
+# 装新依赖（requirements.txt / package.json）后需要重新 build：
+#   docker compose -f compose.dev.yml build [backend|frontend]
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: py_web_mysql_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DB}
+      TZ: ${TZ}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data_dev:/var/lib/mysql
+      - ./deploy/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: py_web_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: py_web_backend_dev
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      MYSQL_SERVER: mysql
+      REDIS_HOST: redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - ./deploy:/app/deploy
+      - ./requirements.txt:/app/requirements.txt:ro
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.dev
+    container_name: py_web_frontend_dev
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    volumes:
+      # 把整个 vue-project 挂进来；用匿名 volume 把容器里 npm install 出的
+      # node_modules 保住，不被宿主的 node_modules（如果有）覆盖
+      - ./vue-project:/web
+      - /web/node_modules
+    environment:
+      # vite 容器里把 /api、/ws 代理到 backend 服务
+      VITE_API_PROXY_TARGET: http://backend:8000
+      VITE_WS_PROXY_TARGET: ws://backend:8000
+
+volumes:
+  mysql_data_dev:
+  redis_data_dev:

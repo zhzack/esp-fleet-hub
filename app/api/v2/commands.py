@@ -76,8 +76,20 @@ async def wifi_scan(device_uuid: str,
 async def wifi_connect(device_uuid: str, body: WifiConnectIn,
                        db: Session = Depends(get_db),
                        user: User = Depends(get_current_user)):
-    return await _send(db, user, device_uuid, "wifi.connect",
+    resp = await _send(db, user, device_uuid, "wifi.connect",
                        payload=body.model_dump(exclude_none=True), timeout_ms=20000)
+    # 设备 ACK ok=true 时把这次的 SSID/密码记到 known 表，方便之后一键回放
+    try:
+        ack = (resp or {}).get("result") or {}
+        if ack.get("ok"):
+            from app.database.crud import device as _crud_dev
+            from app.database.crud import device_wifi_known as _crud_wifi
+            dev = _crud_dev.get_by_uuid(db, device_uuid)
+            if dev:
+                _crud_wifi.upsert(db, dev.id, body.ssid, password=body.password)
+    except Exception:
+        pass
+    return resp
 
 
 # --- ble ---

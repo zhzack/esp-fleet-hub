@@ -1,0 +1,32 @@
+menu "ble_hid app config"
+
+    config APP_DEFAULT_WIFI_SSID
+        string "Default WiFi SSID"
+        default "1"
+        help
+            连接的 WiFi SSID。NVS 里没存值时使用此默认。
+
+    config APP_DEFAULT_WIFI_PASS
+        string "Default WiFi password"
+        default "11111111"
+        help
+            WiFi 密码。
+
+    config APP_DEFAULT_SERVER_HOST
+        string "Default WS server host"
+        default "192.168.68.159"
+        help
+            WebSocket 服务器 IP（PC 上跑 ws_tester.py 或 FastAPI 的那台）。
+
+    config APP_DEFAULT_SERVER_PORT
+        int "Default WS server port"
+        default 8000
+        range 1 65535
+
+    config APP_DEFAULT_DEVICE_ID
+        string "Default device id"
+        default "esp32_001"
+        help
+            注册时上报给后端的 device_id。
+
+endmenu

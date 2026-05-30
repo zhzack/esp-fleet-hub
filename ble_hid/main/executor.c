@@ -68,6 +68,24 @@ int executor_run_payload_sync(const cJSON *payload, char *errcode, int codelen,
     return ok ? 0 : 500;
 }
 
+static bool transport_link_up(char *err_code, char *err_msg)
+{
+    /* Returns false (with E007) when the currently-active HID transport has no
+     * live link to a host. Action handlers should bail early so the server
+     * doesn't think the keystroke went through. */
+    executor_transport_t t = executor_active_transport();
+    if (t == EXECUTOR_TRANSPORT_USB) {
+        if (hid_usb_mounted()) return true;
+        strcpy(err_code, "E007");
+        strcpy(err_msg, "no USB host");
+        return false;
+    }
+    if (hid_ble_connected()) return true;
+    strcpy(err_code, "E007");
+    strcpy(err_msg, "no BLE peer connected");
+    return false;
+}
+
 static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
 {
     const cJSON *jt = cJSON_GetObjectItem(step, "type");
@@ -75,6 +93,10 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
     const char *type = jt->valuestring;
     const cJSON *jk = cJSON_GetObjectItem(step, "key");
     const char *key = cJSON_IsString(jk) ? jk->valuestring : NULL;
+
+    /* delay / macro 不需要链路；其余 HID 输出步骤先确认链路 */
+    bool needs_link = strcmp(type, "delay") != 0 && strcmp(type, "macro") != 0;
+    if (needs_link && !transport_link_up(err_code, err_msg)) return false;
 
     if (!strcmp(type, "keyboard_tap") && key) {
         uint8_t code = 0, mods = 0;
@@ -168,9 +190,28 @@ static void exec_task(void *arg)
         bool ok = payload ? exec_step(payload, err_code, err_msg) : false;
         int ms = (int)((esp_timer_get_time() - t0) / 1000);
 
-        ws_client_send(ok
-            ? protocol_make_ack(am->msg_id, true, ms, NULL, NULL)
-            : protocol_make_ack(am->msg_id, false, ms, err_code[0] ? err_code : "E004", err_msg));
+        /* ACK：在标准字段基础上附加 peer 状态，server 即知本次动作打到哪个 host */
+        cJSON *env = protocol_make_ack(am->msg_id, ok, ms,
+                                       ok ? NULL : (err_code[0] ? err_code : "E004"),
+                                       ok ? NULL : err_msg);
+        cJSON *pl = cJSON_GetObjectItem(env, "payload");
+        const char *active = (executor_active_transport() == EXECUTOR_TRANSPORT_USB) ? "usb" : "ble";
+        cJSON_AddStringToObject(pl, "transport", active);
+        cJSON_AddBoolToObject  (pl, "ble_connected", hid_ble_connected());
+        cJSON_AddBoolToObject  (pl, "usb_mounted",   hid_usb_mounted());
+        if (hid_ble_connected()) {
+            hid_ble_peer_t cur;
+            if (hid_ble_get_current_peer(&cur)) {
+                char a[20];
+                snprintf(a, sizeof a, "%02X:%02X:%02X:%02X:%02X:%02X",
+                         cur.addr[5], cur.addr[4], cur.addr[3],
+                         cur.addr[2], cur.addr[1], cur.addr[0]);
+                cJSON *peer = cJSON_AddObjectToObject(pl, "peer");
+                cJSON_AddStringToObject(peer, "addr",      a);
+                cJSON_AddNumberToObject(peer, "addr_type", cur.addr_type);
+            }
+        }
+        ws_client_send(env);
 
         cJSON_Delete(am->action.root);
         free(am);

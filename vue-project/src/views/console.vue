@@ -3,7 +3,7 @@ export const meta = { title: '实时控制' }
 </script>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { devicesApi } from '@/api/devices'
 import { actionsApi } from '@/api/actions'
@@ -40,7 +40,20 @@ async function load() {
   online.value = (await devicesApi.online()).online
   if (!selected.value && online.value.length) selected.value = online.value[0]
 }
-onMounted(load)
+async function silentRefresh() {
+  try {
+    const [list, on] = await Promise.all([devicesApi.list(), devicesApi.online()])
+    devices.value = list
+    online.value = on.online
+  } catch (e) { /* 静默 */ }
+}
+
+let pollTimer = null
+onMounted(() => {
+  load()
+  pollTimer = setInterval(silentRefresh, 5000)
+})
+onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
 
 async function loadBleTarget() {
   if (!selected.value || !online.value.includes(selected.value)) {
