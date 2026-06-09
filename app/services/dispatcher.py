@@ -1,9 +1,5 @@
-"""Dispatcher：核心动作分发逻辑。
+"""Dispatcher: queue envelopes to devices, wait for ACKs, and write action_logs."""
 
-- 给单个设备投递 envelope
-- 等待 ACK（带超时 + 指数退避重试）
-- 写入 action_logs
-"""
 import asyncio
 import time
 import uuid
@@ -18,7 +14,48 @@ from app.services.ack_tracker import ack_tracker
 from app.services.device_registry import device_registry
 from app.services.queue import queue_backend
 
-_RETRY_DELAYS_MS = [100, 300, 900]  # 指数退避；总尝试 = 3 次
+_RETRY_DELAYS_MS = [100, 300, 900]
+
+
+def _extract_ack_error(ack: dict[str, Any]) -> tuple[str, str]:
+    err = ack.get("error")
+    if isinstance(err, dict):
+        code = err.get("code") or err.get("err_code") or "E000"
+        message = err.get("message") or err.get("err_msg") or "failed"
+        return str(code), str(message)
+    code = ack.get("err_code") or ack.get("error_code") or "E000"
+    message = ack.get("err_msg") or ack.get("error_message") or "failed"
+    return str(code), str(message)
+
+
+def _parse_ack_payload(ack: Any) -> tuple[bool, int, str | None, str | None]:
+    if not isinstance(ack, dict):
+        return False, 0, "E000", "invalid ack payload"
+
+    exec_ms = int(ack.get("exec_time_ms", 0) or 0)
+    status = ack.get("status")
+    if isinstance(status, str):
+        normalized = status.lower()
+        if normalized in {"ok", "acked", "success"}:
+            return True, exec_ms, None, None
+        if normalized in {"failed", "error", "timeout"}:
+            code, message = _extract_ack_error(ack)
+            return False, exec_ms, code, message
+
+    if "ok" in ack:
+        if bool(ack.get("ok")):
+            return True, exec_ms, None, None
+        code, message = _extract_ack_error(ack)
+        return False, exec_ms, code, message
+
+    if any(
+        key in ack
+        for key in ("error", "err_code", "err_msg", "error_code", "error_message")
+    ):
+        code, message = _extract_ack_error(ack)
+        return False, exec_ms, code, message
+
+    return True, exec_ms, None, None
 
 
 def build_envelope(
@@ -43,7 +80,11 @@ def build_envelope(
             "type": msg_type,
             "priority": priority,
         },
-        "routing": {"target_devices": [device_uuid], "broadcast": False, "group": None},
+        "routing": {
+            "target_devices": [device_uuid],
+            "broadcast": False,
+            "group": None,
+        },
         "payload": payload,
     }
 
@@ -57,7 +98,6 @@ async def deliver_to_device(
     timeout_ms: int = 2000,
     priority: int = 0,
 ) -> dict:
-    """投递 + 等待 ACK + 失败重试。返回 result dict。"""
     msg_id = str(uuid.uuid4())
     action_type = payload.get("type", "unknown")
     dev_row = crud_device.get_by_uuid(db, device_uuid)
@@ -106,9 +146,8 @@ async def deliver_to_device(
 
         try:
             ack = await ack_tracker.expect(msg_id, timeout=timeout_ms / 1000)
-            exec_ms = int(ack.get("exec_time_ms", 0) or 0)
-            status = ack.get("status", "ok")
-            if status == "ok":
+            ack_ok, exec_ms, err_code, err_message = _parse_ack_payload(ack)
+            if ack_ok:
                 crud_action_log.mark_acked(db, msg_id, exec_ms)
                 return {
                     "msg_id": msg_id,
@@ -116,14 +155,11 @@ async def deliver_to_device(
                     "status": "acked",
                     "exec_time_ms": exec_ms,
                 }
-            else:
-                err = ack.get("error", {}) or {}
-                last_error = (err.get("code", "E000"), err.get("message", "failed"))
-                logger.warning(f"[dispatcher] device returned non-ok: {last_error}")
+            last_error = (err_code or "E000", err_message or "failed")
+            logger.warning(f"[dispatcher] device returned non-ok: {last_error}")
         except asyncio.TimeoutError:
             last_error = ("E006", f"ack timeout (attempt {attempt + 1})")
             logger.warning(f"[dispatcher] {last_error[1]} msg_id={msg_id}")
-            # 指数退避
             await asyncio.sleep(_RETRY_DELAYS_MS[attempt] / 1000)
 
     code, message = last_error or ("E006", "retry exhausted")
@@ -147,10 +183,6 @@ async def deliver_command(
     timeout_ms: int = 3000,
     priority: int = 0,
 ) -> dict:
-    """下发非 action 命令（status/wifi.*/ble.*/reboot 等），返回设备 ACK 的完整 payload。
-
-    与 deliver_to_device 不同：单次尝试，不重试；ACK 的 payload 直接透传给调用者。
-    """
     msg_id = str(uuid.uuid4())
     dev_row = crud_device.get_by_uuid(db, device_uuid)
     device_db_id = dev_row.id if dev_row else None
@@ -212,9 +244,8 @@ async def deliver_command(
             "result": None,
         }
 
-    status = ack.get("status", "ok")
-    exec_ms = int(ack.get("exec_time_ms", 0) or 0)
-    if status == "ok":
+    ack_ok, exec_ms, code, message = _parse_ack_payload(ack)
+    if ack_ok:
         crud_action_log.mark_acked(db, msg_id, exec_ms)
         return {
             "msg_id": msg_id,
@@ -223,15 +254,18 @@ async def deliver_command(
             "exec_time_ms": exec_ms,
             "result": ack,
         }
-    err = ack.get("error", {}) or {}
-    code = err.get("code", "E000")
-    message = err.get("message", "failed")
-    crud_action_log.mark_failed(db, msg_id, code=code, message=message)
+
+    crud_action_log.mark_failed(
+        db,
+        msg_id,
+        code=code or "E000",
+        message=message or "failed",
+    )
     return {
         "msg_id": msg_id,
         "device_id": device_uuid,
         "status": "failed",
-        "error_code": code,
-        "error_message": message,
+        "error_code": code or "E000",
+        "error_message": message or "failed",
         "result": ack,
     }

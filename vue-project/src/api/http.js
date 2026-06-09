@@ -1,16 +1,22 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+
 import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
 
+const baseURL = import.meta.env.VITE_API_BASE?.trim() || '/api'
+
 const http = axios.create({
-  baseURL: '/api',
+  baseURL,
   timeout: 15000,
 })
 
 http.interceptors.request.use((config) => {
   const auth = useAuthStore()
-  if (auth.token) config.headers.Authorization = `Bearer ${auth.token}`
+  config.headers = config.headers || {}
+  if (auth.token) {
+    config.headers.Authorization = `Bearer ${auth.token}`
+  }
   return config
 })
 
@@ -19,6 +25,7 @@ http.interceptors.response.use(
   (err) => {
     const status = err.response?.status
     const detail = err.response?.data?.detail || err.message
+
     if (status === 401) {
       const auth = useAuthStore()
       auth.logout()
@@ -28,6 +35,7 @@ http.interceptors.response.use(
         router.push({ path: '/login', query: { redirect } })
       }
     }
+
     ElMessage.error(`[${status || 'NET'}] ${detail}`)
     return Promise.reject(err)
   },

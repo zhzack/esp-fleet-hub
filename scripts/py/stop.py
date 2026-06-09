@@ -1,37 +1,34 @@
-"""停止容器。
+"""Stop Docker services for either the dev or prod stack."""
 
-用法:
-    python scripts/stop.py            # 停所有 compose 服务
-    python scripts/stop.py --app      # 只停 app
-    python scripts/stop.py --rm       # 停并 down（移除容器，保留数据卷）
-"""
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.py._common import COMPOSE_SERVICE, cyn, grn, require_docker, run  # noqa: E402
+from scripts.py._common import add_stack_args, grn, require_docker, resolve_stack, run_compose  # noqa: E402
 
 
 def main():
     require_docker()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--app", action="store_true", help="只停 app 服务")
+    add_stack_args(ap, default="prod")
+    ap.add_argument("--app", action="store_true", help="stop only app services, keep db/cache running")
     ap.add_argument("--rm", action="store_true", help="docker compose down")
     args = ap.parse_args()
+    stack = resolve_stack(args)
 
     if args.app:
-        run(["docker", "compose", "stop", COMPOSE_SERVICE])
+        run_compose(stack, ["stop", *stack.app_services])
     elif args.rm:
-        run(["docker", "compose", "down"])
+        run_compose(stack, ["down"])
     else:
-        run(["docker", "compose", "stop"])
+        run_compose(stack, ["stop"])
 
-    grn("==> 完成")
-    run(["docker", "compose", "ps"], check=False)
+    grn("==> done")
+    run_compose(stack, ["ps"], check=False)
 
 
 if __name__ == "__main__":

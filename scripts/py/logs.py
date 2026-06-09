@@ -1,38 +1,35 @@
-"""查看日志。
+"""Show Docker logs for either the dev or prod stack."""
 
-用法:
-    python scripts/logs.py             # 跟随 app
-    python scripts/logs.py --all       # 跟随所有服务
-    python scripts/logs.py --tail 200  # 只看最后 N 行（不 follow）
-"""
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.py._common import COMPOSE_SERVICE, require_docker, run  # noqa: E402
+from scripts.py._common import add_stack_args, require_docker, resolve_stack, run_compose  # noqa: E402
 
 
 def main():
     require_docker()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--all", action="store_true", help="所有服务的日志")
-    ap.add_argument("--tail", type=int, help="只看最后 N 行（不 follow）")
+    add_stack_args(ap, default="prod")
+    ap.add_argument("--all", action="store_true", help="show logs for all services in the stack")
+    ap.add_argument("--tail", type=int, help="show only the last N lines without follow")
     args = ap.parse_args()
+    stack = resolve_stack(args)
 
-    cmd = ["docker", "compose", "logs"]
+    cmd = ["logs"]
     if args.tail is None:
         cmd.extend(["-f", "--tail=100"])
     else:
         cmd.append(f"--tail={args.tail}")
     if not args.all:
-        cmd.append(COMPOSE_SERVICE)
+        cmd.extend(stack.default_log_services)
 
     try:
-        run(cmd, check=False)
+        run_compose(stack, cmd, check=False)
     except KeyboardInterrupt:
         pass
 

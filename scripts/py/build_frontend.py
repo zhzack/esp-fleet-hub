@@ -9,7 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.py._common import PROJECT_ROOT, cyn, grn, red, run  # noqa: E402
 

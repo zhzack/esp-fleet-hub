@@ -1,90 +1,275 @@
-"""Windows 一键刷写 / 监视脚本（也兼容 macOS / Linux）。
+"""Build firmware in Docker and flash or monitor from the host OS.
 
-用法（在 ble_hid/ 目录下运行）：
-    python flash.py                  # 自动找端口 → 刷写 → 进入 monitor
-    python flash.py --port COM5      # 指定端口
-    python flash.py --no-monitor     # 只刷不进 monitor
-    python flash.py --monitor-only   # 只 monitor（不刷写）
-    python flash.py --erase          # 刷写前先 erase_flash
-    python flash.py --build          # 先用 docker compose 编译再刷
-    python flash.py --baud 460800    # 自定义波特率（默认 921600）
+Recommended workflow on Windows:
+1. Build with Docker so ESP-IDF stays inside the container.
+2. Flash and monitor from the host so COM port passthrough is not required.
 
-依赖（一次性安装）：
+Host dependencies:
     pip install esptool pyserial esp-idf-monitor
 """
+
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BUILD_DIR = ROOT / "build"
+COMPOSE_FILE = ROOT / "docker-compose.yml"
 FLASHER_ARGS = BUILD_DIR / "flasher_args.json"
-
-# ESP 系列常见 USB-Serial VID（Espressif USB-JTAG / CP210x / CH340 / FTDI）
+DEFAULT_IDF_IMAGE = os.environ.get("ESP_IDF_IMAGE", "espressif/idf:release-v5.4")
 ESP_VIDS = {0x303A, 0x10C4, 0x1A86, 0x0403}
 
 
+@dataclass(frozen=True)
+class FlashArtifacts:
+    chip: str
+    before: str
+    after: str
+    stub: bool
+    write_flash_args: tuple[str, ...]
+    flash_files: tuple[tuple[str, Path], ...]
+    elf_file: Path | None
+
+
+def format_cmd(cmd: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(cmd)
+    return " ".join(cmd)
+
+
+def require_module(module: str, package_hint: str) -> None:
+    if importlib.util.find_spec(module) is None:
+        sys.exit(f"Missing Python package for `{module}`. Install with: pip install {package_hint}")
+
+
+def get_ports():
+    require_module("serial", "pyserial")
+    from serial.tools import list_ports
+
+    return list(list_ports.comports())
+
+
+def print_ports() -> None:
+    ports = get_ports()
+    if not ports:
+        print("No serial ports detected.")
+        return
+
+    print("Detected serial ports:")
+    for port in ports:
+        vid = f"{port.vid:04X}" if port.vid is not None else "----"
+        pid = f"{port.pid:04X}" if port.pid is not None else "----"
+        print(f"  {port.device:10} VID:PID={vid}:{pid}  {port.description}")
+
+
 def find_port() -> str | None:
-    try:
-        from serial.tools import list_ports
-    except ImportError:
-        sys.exit("缺少 pyserial：pip install pyserial")
-    ports = list(list_ports.comports())
+    ports = get_ports()
     if not ports:
         return None
-    # 优先匹配 Espressif / 常见 USB-UART
-    matched = [p for p in ports if (p.vid or 0) in ESP_VIDS]
+
+    matched = [port for port in ports if (port.vid or 0) in ESP_VIDS]
     pool = matched or ports
     if len(pool) == 1:
         return pool[0].device
-    print("发现多个串口，请用 --port 指定：")
-    for p in pool:
-        vid = f"{p.vid:04X}" if p.vid else "----"
-        pid = f"{p.pid:04X}" if p.pid else "----"
-        print(f"  {p.device:8}  VID:PID={vid}:{pid}  {p.description}")
+
+    print("Multiple serial ports detected. Use --port to select one.")
+    for port in pool:
+        vid = f"{port.vid:04X}" if port.vid is not None else "----"
+        pid = f"{port.pid:04X}" if port.pid is not None else "----"
+        print(f"  {port.device:10} VID:PID={vid}:{pid}  {port.description}")
     return None
 
 
-def load_flash_args() -> tuple[str, dict, list[tuple[str, str]]]:
+def artifact_issues() -> list[str]:
+    issues: list[str] = []
     if not FLASHER_ARGS.exists():
-        sys.exit(f"找不到 {FLASHER_ARGS}，请先编译（python flash.py --build 或 docker compose run --rm esp-build）")
+        return [f"Missing {FLASHER_ARGS}"]
+
+    try:
+        data = json.loads(FLASHER_ARGS.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"Invalid {FLASHER_ARGS}: {exc}"]
+
+    flash_files = data.get("flash_files", {})
+    if not flash_files:
+        issues.append(f"No flash files declared in {FLASHER_ARGS}")
+        return issues
+
+    for offset, rel_path in flash_files.items():
+        file_path = BUILD_DIR / rel_path
+        if not file_path.exists():
+            issues.append(f"Missing {file_path} for offset {offset}")
+    return issues
+
+
+def find_elf_file() -> Path | None:
+    elf_candidates = [BUILD_DIR / f"{ROOT.name}.elf", BUILD_DIR / "project.elf"]
+    return next((path for path in elf_candidates if path.exists()), None)
+
+
+def load_flash_artifacts() -> FlashArtifacts:
+    issues = artifact_issues()
+    if issues:
+        sys.exit("\n".join(issues))
+
     data = json.loads(FLASHER_ARGS.read_text(encoding="utf-8"))
-    chip = data["extra_esptool_args"]["chip"]
-    settings = data["flash_settings"]
-    files = sorted(((off, BUILD_DIR / fn) for off, fn in data["flash_files"].items()),
-                   key=lambda x: int(x[0], 16))
-    files = [(off, str(p)) for off, p in files]
-    for _, p in files:
-        if not Path(p).exists():
-            sys.exit(f"缺少固件文件：{p}")
-    return chip, settings, files
+    extra = data.get("extra_esptool_args", {})
+    write_flash_args = tuple(data.get("write_flash_args", ()))
+    if not write_flash_args:
+        settings = data.get("flash_settings", {})
+        write_flash_args = (
+            "--flash_mode",
+            settings["flash_mode"],
+            "--flash_size",
+            settings["flash_size"],
+            "--flash_freq",
+            settings["flash_freq"],
+        )
+
+    flash_files = tuple(
+        sorted(
+            ((offset, BUILD_DIR / rel_path) for offset, rel_path in data["flash_files"].items()),
+            key=lambda item: int(item[0], 16),
+        )
+    )
+
+    return FlashArtifacts(
+        chip=extra.get("chip", "auto"),
+        before=extra.get("before", "default_reset"),
+        after=extra.get("after", "hard_reset"),
+        stub=bool(extra.get("stub", True)),
+        write_flash_args=write_flash_args,
+        flash_files=flash_files,
+        elf_file=find_elf_file(),
+    )
 
 
-def docker_build() -> None:
+def compose_cmd(*args: str) -> list[str]:
+    return ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
+
+
+def docker_env(idf_image: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["ESP_IDF_IMAGE"] = idf_image
+    return env
+
+
+def require_docker_ready() -> None:
     if not shutil.which("docker"):
-        sys.exit("未找到 docker，可执行：docker compose run --rm esp-build")
-    print("==> docker compose run --rm esp-build")
-    rc = subprocess.call(["docker", "compose", "run", "--rm", "esp-build"], cwd=ROOT)
+        sys.exit("Docker is not installed or not in PATH.")
+
+    result = subprocess.run(
+        ["docker", "info"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=20,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stdout.strip() or "docker info failed"
+        sys.exit(
+            "Docker is not ready. Start Docker Desktop or the Docker daemon and retry.\n"
+            f"{message}"
+        )
+
+
+def run_logged(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> tuple[int, str]:
+    print(f"==> {format_cmd(cmd)}")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd or ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert proc.stdout is not None
+    output: list[str] = []
+    for line in proc.stdout:
+        print(line, end="")
+        output.append(line)
+
+    return proc.wait(), "".join(output)
+
+
+def fail_docker_step(step: str, rc: int, output: str, idf_image: str) -> None:
+    lower = output.lower()
+    hints = [f"{step} failed (rc={rc})."]
+
+    if any(token in lower for token in ("unexpected eof", "failed size validation", "short read")):
+        hints.append(
+            "Docker failed while pulling the ESP-IDF base image. This usually points to a broken registry mirror, proxy, or cached layer."
+        )
+    else:
+        hints.append("See the Docker output above for the exact failure.")
+
+    hints.append(f"ESP_IDF_IMAGE={idf_image}")
+    hints.append("You can override the base image with `--idf-image <image>` or the `ESP_IDF_IMAGE` environment variable.")
+    hints.append("If Docker Desktop uses a registry mirror or proxy, verify it or disable it and retry.")
+    sys.exit("\n".join(hints))
+
+
+def docker_build(*, idf_image: str, no_cache: bool) -> None:
+    require_docker_ready()
+    env = docker_env(idf_image)
+
+    build_cmd = compose_cmd("build")
+    if no_cache:
+        build_cmd.append("--no-cache")
+    build_cmd.append("esp-build")
+    rc, output = run_logged(build_cmd, cwd=ROOT, env=env)
     if rc != 0:
-        sys.exit(f"docker 编译失败 (rc={rc})")
+        fail_docker_step("docker compose build esp-build", rc, output, idf_image)
+
+    rc, output = run_logged(compose_cmd("run", "--rm", "esp-build"), cwd=ROOT, env=env)
+    if rc != 0:
+        fail_docker_step("docker compose run --rm esp-build", rc, output, idf_image)
+
+
+def ensure_flash_artifacts(args: argparse.Namespace) -> None:
+    if args.monitor_only:
+        return
+
+    issues = artifact_issues()
+    if not issues:
+        return
+
+    if args.no_auto_build:
+        sys.exit("\n".join(issues))
+
+    print("Flash artifacts are missing. Building firmware in Docker first.")
+    docker_build(idf_image=args.idf_image, no_cache=args.docker_no_cache)
 
 
 def run_esptool(*args: str) -> None:
+    require_module("esptool", "esptool")
     cmd = [sys.executable, "-m", "esptool", *args]
-    print("==>", " ".join(cmd))
+    print(f"==> {format_cmd(cmd)}")
     rc = subprocess.call(cmd)
     if rc != 0:
-        sys.exit(f"esptool 失败 (rc={rc})")
+        sys.exit(f"esptool failed (rc={rc})")
 
 
-def run_monitor(port: str, baud: int) -> None:
+def run_monitor(port: str, baud: int, elf_file: Path | None) -> None:
+    require_module("esp_idf_monitor", "esp-idf-monitor")
     cmd = [sys.executable, "-m", "esp_idf_monitor", "-p", port, "-b", str(baud)]
-    print("==>", " ".join(cmd), "  (Ctrl-] 退出)")
+    if elf_file is not None:
+        cmd.append(str(elf_file))
+    print(f"==> {format_cmd(cmd)}  (exit with Ctrl+])")
     try:
         subprocess.call(cmd)
     except KeyboardInterrupt:
@@ -92,47 +277,74 @@ def run_monitor(port: str, baud: int) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ESP32 一键刷写 / 监视")
-    ap.add_argument("--port", help="串口（如 COM5 / /dev/ttyUSB0），不传则自动检测")
-    ap.add_argument("--baud", type=int, default=921600, help="刷写波特率，默认 921600")
-    ap.add_argument("--monitor-baud", type=int, default=115200, help="monitor 波特率，默认 115200")
-    ap.add_argument("--erase", action="store_true", help="刷写前先 erase_flash")
-    ap.add_argument("--no-monitor", action="store_true", help="刷完不进 monitor")
-    ap.add_argument("--monitor-only", action="store_true", help="只 monitor，不刷写")
-    ap.add_argument("--build", action="store_true", help="先用 docker compose 编译")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Build firmware in Docker, then flash and monitor from the host."
+    )
+    parser.add_argument("--port", help="Serial port such as COM5 or /dev/ttyUSB0.")
+    parser.add_argument("--baud", type=int, default=921600, help="Flash baud rate. Default: 921600.")
+    parser.add_argument("--monitor-baud", type=int, default=115200, help="Monitor baud rate. Default: 115200.")
+    parser.add_argument("--erase", action="store_true", help="Run erase_flash before write_flash.")
+    parser.add_argument("--no-monitor", action="store_true", help="Flash only. Do not start the serial monitor.")
+    parser.add_argument("--monitor-only", action="store_true", help="Start the serial monitor without flashing.")
+    parser.add_argument("--list-ports", action="store_true", help="List detected serial ports and exit.")
+    parser.add_argument("--build", action="store_true", help="Always build the firmware in Docker before continuing.")
+    parser.add_argument("--build-only", action="store_true", help="Build the firmware in Docker and exit.")
+    parser.add_argument("--no-auto-build", action="store_true", help="Fail instead of auto-building when artifacts are missing.")
+    parser.add_argument("--docker-no-cache", action="store_true", help="Use `docker compose build --no-cache` for the ESP-IDF image.")
+    parser.add_argument("--idf-image", default=DEFAULT_IDF_IMAGE, help=f"ESP-IDF base image. Default: {DEFAULT_IDF_IMAGE}")
+    args = parser.parse_args()
 
-    if args.build:
-        docker_build()
+    if args.monitor_only and args.erase:
+        parser.error("--erase cannot be used with --monitor-only")
+    if args.monitor_only and args.build_only:
+        parser.error("--monitor-only cannot be used with --build-only")
+
+    if args.list_ports:
+        print_ports()
+        return 0
+
+    if args.build or args.build_only:
+        docker_build(idf_image=args.idf_image, no_cache=args.docker_no_cache)
+        if args.build_only:
+            return 0
+
+    ensure_flash_artifacts(args)
 
     port = args.port or find_port()
     if not port:
-        sys.exit("没有自动检测到串口，请用 --port 指定")
-    print(f"使用端口: {port}")
+        sys.exit("No serial port was selected. Use --port or run with --list-ports.")
+    print(f"Using port: {port}")
 
     if args.monitor_only:
-        run_monitor(port, args.monitor_baud)
+        run_monitor(port, args.monitor_baud, find_elf_file())
         return 0
 
-    chip, settings, files = load_flash_args()
-    base = ["--chip", chip, "--port", port, "--baud", str(args.baud),
-            "--before", "default_reset", "--after", "hard_reset"]
+    artifacts = load_flash_artifacts()
+    base = [
+        "--chip",
+        artifacts.chip,
+        "--port",
+        port,
+        "--baud",
+        str(args.baud),
+        "--before",
+        artifacts.before,
+        "--after",
+        artifacts.after,
+    ]
+    if not artifacts.stub:
+        base.append("--no-stub")
 
     if args.erase:
         run_esptool(*base, "erase_flash")
 
-    write = base + [
-        "write_flash",
-        "--flash_mode", settings["flash_mode"],
-        "--flash_size", settings["flash_size"],
-        "--flash_freq", settings["flash_freq"],
-    ]
-    for off, path in files:
-        write += [off, path]
-    run_esptool(*write)
+    write_cmd = [*base, "write_flash", *artifacts.write_flash_args]
+    for offset, path in artifacts.flash_files:
+        write_cmd.extend([offset, str(path)])
+    run_esptool(*write_cmd)
 
     if not args.no_monitor:
-        run_monitor(port, args.monitor_baud)
+        run_monitor(port, args.monitor_baud, artifacts.elf_file)
     return 0
 
 

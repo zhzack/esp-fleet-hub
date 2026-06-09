@@ -190,9 +190,8 @@ async def send_to_targets(
             continue
 
         ack = (resp.get("result") or {})
-        ack_ok = bool(ack.get("ok"))
         exec_ms = int(ack.get("exec_time_ms", resp.get("exec_time_ms", 0)) or 0)
-        if resp.get("status") == "acked" and ack_ok:
+        if resp.get("status") == "acked":
             results.append(TargetResult(
                 addr=t.addr, addr_type=t.addr_type,
                 slot_index=t.slot_index, name=t.name,
@@ -208,8 +207,8 @@ async def send_to_targets(
                 switched=switched, connected=connected,
                 status=resp.get("status", "failed"),
                 exec_time_ms=exec_ms,
-                error_code=ack.get("err_code") or resp.get("error_code"),
-                error_message=ack.get("err_msg") or resp.get("error_message"),
+                error_code=(ack.get("error") or {}).get("code") or ack.get("err_code") or resp.get("error_code"),
+                error_message=(ack.get("error") or {}).get("message") or ack.get("err_msg") or resp.get("error_message"),
                 msg_id=resp.get("msg_id"),
             ))
 

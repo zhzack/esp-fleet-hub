@@ -39,7 +39,13 @@ def create_macro(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return crud_macro.create(db, user.id, payload.name, payload.steps)
+    return crud_macro.create(
+        db,
+        user.id,
+        payload.name,
+        payload.steps,
+        payload.config,
+    )
 
 
 @router.put("/{macro_id}", response_model=MacroOut)
@@ -49,7 +55,14 @@ def update_macro(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    m = crud_macro.update(db, macro_id, user.id, name=payload.name, steps=payload.steps)
+    m = crud_macro.update(
+        db,
+        macro_id,
+        user.id,
+        name=payload.name,
+        steps=payload.steps,
+        config=payload.config,
+    )
     if not m:
         raise HTTPException(404, "macro not found")
     return m

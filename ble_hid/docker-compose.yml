@@ -1,45 +1,40 @@
+x-idf-service: &idf-service
+  build:
+    context: .
+    args:
+      ESP_IDF_IMAGE: ${ESP_IDF_IMAGE:-espressif/idf:release-v5.4}
+  image: ble_hid-esp-build:local
+  volumes:
+    - .:/project
+  environment:
+    HOME: /tmp
+  working_dir: /project
+
 services:
   esp-build:
-    build: .
-    volumes:
-      - .:/project
-    environment:
-      - HOME=/tmp
-    working_dir: /project
+    <<: *idf-service
     command: idf.py build
 
   menuconfig:
-    build: .
-    volumes:
-      - .:/project
-    environment:
-      - HOME=/tmp
+    <<: *idf-service
     stdin_open: true
     tty: true
-    working_dir: /project
     command: idf.py menuconfig
 
   flash:
-    build: .
-    volumes:
-      - .:/project
+    <<: *idf-service
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
-    working_dir: /project
     command: idf.py flash
 
   monitor:
-    build: .
-    volumes:
-      - .:/project
+    <<: *idf-service
+    stdin_open: true
+    tty: true
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
-    working_dir: /project
     command: idf.py monitor
 
   clean:
-    build: .
-    volumes:
-      - .:/project
-    working_dir: /project
+    <<: *idf-service
     command: idf.py clean

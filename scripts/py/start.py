@@ -1,85 +1,75 @@
-"""起服 (mysql + redis + app)，启动前检查 8000 端口。
+"""Start Docker services for either the dev or prod stack."""
 
-用法:
-    python scripts/start.py
-    python scripts/start.py --kill          # 占用就杀
-    python scripts/start.py --build         # 起之前先 build
-"""
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.py._common import APP_PORT, COMPOSE_SERVICE, cyn, grn, port_in_use, port_pids, red, require_docker, run, safe_kill_pid, yel  # noqa: E402
-
-
-def is_port_taken_by_docker(port: int) -> bool:
-    try:
-        out = subprocess.check_output(
-            ["docker", "ps", "--filter", f"publish={port}", "--format", "{{.Names}}"],
-            text=True, errors="ignore",
-        )
-        return bool(out.strip())
-    except Exception:
-        return False
-
-
-def wait_healthy(name: str = "py_web_app", timeout: int = 60) -> bool:
-    for _ in range(timeout):
-        try:
-            out = subprocess.check_output(
-                ["docker", "inspect", "-f", "{{.State.Health.Status}}", name],
-                text=True, errors="ignore",
-            ).strip()
-            if out == "healthy":
-                return True
-        except subprocess.CalledProcessError:
-            pass
-        print(".", end="", flush=True)
-        time.sleep(1)
-    print()
-    return False
+from scripts.py._common import (  # noqa: E402
+    add_stack_args,
+    cyn,
+    grn,
+    is_port_taken_by_docker,
+    port_in_use,
+    port_pids,
+    red,
+    require_docker,
+    resolve_stack,
+    run_compose,
+    safe_kill_pid,
+    wait_for_urls,
+    yel,
+)
 
 
 def main():
     require_docker()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--kill", action="store_true", help="端口被占用时强杀")
-    ap.add_argument("--build", action="store_true", help="启动前先 build")
+    add_stack_args(ap, default="prod")
+    ap.add_argument("--kill", action="store_true", help="kill local processes holding stack ports")
+    ap.add_argument("--build", action="store_true", help="build app services before up")
     args = ap.parse_args()
+    stack = resolve_stack(args)
 
-    if port_in_use(APP_PORT):
-        if is_port_taken_by_docker(APP_PORT):
-            yel(f"端口 {APP_PORT} 已由 docker 容器占用，将由 compose 接管")
-        else:
-            pids = port_pids(APP_PORT)
-            yel(f"端口 {APP_PORT} 被本机进程占用 (PID: {pids or '?'})")
-            if args.kill and pids:
-                for pid in pids:
-                    safe_kill_pid(pid)
-                time.sleep(1)
-                if port_in_use(APP_PORT):
-                    red("端口仍被占用，请手动停止后再起")
-                    sys.exit(1)
-            else:
-                red("加 --kill 自动清理或手动停止后再起")
+    for port in stack.exposed_ports:
+        if not port_in_use(port):
+            continue
+        if is_port_taken_by_docker(port):
+            yel(f"port {port} is already owned by Docker; compose will take over")
+            continue
+
+        pids = port_pids(port)
+        yel(f"port {port} is in use by local process(es): {pids or '?'}")
+        if args.kill and pids:
+            for pid in pids:
+                safe_kill_pid(pid)
+            time.sleep(1)
+            if port_in_use(port) and not is_port_taken_by_docker(port):
+                red(f"port {port} is still busy; stop it manually and retry")
                 sys.exit(1)
+        else:
+            red("use --kill or free the port manually before starting the stack")
+            sys.exit(1)
 
     if args.build:
-        run(["docker", "compose", "build", COMPOSE_SERVICE])
+        cyn(f"==> build {stack.name} stack services: {' '.join(stack.build_services)}")
+        run_compose(stack, ["build", *stack.build_services])
 
-    run(["docker", "compose", "up", "-d"])
+    cyn(f"==> docker compose up -d ({stack.name})")
+    run_compose(stack, ["up", "-d"])
 
-    cyn("==> 等待 app healthy ...")
-    if wait_healthy():
-        grn(f"==> app 已 healthy  ->  http://127.0.0.1:{APP_PORT}")
+    cyn("==> waiting for stack to become reachable ...")
+    if wait_for_urls(stack.ready_urls):
+        grn(f"==> {stack.name} stack is ready")
+        for url in stack.display_urls:
+            print(f"    {url}")
     else:
-        red("等待超时（60s），用 `docker compose logs app` 排查")
+        red("stack did not become reachable in time; inspect logs for details")
+        run_compose(stack, ["ps"], check=False)
         sys.exit(1)
 
 

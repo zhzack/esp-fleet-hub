@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -86,17 +87,29 @@ static cJSON *make_envelope(const char *type, const char *ref_msg_id)
     return env;
 }
 
+static void add_error_fields(cJSON *payload, const char *code, const char *message)
+{
+    if (!payload || (!code && !message)) return;
+    cJSON *err = cJSON_AddObjectToObject(payload, "error");
+    if (code) {
+        cJSON_AddStringToObject(err, "code", code);
+        cJSON_AddStringToObject(payload, "err_code", code);
+    }
+    if (message) {
+        cJSON_AddStringToObject(err, "message", message);
+        cJSON_AddStringToObject(payload, "err_msg", message);
+    }
+}
+
 cJSON *protocol_make_ack(const char *ref_msg_id, bool ok, int exec_time_ms,
                          const char *err_code, const char *err_msg)
 {
     cJSON *env = make_envelope("ack", ref_msg_id);
     cJSON *pl  = cJSON_GetObjectItem(env, "payload");
     cJSON_AddBoolToObject(pl, "ok", ok);
+    cJSON_AddStringToObject(pl, "status", ok ? "ok" : "failed");
     cJSON_AddNumberToObject(pl, "exec_time_ms", exec_time_ms);
-    if (!ok) {
-        if (err_code) cJSON_AddStringToObject(pl, "err_code", err_code);
-        if (err_msg)  cJSON_AddStringToObject(pl, "err_msg",  err_msg);
-    }
+    if (!ok) add_error_fields(pl, err_code, err_msg);
     return env;
 }
 
@@ -105,23 +118,26 @@ cJSON *protocol_make_error(const char *ref_msg_id, const char *code, const char 
     cJSON *env = make_envelope("error", ref_msg_id);
     cJSON *pl  = cJSON_GetObjectItem(env, "payload");
     if (code) cJSON_AddStringToObject(pl, "code", code);
-    if (msg)  cJSON_AddStringToObject(pl, "msg",  msg);
+    if (msg) {
+        cJSON_AddStringToObject(pl, "msg", msg);
+        cJSON_AddStringToObject(pl, "message", msg);
+    }
     return env;
 }
 
-/* Build an ACK envelope with router result merged into payload (takes ownership of result). */
 static cJSON *make_ack_with_result(const char *ref_msg_id, int code, int exec_time_ms,
                                    const char *err_msg, cJSON *result_owned)
 {
     cJSON *env = make_envelope("ack", ref_msg_id);
     cJSON *pl  = cJSON_GetObjectItem(env, "payload");
-    cJSON_AddBoolToObject(pl, "ok", code == 0);
+    bool ok = code == 0;
+    cJSON_AddBoolToObject(pl, "ok", ok);
+    cJSON_AddStringToObject(pl, "status", ok ? "ok" : "failed");
     cJSON_AddNumberToObject(pl, "exec_time_ms", exec_time_ms);
-    if (code != 0) {
+    if (!ok) {
         char codebuf[12];
         snprintf(codebuf, sizeof codebuf, "E%03d", code);
-        cJSON_AddStringToObject(pl, "err_code", codebuf);
-        if (err_msg && err_msg[0]) cJSON_AddStringToObject(pl, "err_msg", err_msg);
+        add_error_fields(pl, codebuf, err_msg && err_msg[0] ? err_msg : NULL);
     }
     if (result_owned) {
         cJSON_AddItemToObject(pl, "result", result_owned);
@@ -187,7 +203,6 @@ void protocol_feed(const char *data, int len)
         return;
     }
 
-    /* server-to-device acks/errors: ignore (we are the device). */
     if (!strcmp(type, "ack") || !strcmp(type, "error") ||
         !strcmp(type, "register_ack") || !strcmp(type, "hello_ack")) {
         cJSON_Delete(root);
@@ -195,7 +210,7 @@ void protocol_feed(const char *data, int len)
     }
 
     if (msg_id && dedup_seen(msg_id)) {
-        ESP_LOGW(TAG, "dup msg_id %s — re-acking", msg_id);
+        ESP_LOGW(TAG, "dup msg_id %s - re-acking", msg_id);
         ws_client_send(protocol_make_ack(msg_id, true, 0, NULL, NULL));
         cJSON_Delete(root);
         return;
@@ -207,8 +222,7 @@ void protocol_feed(const char *data, int len)
         if (seq != 0 && seq <= s_last_seq) {
             ESP_LOGW(TAG, "out-of-order seq %lu (last %lu)",
                      (unsigned long)seq, (unsigned long)s_last_seq);
-            ws_client_send(protocol_make_ack(msg_id, false, 0,
-                "E002", "out of order"));
+            ws_client_send(protocol_make_ack(msg_id, false, 0, "E002", "out of order"));
             cJSON_Delete(root);
             return;
         }
@@ -217,7 +231,10 @@ void protocol_feed(const char *data, int len)
 
     if (!strcmp(type, "action")) {
         action_msg_t *am = calloc(1, sizeof *am);
-        if (!am) { cJSON_Delete(root); return; }
+        if (!am) {
+            cJSON_Delete(root);
+            return;
+        }
         if (msg_id) strlcpy(am->msg_id, msg_id, sizeof am->msg_id);
         if (cJSON_IsNumber(jseq)) am->seq = (uint32_t)jseq->valuedouble;
         char err[80] = {0};
@@ -227,7 +244,7 @@ void protocol_feed(const char *data, int len)
             cJSON_Delete(root);
             return;
         }
-        am->action.root = root; /* executor frees this */
+        am->action.root = root;
         if (executor_enqueue(am) != ESP_OK) {
             ws_client_send(protocol_make_ack(msg_id, false, 0, "E005", "queue full"));
             free(am);
@@ -236,7 +253,6 @@ void protocol_feed(const char *data, int len)
         return;
     }
 
-    /* Router-handled types: get_status, wifi.*, ble.*, reboot, ping, etc. */
     if (!strcmp(type, "ping")) {
         cJSON *env = make_envelope("pong", msg_id);
         ws_client_send(env);
@@ -254,8 +270,13 @@ void protocol_feed(const char *data, int len)
         ws_client_send(make_ack_with_result(msg_id, 0, ms, NULL, result));
     } else {
         cJSON_Delete(result);
-        ws_client_send(make_ack_with_result(msg_id, code, ms,
-            code == 0 ? NULL : err, NULL));
+        ws_client_send(make_ack_with_result(
+            msg_id,
+            code,
+            ms,
+            code == 0 ? NULL : err,
+            NULL
+        ));
     }
     cJSON_Delete(root);
 }

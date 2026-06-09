@@ -1,20 +1,27 @@
 #include "executor.h"
 
+#include <stdio.h>
 #include <string.h>
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "ws_client.h"
 #include "hid_ble.h"
 #include "hid_usb.h"
 #include "keymap.h"
+#include "ws_client.h"
 
 static const char *TAG = "exec";
 static QueueHandle_t s_q;
 static executor_transport_t s_transport = EXECUTOR_TRANSPORT_AUTO;
+
+typedef struct {
+    bool debug_no_hid;
+    bool skip_link_check;
+} exec_options_t;
 
 void executor_set_transport(executor_transport_t t) { s_transport = t; }
 executor_transport_t executor_get_transport(void)   { return s_transport; }
@@ -26,17 +33,22 @@ executor_transport_t executor_active_transport(void)
     return hid_usb_mounted() ? EXECUTOR_TRANSPORT_USB : EXECUTOR_TRANSPORT_BLE;
 }
 
-static void hid_tap (uint8_t code, uint8_t mods) {
-    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_tap (code, mods);
-    else                                                       hid_ble_tap (code, mods);
+static void hid_tap(uint8_t code, uint8_t mods)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_tap(code, mods);
+    else                                                       hid_ble_tap(code, mods);
 }
-static void hid_down(uint8_t code, uint8_t mods) {
+
+static void hid_down(uint8_t code, uint8_t mods)
+{
     if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_down(code, mods);
     else                                                       hid_ble_down(code, mods);
 }
-static void hid_up  (uint8_t code, uint8_t mods) {
-    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_up  (code, mods);
-    else                                                       hid_ble_up  (code, mods);
+
+static void hid_up(uint8_t code, uint8_t mods)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_up(code, mods);
+    else                                                       hid_ble_up(code, mods);
 }
 
 uint16_t executor_queue_len(void)
@@ -51,7 +63,23 @@ esp_err_t executor_enqueue(action_msg_t *am)
     return ESP_OK;
 }
 
-static bool exec_step(const cJSON *step, char *err_code, char *err_msg);
+static bool json_bool_or(const cJSON *obj, const char *key, bool fallback)
+{
+    const cJSON *item = cJSON_GetObjectItem(obj, key);
+    return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
+}
+
+static exec_options_t resolve_exec_options(const cJSON *step, const exec_options_t *parent)
+{
+    exec_options_t opts = parent ? *parent : (exec_options_t){0};
+    opts.debug_no_hid = json_bool_or(step, "debug_no_hid", opts.debug_no_hid);
+    opts.debug_no_hid = json_bool_or(step, "dry_run", opts.debug_no_hid);
+    opts.skip_link_check = json_bool_or(step, "skip_link_check", opts.skip_link_check);
+    return opts;
+}
+
+static bool exec_step(const cJSON *step, const exec_options_t *parent,
+                      char *err_code, char *err_msg);
 
 int executor_run_payload_sync(const cJSON *payload, char *errcode, int codelen,
                               char *err, int errlen)
@@ -62,17 +90,14 @@ int executor_run_payload_sync(const cJSON *payload, char *errcode, int codelen,
         return 400;
     }
     char ec[8] = {0}, em[80] = {0};
-    bool ok = exec_step(payload, ec, em);
+    bool ok = exec_step(payload, NULL, ec, em);
     if (errcode && codelen) strlcpy(errcode, ec[0] ? ec : "", codelen);
-    if (err && errlen)      strlcpy(err,     em,             errlen);
+    if (err && errlen)      strlcpy(err, em, errlen);
     return ok ? 0 : 500;
 }
 
 static bool transport_link_up(char *err_code, char *err_msg)
 {
-    /* Returns false (with E007) when the currently-active HID transport has no
-     * live link to a host. Action handlers should bail early so the server
-     * doesn't think the keystroke went through. */
     executor_transport_t t = executor_active_transport();
     if (t == EXECUTOR_TRANSPORT_USB) {
         if (hid_usb_mounted()) return true;
@@ -86,58 +111,87 @@ static bool transport_link_up(char *err_code, char *err_msg)
     return false;
 }
 
-static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
+static bool exec_step(const cJSON *step, const exec_options_t *parent,
+                      char *err_code, char *err_msg)
 {
+    exec_options_t opts = resolve_exec_options(step, parent);
+
     const cJSON *jt = cJSON_GetObjectItem(step, "type");
-    if (!cJSON_IsString(jt)) { strcpy(err_code, "E004"); strcpy(err_msg, "step missing type"); return false; }
+    if (!cJSON_IsString(jt)) {
+        strcpy(err_code, "E004");
+        strcpy(err_msg, "step missing type");
+        return false;
+    }
     const char *type = jt->valuestring;
     const cJSON *jk = cJSON_GetObjectItem(step, "key");
     const char *key = cJSON_IsString(jk) ? jk->valuestring : NULL;
 
-    /* delay / macro 不需要链路；其余 HID 输出步骤先确认链路 */
     bool needs_link = strcmp(type, "delay") != 0 && strcmp(type, "macro") != 0;
-    if (needs_link && !transport_link_up(err_code, err_msg)) return false;
+    if (needs_link && !opts.skip_link_check && !transport_link_up(err_code, err_msg)) {
+        return false;
+    }
 
     if (!strcmp(type, "keyboard_tap") && key) {
         uint8_t code = 0, mods = 0;
-        if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_tap(code, mods);
+        if (!keymap_lookup(key, &code, &mods)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "unknown key");
+            return false;
+        }
+        if (!opts.debug_no_hid) hid_tap(code, mods);
         return true;
     }
+
     if (!strcmp(type, "keyboard_down") && key) {
         uint8_t code = 0, mods = 0;
-        if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_down(code, mods);
+        if (!keymap_lookup(key, &code, &mods)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "unknown key");
+            return false;
+        }
+        if (!opts.debug_no_hid) hid_down(code, mods);
         return true;
     }
+
     if (!strcmp(type, "keyboard_up") && key) {
         uint8_t code = 0, mods = 0;
-        if (!keymap_lookup(key, &code, &mods)) { strcpy(err_code, "E004"); strcpy(err_msg, "unknown key"); return false; }
-        hid_up(code, mods);
+        if (!keymap_lookup(key, &code, &mods)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "unknown key");
+            return false;
+        }
+        if (!opts.debug_no_hid) hid_up(code, mods);
         return true;
     }
+
     if (!strcmp(type, "text")) {
         const cJSON *jc = cJSON_GetObjectItem(step, "content");
         if (!cJSON_IsString(jc)) jc = cJSON_GetObjectItem(step, "text");
-        if (!cJSON_IsString(jc)) { strcpy(err_code, "E004"); strcpy(err_msg, "text missing"); return false; }
+        if (!cJSON_IsString(jc)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "text missing");
+            return false;
+        }
         const cJSON *ji = cJSON_GetObjectItem(step, "interval_ms");
         int interval = cJSON_IsNumber(ji) ? ji->valueint : 5;
         for (const char *p = jc->valuestring; *p; ++p) {
             uint8_t code = 0, mods = 0;
             if (!keymap_ascii(*p, &code, &mods)) continue;
-            hid_tap(code, mods);
+            if (!opts.debug_no_hid) hid_tap(code, mods);
             if (interval > 0) vTaskDelay(pdMS_TO_TICKS(interval));
         }
         return true;
     }
+
     if (!strcmp(type, "delay")) {
         const cJSON *jd = cJSON_GetObjectItem(step, "delay_ms");
         int ms = cJSON_IsNumber(jd) ? jd->valueint : 0;
         if (ms > 0) vTaskDelay(pdMS_TO_TICKS(ms));
         return true;
     }
+
     if (!strcmp(type, "mouse_move")) {
-        if (executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
+        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
             strcpy(err_code, "E004");
             strcpy(err_msg, "mouse needs USB transport");
             return false;
@@ -146,33 +200,40 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
         const cJSON *jy = cJSON_GetObjectItem(step, "y");
         int dx = cJSON_IsNumber(jx) ? jx->valueint : 0;
         int dy = cJSON_IsNumber(jy) ? jy->valueint : 0;
-        if (dx >  127) dx =  127;
+        if (dx > 127) dx = 127;
         if (dx < -127) dx = -127;
-        if (dy >  127) dy =  127;
+        if (dy > 127) dy = 127;
         if (dy < -127) dy = -127;
-        hid_usb_mouse_move((int8_t)dx, (int8_t)dy);
+        if (!opts.debug_no_hid) hid_usb_mouse_move((int8_t)dx, (int8_t)dy);
         return true;
     }
+
     if (!strcmp(type, "mouse_click")) {
-        if (executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
+        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
             strcpy(err_code, "E004");
             strcpy(err_msg, "mouse needs USB transport");
             return false;
         }
         const cJSON *jb = cJSON_GetObjectItem(step, "button");
         int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
-        hid_usb_mouse_click((uint8_t)b);
+        if (!opts.debug_no_hid) hid_usb_mouse_click((uint8_t)b);
         return true;
     }
+
     if (!strcmp(type, "macro")) {
         const cJSON *steps = cJSON_GetObjectItem(step, "steps");
-        if (!cJSON_IsArray(steps)) { strcpy(err_code, "E004"); strcpy(err_msg, "macro missing steps"); return false; }
+        if (!cJSON_IsArray(steps)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "macro missing steps");
+            return false;
+        }
         cJSON *sub;
         cJSON_ArrayForEach(sub, steps) {
-            if (!exec_step(sub, err_code, err_msg)) return false;
+            if (!exec_step(sub, &opts, err_code, err_msg)) return false;
         }
         return true;
     }
+
     strcpy(err_code, "E004");
     snprintf(err_msg, 64, "unsupported type: %s", type);
     return false;
@@ -180,6 +241,7 @@ static bool exec_step(const cJSON *step, char *err_code, char *err_msg)
 
 static void exec_task(void *arg)
 {
+    (void)arg;
     action_msg_t *am;
     for (;;) {
         if (xQueueReceive(s_q, &am, portMAX_DELAY) != pdTRUE) continue;
@@ -187,18 +249,24 @@ static void exec_task(void *arg)
         int64_t t0 = esp_timer_get_time();
         char err_code[8] = {0}, err_msg[80] = {0};
         cJSON *payload = cJSON_GetObjectItem(am->action.root, "payload");
-        bool ok = payload ? exec_step(payload, err_code, err_msg) : false;
+        exec_options_t root_opts = payload ? resolve_exec_options(payload, NULL) : (exec_options_t){0};
+        bool ok = payload ? exec_step(payload, &root_opts, err_code, err_msg) : false;
         int ms = (int)((esp_timer_get_time() - t0) / 1000);
 
-        /* ACK：在标准字段基础上附加 peer 状态，server 即知本次动作打到哪个 host */
-        cJSON *env = protocol_make_ack(am->msg_id, ok, ms,
-                                       ok ? NULL : (err_code[0] ? err_code : "E004"),
-                                       ok ? NULL : err_msg);
+        cJSON *env = protocol_make_ack(
+            am->msg_id,
+            ok,
+            ms,
+            ok ? NULL : (err_code[0] ? err_code : "E004"),
+            ok ? NULL : err_msg
+        );
         cJSON *pl = cJSON_GetObjectItem(env, "payload");
         const char *active = (executor_active_transport() == EXECUTOR_TRANSPORT_USB) ? "usb" : "ble";
         cJSON_AddStringToObject(pl, "transport", active);
-        cJSON_AddBoolToObject  (pl, "ble_connected", hid_ble_connected());
-        cJSON_AddBoolToObject  (pl, "usb_mounted",   hid_usb_mounted());
+        cJSON_AddBoolToObject(pl, "ble_connected", hid_ble_connected());
+        cJSON_AddBoolToObject(pl, "usb_mounted", hid_usb_mounted());
+        cJSON_AddBoolToObject(pl, "debug_no_hid", root_opts.debug_no_hid);
+        cJSON_AddBoolToObject(pl, "skip_link_check", root_opts.skip_link_check);
         if (hid_ble_connected()) {
             hid_ble_peer_t cur;
             if (hid_ble_get_current_peer(&cur)) {
@@ -207,7 +275,7 @@ static void exec_task(void *arg)
                          cur.addr[5], cur.addr[4], cur.addr[3],
                          cur.addr[2], cur.addr[1], cur.addr[0]);
                 cJSON *peer = cJSON_AddObjectToObject(pl, "peer");
-                cJSON_AddStringToObject(peer, "addr",      a);
+                cJSON_AddStringToObject(peer, "addr", a);
                 cJSON_AddNumberToObject(peer, "addr_type", cur.addr_type);
             }
         }

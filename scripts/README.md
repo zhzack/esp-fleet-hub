@@ -1,98 +1,101 @@
-# scripts/
+# scripts
 
-项目常用脚本，sh 和 py 两套等价实现。
+Prefer the Python entrypoints on Windows:
 
-> sh 在 Git Bash / WSL / Linux / macOS 通用；py 用纯标准库，跨平台。
+- `python scripts/py/start.py`
+- `python scripts/py/stop.py`
+- `python scripts/py/logs.py`
+- `python scripts/py/clean.py`
+- `python scripts/py/build_image.py`
 
-## 一览表
+The shell scripts under `scripts/sh/` are still available for Git Bash, WSL, Linux, and macOS.
 
-| 场景 | shell | python | 说明 |
-|---|---|---|---|
-| 构建前端 | `./scripts/build_frontend.sh` | `python scripts/build_frontend.py` | `vue-project/dist` 产物 |
-| 本地起后端 | `./scripts/start_backend.sh` | `python scripts/start_backend.py` | uvicorn + --reload，启动前查端口 |
-| 构建镜像 | `./scripts/build_image.sh` | `python scripts/build_image.py` | `docker compose build`，产出 `hid-gateway:latest` |
-| 起服务 | `./scripts/start.sh` | `python scripts/start.py` | 检查 8000 → `compose up -d` → 等 healthy |
-| 停服务 | `./scripts/stop.sh` | `python scripts/stop.py` | `compose stop` 或 `down` |
-| 看日志 | `./scripts/logs.sh` | `python scripts/logs.py` | 默认跟随 app |
-| 清理 | `./scripts/clean.sh` | `python scripts/clean.py` | down / 删镜像 / 删数据卷 |
+## Web stack
 
-## 常用参数
+The Python Docker helpers support both stacks explicitly:
 
-### start_backend / start_backend.py
+- `--dev` uses `compose.dev.yml`
+- `--prod` uses `compose.prod.yml`
+- `COMPOSE_STACK=dev` or `COMPOSE_STACK=prod` can set the default
+
+Common commands:
+
 ```bash
-./scripts/start_backend.sh             # 端口被占就报错退出
-./scripts/start_backend.sh --kill      # 端口被占就杀掉占用进程
-./scripts/start_backend.sh --port 8001
-./scripts/start_backend.sh --no-reload
+python scripts/py/start.py --dev
+python scripts/py/start.py --dev --build
+python scripts/py/start.py --prod --build
+
+python scripts/py/stop.py --dev --app
+python scripts/py/stop.py --prod --rm
+
+python scripts/py/logs.py --dev
+python scripts/py/logs.py --prod --all
+
+python scripts/py/clean.py --dev --all
+python scripts/py/clean.py --prod --image
+
+python scripts/py/build_image.py --dev
+python scripts/py/build_image.py --prod --tag v1.0
 ```
 
-### start.sh / start.py
+Notes:
+
+- `start.py --dev` waits for both `http://127.0.0.1:5173` and `http://127.0.0.1:8000/api/v1/health`
+- `start.py --prod` waits for `http://127.0.0.1:8000/api/v1/health`
+- `build_image.py --tag` is only valid for `--prod`
+
+## Backend-only local run
+
 ```bash
-./scripts/start.sh           # compose up -d
-./scripts/start.sh --kill    # 占用 8000 的本机进程直接杀
-./scripts/start.sh --build   # 起前先 build
+python scripts/py/start_backend.py --kill
+python scripts/py/start_backend.py --port 8001
+python scripts/py/start_backend.py --no-reload
 ```
 
-### stop.sh / stop.py
+## Frontend build
+
 ```bash
-./scripts/stop.sh            # 停所有服务
-./scripts/stop.sh --app      # 只停 app
-./scripts/stop.sh --rm       # 删容器（保留卷）
+python scripts/py/build_frontend.py
 ```
 
-### build_image.sh / build_image.py
+## Firmware workflow
+
+`ble_hid/flash.py` is optimized for the practical Windows flow:
+
+1. Build in Docker with ESP-IDF.
+2. Flash and monitor from the host with `esptool` and `esp-idf-monitor`.
+3. Avoid Docker serial passthrough unless you explicitly want it.
+
+Examples:
+
 ```bash
-./scripts/build_image.sh
-./scripts/build_image.sh --no-cache
-./scripts/build_image.sh --tag v1.0    # 同时打 hid-gateway:v1.0
+python ble_hid/flash.py
+python ble_hid/flash.py --build
+python ble_hid/flash.py --build-only
+python ble_hid/flash.py --port COM5
+python ble_hid/flash.py --list-ports
+python ble_hid/flash.py --erase --no-monitor
+python ble_hid/flash.py --idf-image espressif/idf:release-v5.4
 ```
 
-### logs.sh / logs.py
+Behavior:
+
+- If flash artifacts are missing, `flash.py` auto-builds them in Docker by default.
+- `--no-auto-build` turns that off and fails fast instead.
+- `--docker-no-cache` forces a clean Docker image build before the container compile step.
+- `--idf-image` or `ESP_IDF_IMAGE` lets you switch the ESP-IDF base image without editing files.
+
+Host requirements for flashing and monitoring:
+
 ```bash
-./scripts/logs.sh             # 跟随 app
-./scripts/logs.sh --all       # 跟随 mysql + redis + app
-./scripts/logs.sh --tail 200  # 不 follow，只看 200 行
+pip install esptool pyserial esp-idf-monitor
 ```
 
-### clean.sh / clean.py
-```bash
-./scripts/clean.sh             # 停 + 删容器
-./scripts/clean.sh --image     # + 删 hid-gateway:latest 镜像
-./scripts/clean.sh --volumes   # + 删数据卷（数据库内容丢失！）
-./scripts/clean.sh --all       # 容器 + 镜像 + 数据卷
-```
+## Environment variables
 
-## 环境变量
-
-| 变量 | 默认 | 含义 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `APP_PORT` | `8000` | 后端端口 |
-| `COMPOSE_SERVICE` | `app` | compose 中的服务名 |
-| `IMAGE_NAME` | `hid-gateway:latest` | 镜像 tag |
-
-## 典型流程
-
-**首次启动：**
-```bash
-./scripts/build_image.sh
-./scripts/start.sh
-# 浏览器打开 http://127.0.0.1:8000/
-```
-
-**改代码后：**
-```bash
-./scripts/stop.sh --app
-./scripts/build_image.sh        # 后端 / 前端代码改了
-./scripts/start.sh
-```
-
-**本地纯 python 调试（不走 docker）：**
-```bash
-docker compose up -d mysql redis   # 只起数据库
-./scripts/start_backend.sh --kill  # 本机跑 uvicorn
-```
-
-**完全清空，从零再来：**
-```bash
-./scripts/clean.sh --all
-```
+| `APP_PORT` | `8000` | Backend port for local scripts |
+| `COMPOSE_STACK` | `prod` | Default Docker stack for `scripts/py/*.py` |
+| `IMAGE_NAME` | `hid-gateway:latest` | Production app image tag |
+| `ESP_IDF_IMAGE` | `espressif/idf:release-v5.4` | Base image used by `ble_hid/docker-compose.yml` |
