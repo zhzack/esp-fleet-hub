@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # --- 跨域 ---
     BACKEND_CORS_ORIGINS: Union[List[str], str] = []
+    BACKEND_CORS_ORIGIN_REGEX: str = Field(default="")
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

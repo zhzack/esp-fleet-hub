@@ -21,6 +21,7 @@ const KEYS = [
   'KEY_UP', 'KEY_DOWN', 'KEY_LEFT', 'KEY_RIGHT',
   'KEY_F1', 'KEY_F2', 'KEY_F3', 'KEY_F4', 'KEY_F5', 'KEY_F6', 'KEY_F7', 'KEY_F8', 'KEY_F9', 'KEY_F10', 'KEY_F11', 'KEY_F12',
   'KEY_LCTRL', 'KEY_LSHIFT', 'KEY_LALT', 'KEY_LMETA',
+  'KEY_ALT_TAB', 'KEY_ALT_SHIFT_TAB', 'KEY_GUI_D', 'KEY_GUI_TAB', 'KEY_GUI_CTRL_LEFT', 'KEY_GUI_CTRL_RIGHT',
 ]
 
 const STEP_TYPES = [
@@ -29,6 +30,7 @@ const STEP_TYPES = [
   { value: 'keyboard_up', label: 'Key Up' },
   { value: 'text', label: 'Text' },
   { value: 'mouse_move', label: 'Mouse Move' },
+  { value: 'mouse_scroll', label: 'Mouse Scroll' },
   { value: 'mouse_click', label: 'Mouse Click' },
   { value: 'delay', label: 'Delay' },
 ]
@@ -57,6 +59,8 @@ function newStep(type) {
       return { id, type, content: '', interval_ms: 5 }
     case 'mouse_move':
       return { id, type, x: 0, y: 0 }
+    case 'mouse_scroll':
+      return { id, type, x: 0, y: -1 }
     case 'mouse_click':
       return { id, type, button: 1 }
     case 'delay':
@@ -437,6 +441,13 @@ const previewJson = computed(() => JSON.stringify({
                 <span style="font-size:12px">dx</span>
                 <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
                 <span style="font-size:12px">dy</span>
+                <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
+              </template>
+
+              <template v-else-if="step.type === 'mouse_scroll'">
+                <span style="font-size:12px">hx</span>
+                <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
+                <span style="font-size:12px">vy</span>
                 <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
               </template>
 

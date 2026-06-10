@@ -16,14 +16,36 @@ app = FastAPI(
     debug=settings.DEBUG,
 )
 
-# CORS：从 .env 加载，回退到 vite/cra 默认端口
-cors_origins = settings.BACKEND_CORS_ORIGINS or [
+# CORS：显式白名单优先，同时在 debug 下放行常见局域网开发源
+default_cors_origins = [
+    "http://localhost",
+    "http://127.0.0.1",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
 ]
+configured_cors_origins = settings.BACKEND_CORS_ORIGINS or []
+if isinstance(configured_cors_origins, str):
+    configured_cors_origins = [configured_cors_origins]
+cors_origins = list(dict.fromkeys([*default_cors_origins, *configured_cors_origins]))
+
+cors_origin_regex = settings.BACKEND_CORS_ORIGIN_REGEX.strip() or None
+if cors_origin_regex is None and settings.DEBUG:
+    cors_origin_regex = (
+        r"^https?://("
+        r"localhost|"
+        r"127\.0\.0\.1|"
+        r"10(?:\.\d{1,3}){3}|"
+        r"192\.168(?:\.\d{1,3}){2}|"
+        r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+        r")(?::\d+)?$"
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -3,8 +3,9 @@ import { ElMessage } from 'element-plus'
 
 import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
+import { resolveApiBase } from '@/utils/network'
 
-const baseURL = import.meta.env.VITE_API_BASE?.trim() || '/api'
+const baseURL = resolveApiBase()
 
 const http = axios.create({
   baseURL,

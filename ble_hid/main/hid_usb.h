@@ -24,6 +24,7 @@ void hid_usb_up  (uint8_t keycode, uint8_t modifiers);
 /* Mouse — dx/dy in [-127, 127], button bitmask: 1=left, 2=right, 4=middle */
 void hid_usb_mouse_move (int8_t dx, int8_t dy);
 void hid_usb_mouse_click(uint8_t button);
+void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal);
 
 #ifdef __cplusplus
 }

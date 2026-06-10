@@ -46,7 +46,12 @@ static const struct {
     {"KEY_CTRL_A",     0x04, MOD_LCTRL},
     {"KEY_CTRL_S",     0x16, MOD_LCTRL},
     {"KEY_ALT_TAB",    0x2B, MOD_LALT},
+    {"KEY_ALT_SHIFT_TAB", 0x2B, MOD_LALT | MOD_LSHIFT},
     {"KEY_GUI_L",      0x0F, MOD_LGUI},
+    {"KEY_GUI_D",      0x07, MOD_LGUI},
+    {"KEY_GUI_TAB",    0x2B, MOD_LGUI},
+    {"KEY_GUI_CTRL_LEFT",  0x50, MOD_LGUI | MOD_LCTRL},
+    {"KEY_GUI_CTRL_RIGHT", 0x4F, MOD_LGUI | MOD_LCTRL},
 };
 
 bool keymap_lookup(const char *name, uint8_t *out_code, uint8_t *out_mods)

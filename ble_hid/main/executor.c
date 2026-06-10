@@ -220,6 +220,24 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
         return true;
     }
 
+    if (!strcmp(type, "mouse_scroll")) {
+        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "mouse needs USB transport");
+            return false;
+        }
+        const cJSON *jx = cJSON_GetObjectItem(step, "x");
+        const cJSON *jy = cJSON_GetObjectItem(step, "y");
+        int hx = cJSON_IsNumber(jx) ? jx->valueint : 0;
+        int vy = cJSON_IsNumber(jy) ? jy->valueint : 0;
+        if (hx > 127) hx = 127;
+        if (hx < -127) hx = -127;
+        if (vy > 127) vy = 127;
+        if (vy < -127) vy = -127;
+        if (!opts.debug_no_hid) hid_usb_mouse_scroll((int8_t)vy, (int8_t)hx);
+        return true;
+    }
+
     if (!strcmp(type, "macro")) {
         const cJSON *steps = cJSON_GetObjectItem(step, "steps");
         if (!cJSON_IsArray(steps)) {

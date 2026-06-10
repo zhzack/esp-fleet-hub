@@ -6,6 +6,7 @@
  *   .send({ header: { type: 'action', msg_id: ..., timeout_ms: 2000 }, routing: {...}, payload: {...} })
  */
 import { onUnmounted, ref } from 'vue'
+import { buildWsUrl } from '@/utils/network'
 
 export function useWs(path, { token, autoReconnect = true, reconnectMs = 3000 } = {}) {
   const status = ref('idle')         // idle | connecting | open | closed
@@ -16,11 +17,8 @@ export function useWs(path, { token, autoReconnect = true, reconnectMs = 3000 } 
   let stopped = false
 
   function buildUrl() {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = location.host
     const t = token?.value ?? token
-    const q = t ? `?token=${encodeURIComponent(t)}` : ''
-    return `${proto}//${host}${path}${q}`
+    return buildWsUrl(path, t)
   }
 
   function connect() {

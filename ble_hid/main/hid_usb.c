@@ -112,6 +112,11 @@ void hid_usb_mouse_click(uint8_t button)
     vTaskDelay(pdMS_TO_TICKS(8));
     tud_hid_mouse_report(RID_MOUSE, 0, 0, 0, 0, 0);
 }
+void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal)
+{
+    if (!s_mounted) return;
+    tud_hid_mouse_report(RID_MOUSE, 0, 0, 0, vertical, horizontal);
+}
 
 esp_err_t hid_usb_init(const char *device_name)
 {
@@ -143,5 +148,6 @@ void      hid_usb_down(uint8_t c, uint8_t m)    { (void)c; (void)m; }
 void      hid_usb_up  (uint8_t c, uint8_t m)    { (void)c; (void)m; }
 void      hid_usb_mouse_move (int8_t x, int8_t y) { (void)x; (void)y; }
 void      hid_usb_mouse_click(uint8_t b)          { (void)b; }
+void      hid_usb_mouse_scroll(int8_t v, int8_t h) { (void)v; (void)h; }
 
 #endif
