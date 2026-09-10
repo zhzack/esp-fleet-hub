@@ -16,12 +16,21 @@
 
 static const char *TAG = "exec";
 static QueueHandle_t s_q;
-static executor_transport_t s_transport = EXECUTOR_TRANSPORT_AUTO;
+static executor_transport_t s_transport = (executor_transport_t)EXECUTOR_DEFAULT_TRANSPORT_MODE;
 
 typedef struct {
     bool debug_no_hid;
     bool skip_link_check;
 } exec_options_t;
+
+static const char *transport_name(executor_transport_t t)
+{
+    switch (t) {
+        case EXECUTOR_TRANSPORT_USB:  return "usb";
+        case EXECUTOR_TRANSPORT_BLE:  return "ble";
+        default:                      return "auto";
+    }
+}
 
 void executor_set_transport(executor_transport_t t) { s_transport = t; }
 executor_transport_t executor_get_transport(void)   { return s_transport; }
@@ -49,6 +58,24 @@ static void hid_up(uint8_t code, uint8_t mods)
 {
     if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_up(code, mods);
     else                                                       hid_ble_up(code, mods);
+}
+
+static void hid_mouse_move(int8_t dx, int8_t dy)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_move(dx, dy);
+    else                                                       hid_ble_mouse_move(dx, dy);
+}
+
+static void hid_mouse_click(uint8_t button)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_click(button);
+    else                                                       hid_ble_mouse_click(button);
+}
+
+static void hid_mouse_scroll(int8_t vertical, int8_t horizontal)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_scroll(vertical, horizontal);
+    else                                                       hid_ble_mouse_scroll(vertical, horizontal);
 }
 
 uint16_t executor_queue_len(void)
@@ -191,11 +218,6 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
     }
 
     if (!strcmp(type, "mouse_move")) {
-        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
-            strcpy(err_code, "E004");
-            strcpy(err_msg, "mouse needs USB transport");
-            return false;
-        }
         const cJSON *jx = cJSON_GetObjectItem(step, "x");
         const cJSON *jy = cJSON_GetObjectItem(step, "y");
         int dx = cJSON_IsNumber(jx) ? jx->valueint : 0;
@@ -204,28 +226,18 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
         if (dx < -127) dx = -127;
         if (dy > 127) dy = 127;
         if (dy < -127) dy = -127;
-        if (!opts.debug_no_hid) hid_usb_mouse_move((int8_t)dx, (int8_t)dy);
+        if (!opts.debug_no_hid) hid_mouse_move((int8_t)dx, (int8_t)dy);
         return true;
     }
 
     if (!strcmp(type, "mouse_click")) {
-        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
-            strcpy(err_code, "E004");
-            strcpy(err_msg, "mouse needs USB transport");
-            return false;
-        }
         const cJSON *jb = cJSON_GetObjectItem(step, "button");
         int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
-        if (!opts.debug_no_hid) hid_usb_mouse_click((uint8_t)b);
+        if (!opts.debug_no_hid) hid_mouse_click((uint8_t)b);
         return true;
     }
 
     if (!strcmp(type, "mouse_scroll")) {
-        if (!opts.debug_no_hid && executor_active_transport() != EXECUTOR_TRANSPORT_USB) {
-            strcpy(err_code, "E004");
-            strcpy(err_msg, "mouse needs USB transport");
-            return false;
-        }
         const cJSON *jx = cJSON_GetObjectItem(step, "x");
         const cJSON *jy = cJSON_GetObjectItem(step, "y");
         int hx = cJSON_IsNumber(jx) ? jx->valueint : 0;
@@ -234,7 +246,7 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
         if (hx < -127) hx = -127;
         if (vy > 127) vy = 127;
         if (vy < -127) vy = -127;
-        if (!opts.debug_no_hid) hid_usb_mouse_scroll((int8_t)vy, (int8_t)hx);
+        if (!opts.debug_no_hid) hid_mouse_scroll((int8_t)vy, (int8_t)hx);
         return true;
     }
 
@@ -271,33 +283,35 @@ static void exec_task(void *arg)
         bool ok = payload ? exec_step(payload, &root_opts, err_code, err_msg) : false;
         int ms = (int)((esp_timer_get_time() - t0) / 1000);
 
-        cJSON *env = protocol_make_ack(
-            am->msg_id,
-            ok,
-            ms,
-            ok ? NULL : (err_code[0] ? err_code : "E004"),
-            ok ? NULL : err_msg
-        );
-        cJSON *pl = cJSON_GetObjectItem(env, "payload");
-        const char *active = (executor_active_transport() == EXECUTOR_TRANSPORT_USB) ? "usb" : "ble";
-        cJSON_AddStringToObject(pl, "transport", active);
-        cJSON_AddBoolToObject(pl, "ble_connected", hid_ble_connected());
-        cJSON_AddBoolToObject(pl, "usb_mounted", hid_usb_mounted());
-        cJSON_AddBoolToObject(pl, "debug_no_hid", root_opts.debug_no_hid);
-        cJSON_AddBoolToObject(pl, "skip_link_check", root_opts.skip_link_check);
-        if (hid_ble_connected()) {
-            hid_ble_peer_t cur;
-            if (hid_ble_get_current_peer(&cur)) {
-                char a[20];
-                snprintf(a, sizeof a, "%02X:%02X:%02X:%02X:%02X:%02X",
-                         cur.addr[5], cur.addr[4], cur.addr[3],
-                         cur.addr[2], cur.addr[1], cur.addr[0]);
-                cJSON *peer = cJSON_AddObjectToObject(pl, "peer");
-                cJSON_AddStringToObject(peer, "addr", a);
-                cJSON_AddNumberToObject(peer, "addr_type", cur.addr_type);
+        if (am->need_ack) {
+            cJSON *env = protocol_make_ack(
+                am->msg_id,
+                ok,
+                ms,
+                ok ? NULL : (err_code[0] ? err_code : "E004"),
+                ok ? NULL : err_msg
+            );
+            cJSON *pl = cJSON_GetObjectItem(env, "payload");
+            const char *active = (executor_active_transport() == EXECUTOR_TRANSPORT_USB) ? "usb" : "ble";
+            cJSON_AddStringToObject(pl, "transport", active);
+            cJSON_AddBoolToObject(pl, "ble_connected", hid_ble_connected());
+            cJSON_AddBoolToObject(pl, "usb_mounted", hid_usb_mounted());
+            cJSON_AddBoolToObject(pl, "debug_no_hid", root_opts.debug_no_hid);
+            cJSON_AddBoolToObject(pl, "skip_link_check", root_opts.skip_link_check);
+            if (hid_ble_connected()) {
+                hid_ble_peer_t cur;
+                if (hid_ble_get_current_peer(&cur)) {
+                    char a[20];
+                    snprintf(a, sizeof a, "%02X:%02X:%02X:%02X:%02X:%02X",
+                             cur.addr[5], cur.addr[4], cur.addr[3],
+                             cur.addr[2], cur.addr[1], cur.addr[0]);
+                    cJSON *peer = cJSON_AddObjectToObject(pl, "peer");
+                    cJSON_AddStringToObject(peer, "addr", a);
+                    cJSON_AddNumberToObject(peer, "addr_type", cur.addr_type);
+                }
             }
+            ws_client_send(env);
         }
-        ws_client_send(env);
 
         cJSON_Delete(am->action.root);
         free(am);
@@ -307,9 +321,15 @@ static void exec_task(void *arg)
 esp_err_t executor_start(uint16_t queue_size)
 {
     if (queue_size == 0) queue_size = 128;
+    if (s_transport < EXECUTOR_TRANSPORT_AUTO || s_transport > EXECUTOR_TRANSPORT_USB) {
+        ESP_LOGW(TAG, "invalid EXECUTOR_DEFAULT_TRANSPORT_MODE=%d, falling back to BLE",
+                 (int)s_transport);
+        s_transport = EXECUTOR_TRANSPORT_BLE;
+    }
     s_q = xQueueCreate(queue_size, sizeof(action_msg_t *));
     if (!s_q) return ESP_ERR_NO_MEM;
     xTaskCreate(exec_task, "exec", 6144, NULL, 7, NULL);
-    ESP_LOGI(TAG, "executor started (queue=%u)", queue_size);
+    ESP_LOGI(TAG, "executor started (queue=%u, default_transport=%s)",
+             queue_size, transport_name(s_transport));
     return ESP_OK;
 }

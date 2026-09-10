@@ -169,7 +169,7 @@ async def dispatch_to_group(
         else:
             formatted_results.append(result)
 
-    success_count = sum(1 for r in formatted_results if r.get("status") == "acked")
+    success_count = sum(1 for r in formatted_results if r.get("status") in {"acked", "queued"})
     failed_count = len(formatted_results) - success_count
 
     return {

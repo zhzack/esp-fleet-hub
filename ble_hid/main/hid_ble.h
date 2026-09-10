@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-/** Initialise NimBLE host, advertise as a HID keyboard with name `device_name`. */
+/** Initialise NimBLE host, advertise as a HID keyboard+mouse with name `device_name`. */
 esp_err_t hid_ble_init(const char *device_name);
 
 /** True after a host has connected and bonded. */
@@ -21,6 +21,15 @@ void hid_ble_down(uint8_t keycode, uint8_t modifiers);
 
 /** Release a key. */
 void hid_ble_up(uint8_t keycode, uint8_t modifiers);
+
+/** Relative mouse move on the BLE HID mouse report. */
+void hid_ble_mouse_move(int8_t dx, int8_t dy);
+
+/** Press + release a mouse button bitmask: 1=left, 2=right, 4=middle. */
+void hid_ble_mouse_click(uint8_t button);
+
+/** Relative wheel / pan scroll deltas. */
+void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal);
 
 /* ---------- multi-host management (PR4) ---------- */
 

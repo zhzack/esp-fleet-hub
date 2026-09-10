@@ -84,6 +84,7 @@ static void send_register(void)
     cJSON_AddStringToObject(pl, "name", s_device_id);
     cJSON *caps = cJSON_AddArrayToObject(pl, "capabilities");
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble_keyboard"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("ble_mouse"));
     ws_client_send(env);
     s_online = true;  /* assume online; will be downgraded if register ack errors */
 }

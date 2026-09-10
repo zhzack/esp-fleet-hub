@@ -51,7 +51,7 @@ class ActionRequest(BaseModel):
 class ActionResult(BaseModel):
     msg_id: str
     device_id: str
-    status: Literal["acked", "failed", "timeout"]
+    status: Literal["acked", "queued", "failed", "timeout"]
     exec_time_ms: Optional[int] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None

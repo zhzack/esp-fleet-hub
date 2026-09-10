@@ -201,7 +201,7 @@ onMounted(() => {
       <el-table-column prop="device_id" label="设备 UUID" />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'acked' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+          <el-tag :type="row.status === 'acked' ? 'success' : row.status === 'queued' ? 'info' : 'danger'" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="exec_time_ms" label="耗时 (ms)" width="100" />

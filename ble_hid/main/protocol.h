@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     char     msg_id[PROTO_MSGID_LEN];
     uint32_t seq;
+    bool     need_ack;
     action_t action;
 } action_msg_t;
 

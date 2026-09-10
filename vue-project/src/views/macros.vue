@@ -44,7 +44,7 @@ const EXECUTION_MODES = [
   {
     value: 'ble_targeted',
     label: 'BLE Targeted',
-    description: 'Switch to configured BLE slots and execute against real targets.',
+    description: 'Switch to configured BLE slots and emit real keyboard and mouse HID output against those targets.',
   },
 ]
 
@@ -72,8 +72,8 @@ function newStep(type) {
 
 function defaultMacroConfig() {
   return {
-    execution_mode: 'network_debug',
-    require_connected: false,
+    execution_mode: 'ble_targeted',
+    require_connected: true,
     action_timeout_ms: 10000,
     switch_timeout_s: 5,
   }
@@ -268,6 +268,7 @@ async function doRun() {
     if (runnerMode.value === 'network_debug') {
       action.debug_no_hid = true
       action.skip_link_check = true
+      action.need_ack = true
 
       const resp = await actionsApi.send({
         device_id: runner.deviceUuid,
@@ -384,6 +385,14 @@ const previewJson = computed(() => JSON.stringify({
       <el-form-item v-if="editorMode === 'ble_targeted'" label="Require Connected">
         <el-switch v-model="editor.config.require_connected" />
       </el-form-item>
+
+      <el-alert
+        v-if="editorMode === 'ble_targeted'"
+        type="warning"
+        :closable="false"
+        title="BLE Targeted mode now emits real keyboard and mouse HID. Mouse move, click, and scroll steps can run directly over BLE."
+        style="margin-bottom: 8px"
+      />
 
       <el-alert
         v-if="editorMode === 'network_debug'"

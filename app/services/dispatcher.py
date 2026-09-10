@@ -17,6 +17,16 @@ from app.services.queue import queue_backend
 _RETRY_DELAYS_MS = [100, 300, 900]
 
 
+def _payload_needs_ack(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("need_ack"), bool):
+        return payload["need_ack"]
+    if isinstance(payload.get("loopback"), bool):
+        return payload["loopback"]
+    return False
+
+
 def _extract_ack_error(ack: dict[str, Any]) -> tuple[str, str]:
     err = ack.get("error")
     if isinstance(err, dict):
@@ -97,11 +107,13 @@ async def deliver_to_device(
     user_id: int | None,
     timeout_ms: int = 2000,
     priority: int = 0,
+    need_ack: bool | None = None,
 ) -> dict:
     msg_id = str(uuid.uuid4())
     action_type = payload.get("type", "unknown")
     dev_row = crud_device.get_by_uuid(db, device_uuid)
     device_db_id = dev_row.id if dev_row else None
+    wait_for_ack = _payload_needs_ack(payload) if need_ack is None else need_ack
 
     crud_action_log.create_pending(
         db,
@@ -143,6 +155,13 @@ async def deliver_to_device(
             logger.exception(f"[dispatcher] push failed: {e}")
             last_error = ("E003", "queue push error")
             continue
+
+        if not wait_for_ack:
+            return {
+                "msg_id": msg_id,
+                "device_id": device_uuid,
+                "status": "queued",
+            }
 
         try:
             ack = await ack_tracker.expect(msg_id, timeout=timeout_ms / 1000)

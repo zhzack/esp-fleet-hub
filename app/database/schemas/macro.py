@@ -19,7 +19,7 @@ class MacroStep(BaseModel):
 
 
 class MacroConfig(BaseModel):
-    execution_mode: MacroExecutionMode = "network_debug"
+    execution_mode: MacroExecutionMode = "ble_targeted"
     require_connected: bool = True
     action_timeout_ms: int = Field(default=10000, ge=500, le=60000)
     switch_timeout_s: float = Field(default=5.0, ge=0.5, le=60.0)

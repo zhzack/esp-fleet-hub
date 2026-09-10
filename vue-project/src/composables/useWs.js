@@ -27,6 +27,7 @@ export function useWs(path, { token, autoReconnect = true, reconnectMs = 3000 } 
     ws = new WebSocket(buildUrl())
     ws.onopen = () => { status.value = 'open' }
     ws.onmessage = (e) => {
+      if (!messageHandlers.length) return
       let data
       try { data = JSON.parse(e.data) } catch { data = e.data }
       messageHandlers.forEach((fn) => fn(data))

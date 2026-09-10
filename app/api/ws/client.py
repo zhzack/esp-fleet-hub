@@ -17,6 +17,16 @@ from app.services.routing import resolve_targets
 router = APIRouter()
 
 
+def _payload_needs_ack(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("need_ack"), bool):
+        return payload["need_ack"]
+    if isinstance(payload.get("loopback"), bool):
+        return payload["loopback"]
+    return False
+
+
 @router.websocket("/ws/client")
 async def client_ws(websocket: WebSocket):
     db = SessionLocal()
@@ -41,6 +51,7 @@ async def client_ws(websocket: WebSocket):
                 routing = raw.get("routing", {}) or {}
                 payload = raw.get("payload", {}) or {}
                 timeout_ms = int(header.get("timeout_ms") or 2000)
+                wait_for_ack = _payload_needs_ack(payload)
 
                 targets = resolve_targets(
                     db,
@@ -66,17 +77,18 @@ async def client_ws(websocket: WebSocket):
                         for d in targets
                     ]
                 )
-                await websocket.send_json(
-                    {
-                        "header": {
-                            "msg_id": str(uuid.uuid4()),
-                            "ref_msg_id": header.get("msg_id"),
-                            "type": "ack",
-                            "timestamp": int(datetime.utcnow().timestamp()),
-                        },
-                        "payload": {"results": results},
-                    }
-                )
+                if wait_for_ack:
+                    await websocket.send_json(
+                        {
+                            "header": {
+                                "msg_id": str(uuid.uuid4()),
+                                "ref_msg_id": header.get("msg_id"),
+                                "type": "ack",
+                                "timestamp": int(datetime.utcnow().timestamp()),
+                            },
+                            "payload": {"results": results},
+                        }
+                    )
 
             elif mtype == "ping":
                 await websocket.send_json(

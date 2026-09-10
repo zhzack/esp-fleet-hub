@@ -5,12 +5,14 @@ export const meta = { title: '实时控制' }
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 
 import TrackpadPanel from '@/components/TrackpadPanel.vue'
 import { actionsApi } from '@/api/actions'
 import { commandsApi } from '@/api/commands'
 import { devicesApi } from '@/api/devices'
 
+const router = useRouter()
 const devices = ref([])
 const online = ref([])
 const selected = ref('')
@@ -139,7 +141,10 @@ async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
   try {
     const response = await actionsApi.send({
       device_id: selected.value,
-      payload,
+      payload: {
+        ...payload,
+        need_ack: true,
+      },
       timeout_ms: timeoutMs,
     })
     lastResult.value = response
@@ -168,6 +173,30 @@ function sendText() {
 
 function onTrackpadResult(response) {
   lastResult.value = response
+}
+
+function openTrackpadPage() {
+  const route = router.resolve({
+    path: '/trackpad',
+    query: selected.value ? { device: selected.value } : {},
+  })
+  window.open(route.href, '_blank', 'noopener')
+}
+
+function openPureTrackpadPage() {
+  const route = router.resolve({
+    path: '/trackpad-pure',
+    query: selected.value ? { device: selected.value } : {},
+  })
+  window.open(route.href, '_blank', 'noopener')
+}
+
+function openKioskTrackpadPage() {
+  const route = router.resolve({
+    path: '/trackpad-kiosk',
+    query: selected.value ? { device: selected.value } : {},
+  })
+  window.open(route.href, '_blank', 'noopener')
 }
 </script>
 
@@ -269,6 +298,17 @@ function onTrackpadResult(response) {
       </el-card>
 
       <div style="margin-top: 16px">
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:12px; flex-wrap:wrap">
+          <el-button type="primary" :disabled="!selected" @click="openKioskTrackpadPage">
+            Open Kiosk Touchpad
+          </el-button>
+          <el-button type="primary" :disabled="!selected" @click="openPureTrackpadPage">
+            Open Pure Touchpad
+          </el-button>
+          <el-button type="primary" plain :disabled="!selected" @click="openTrackpadPage">
+            Open Full Touchpad
+          </el-button>
+        </div>
         <TrackpadPanel
           :device-uuid="selected"
           :device-online="isSelectedOnline"

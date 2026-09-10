@@ -49,6 +49,20 @@ static bool dedup_seen(const char *id)
     return false;
 }
 
+static bool json_bool_or(const cJSON *obj, const char *key, bool fallback)
+{
+    const cJSON *item = cJSON_GetObjectItem(obj, key);
+    return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
+}
+
+static bool action_needs_ack(const cJSON *payload)
+{
+    if (!cJSON_IsObject(payload)) return false;
+    bool need_ack = json_bool_or(payload, "need_ack", false);
+    need_ack = json_bool_or(payload, "loopback", need_ack);
+    return need_ack;
+}
+
 static void dedup_remember(const char *id)
 {
     if (!id || !id[0]) return;
@@ -197,6 +211,7 @@ void protocol_feed(const char *data, int len)
     const cJSON *jseq   = cJSON_GetObjectItem(hdr, "seq");
     const char *type    = cJSON_IsString(jtype)  ? jtype->valuestring  : NULL;
     const char *msg_id  = cJSON_IsString(jmsgid) ? jmsgid->valuestring : NULL;
+    bool need_ack = action_needs_ack(payload);
     if (!type) {
         ESP_LOGW(TAG, "no type");
         cJSON_Delete(root);
@@ -210,8 +225,8 @@ void protocol_feed(const char *data, int len)
     }
 
     if (msg_id && dedup_seen(msg_id)) {
-        ESP_LOGW(TAG, "dup msg_id %s - re-acking", msg_id);
-        ws_client_send(protocol_make_ack(msg_id, true, 0, NULL, NULL));
+        ESP_LOGW(TAG, "dup msg_id %s ignored", msg_id);
+        if (need_ack) ws_client_send(protocol_make_ack(msg_id, true, 0, NULL, NULL));
         cJSON_Delete(root);
         return;
     }
@@ -222,7 +237,9 @@ void protocol_feed(const char *data, int len)
         if (seq != 0 && seq <= s_last_seq) {
             ESP_LOGW(TAG, "out-of-order seq %lu (last %lu)",
                      (unsigned long)seq, (unsigned long)s_last_seq);
-            ws_client_send(protocol_make_ack(msg_id, false, 0, "E002", "out of order"));
+            if (strcmp(type, "action") != 0 || need_ack) {
+                ws_client_send(protocol_make_ack(msg_id, false, 0, "E002", "out of order"));
+            }
             cJSON_Delete(root);
             return;
         }
@@ -237,16 +254,17 @@ void protocol_feed(const char *data, int len)
         }
         if (msg_id) strlcpy(am->msg_id, msg_id, sizeof am->msg_id);
         if (cJSON_IsNumber(jseq)) am->seq = (uint32_t)jseq->valuedouble;
+        am->need_ack = need_ack;
         char err[80] = {0};
         if (!parse_action(root, payload, am, err, sizeof err)) {
-            ws_client_send(protocol_make_ack(msg_id, false, 0, "E004", err));
+            if (need_ack) ws_client_send(protocol_make_ack(msg_id, false, 0, "E004", err));
             free(am);
             cJSON_Delete(root);
             return;
         }
         am->action.root = root;
         if (executor_enqueue(am) != ESP_OK) {
-            ws_client_send(protocol_make_ack(msg_id, false, 0, "E005", "queue full"));
+            if (need_ack) ws_client_send(protocol_make_ack(msg_id, false, 0, "E005", "queue full"));
             free(am);
             cJSON_Delete(root);
         }

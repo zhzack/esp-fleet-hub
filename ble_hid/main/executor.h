@@ -17,6 +17,15 @@ typedef enum {
     EXECUTOR_TRANSPORT_USB,
 } executor_transport_t;
 
+/* Build-time default transport selection.
+ * 0 = AUTO, 1 = BLE, 2 = USB
+ * Change this macro or override it from compiler flags when you want a
+ * different startup transport. The current default is BLE.
+ */
+#ifndef EXECUTOR_DEFAULT_TRANSPORT_MODE
+#define EXECUTOR_DEFAULT_TRANSPORT_MODE 1
+#endif
+
 void                executor_set_transport(executor_transport_t t);
 executor_transport_t executor_get_transport(void);
 
