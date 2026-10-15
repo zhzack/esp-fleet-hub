@@ -17,6 +17,7 @@ from app.database.session import SessionLocal
 from app.services.ack_tracker import ack_tracker
 from app.services.device_registry import device_registry
 from app.services.idempotency import seen_or_record
+from app.services.ota_tracker import ota_tracker
 from app.services.queue import queue_backend
 
 router = APIRouter()
@@ -166,6 +167,14 @@ async def device_ws(websocket: WebSocket):
                     ack_tracker.resolve(
                         ref,
                         {"status": "failed", "error": payload, "exec_time_ms": 0},
+                    )
+
+            elif mtype == "ota_progress":
+                if device_uuid:
+                    ota_tracker.update_progress(device_uuid, payload)
+                    logger.info(
+                        f"[ws/device] OTA progress {device_uuid}: "
+                        f"{payload.get('progress')}% ({payload.get('status')})"
                     )
 
             else:

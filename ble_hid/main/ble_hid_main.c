@@ -26,6 +26,7 @@
 #include "cmd_router.h"
 #include "lan_mode.h"
 #include "serial_cli.h"
+#include "ota_mgr.h"
 
 #define FW_VERSION "esp32-hid-1.2"
 
@@ -75,6 +76,7 @@ void app_main(void)
     ESP_ERROR_CHECK(executor_start(cfg.queue_size));
 
     cmd_router_init();
+    ota_mgr_init();
     cmd_router_set_device_info(cfg.device_id, FW_VERSION);
     if (lan_mode_start(cfg.device_id) != ESP_OK) {
         ESP_LOGW(TAG, "lan_mode_start failed (non-fatal)");

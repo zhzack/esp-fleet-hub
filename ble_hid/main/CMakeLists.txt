@@ -14,6 +14,7 @@ idf_component_register(
         "cmd_router.c"
         "lan_mode.c"
         "serial_cli.c"
+        "ota_mgr.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -28,4 +29,8 @@ idf_component_register(
         esp_timer
         lwip
         espressif__esp_tinyusb
+        app_update
+        esp_http_client
+        esp_partition
+        mbedtls
 )

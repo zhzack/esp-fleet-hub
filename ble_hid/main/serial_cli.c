@@ -14,6 +14,7 @@
 #include "wifi_mgr.h"
 #include "hid_ble.h"
 #include "hid_usb.h"
+#include "ota_mgr.h"
 #include "executor.h"
 #include "keymap.h"
 
@@ -43,6 +44,7 @@ static void print_help(void)
     printf("  text <string>           : Type text string via HID\r\n");
     printf("  move <dx> <dy>          : Move mouse by delta (e.g. move 20 -10)\r\n");
     printf("  click [1|2|4]           : Click mouse button (1=left, 2=right, 4=mid)\r\n");
+    printf("  ota [status|<url>]      : Check OTA status or trigger upgrade from URL\r\n");
     printf("  reboot                  : Restart the ESP32\r\n\r\n");
 }
 
@@ -248,6 +250,42 @@ static void cmd_text(char *args)
     printf("Typed: \"%s\"\r\n", args);
 }
 
+static void cmd_ota(char *args)
+{
+    while (*args == ' ') args++;
+    if (!*args || !strcmp(args, "status")) {
+        ota_info_t info;
+        ota_mgr_get_info(&info);
+        const char *st_str = "IDLE";
+        switch (info.status) {
+            case OTA_STATUS_STARTING:    st_str = "STARTING"; break;
+            case OTA_STATUS_DOWNLOADING: st_str = "DOWNLOADING"; break;
+            case OTA_STATUS_SUCCESS:     st_str = "SUCCESS"; break;
+            case OTA_STATUS_FAILED:      st_str = "FAILED"; break;
+            default:                     st_str = "IDLE"; break;
+        }
+        printf("\r\n[OTA Status]\r\n");
+        printf("  Status           : %s\r\n", st_str);
+        printf("  Progress         : %d%%\r\n", info.progress);
+        printf("  Bytes Read       : %d / %d\r\n", info.bytes_read, info.total_bytes);
+        printf("  Running Partition: %s\r\n", info.running_partition);
+        printf("  Target Partition : %s\r\n", info.target_partition);
+        printf("  Current Version  : %s\r\n", info.version);
+        if (info.err_msg[0]) {
+            printf("  Last Error       : %s\r\n", info.err_msg);
+        }
+        printf("\r\n");
+    } else {
+        printf("Starting OTA upgrade from: %s\r\n", args);
+        esp_err_t ret = ota_mgr_start(args, NULL, NULL);
+        if (ret == ESP_OK) {
+            printf("OTA task started successfully. Use 'ota status' to view progress.\r\n");
+        } else {
+            printf("Failed to start OTA task: 0x%x\r\n", ret);
+        }
+    }
+}
+
 static void handle_command(char *line)
 {
     while (*line == ' ') line++;
@@ -283,6 +321,8 @@ static void handle_command(char *line)
         cmd_move(args);
     } else if (!strcmp(cmd, "click")) {
         cmd_click(args);
+    } else if (!strcmp(cmd, "ota")) {
+        cmd_ota(args);
     } else if (!strcmp(cmd, "reboot")) {
         printf("Rebooting in 500ms...\r\n");
         vTaskDelay(pdMS_TO_TICKS(500));

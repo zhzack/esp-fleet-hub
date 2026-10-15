@@ -1,9 +1,12 @@
 # ---- target ----
 CONFIG_IDF_TARGET="esp32s3"
 
-# ---- partition table ----
+# ---- partition table & flash ----
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # ---- main task ----
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
@@ -48,7 +51,7 @@ CONFIG_TINYUSB_MSC_ENABLED=n
 CONFIG_TINYUSB_DEBUG_LEVEL=0
 
 # ---- ble_hid app defaults (Kconfig.projbuild) ----
-# 修改下面三项可以改默认连的 WiFi 和服务器
+# Default WiFi and server settings
 CONFIG_APP_DEFAULT_WIFI_SSID="1"
 CONFIG_APP_DEFAULT_WIFI_PASS="11111111"
 CONFIG_APP_DEFAULT_SERVER_HOST="192.168.68.159"

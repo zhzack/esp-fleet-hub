@@ -25,6 +25,7 @@
 #include "hid_ble.h"
 #include "hid_usb.h"
 #include "wifi_mgr.h"
+#include "ota_mgr.h"
 
 static const char *TAG = "cmdr";
 #define MAX_HANDLERS 32
@@ -380,6 +381,38 @@ static int h_action(const cJSON *p, cJSON *r, char *err, int errlen)
     return rc;
 }
 
+static int h_ota_start(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    if (!p) {
+        snprintf(err, errlen, "missing payload");
+        return 400;
+    }
+    const cJSON *ju = cJSON_GetObjectItem(p, "url");
+    if (!cJSON_IsString(ju) || !ju->valuestring[0]) {
+        snprintf(err, errlen, "missing url");
+        return 400;
+    }
+    const cJSON *jv = cJSON_GetObjectItem(p, "version");
+    const cJSON *js = cJSON_GetObjectItem(p, "sha256");
+    const char *ver = cJSON_IsString(jv) ? jv->valuestring : NULL;
+    const char *sha = cJSON_IsString(js) ? js->valuestring : NULL;
+
+    esp_err_t ret = ota_mgr_start(ju->valuestring, ver, sha);
+    if (ret != ESP_OK) {
+        snprintf(err, errlen, "ota start failed: 0x%x", ret);
+        return 500;
+    }
+    ota_mgr_build_json(r);
+    return 0;
+}
+
+static int h_ota_status(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p;
+    ota_mgr_build_json(r);
+    return 0;
+}
+
 void cmd_router_init(void)
 {
     cmd_router_register("get_status",     h_get_status);
@@ -398,4 +431,6 @@ void cmd_router_init(void)
     cmd_router_register("transport.set",  h_transport_set);
     cmd_router_register("reboot",         h_reboot);
     cmd_router_register("action",         h_action);
+    cmd_router_register("ota.start",      h_ota_start);
+    cmd_router_register("ota.status",     h_ota_status);
 }

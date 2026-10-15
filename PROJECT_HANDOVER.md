@@ -86,6 +86,19 @@
 ### 4. 运行历史日志归档保存
 - 已完整导出此前所有的 WebSocket 握手报文、心跳、动作日志和错误详情至根目录 **`saved_device_logs.txt`**（82.5 KB），任何时候都可用于追溯历史行为。
 
+### 5. 全链路 ESP32 双分区 OTA 升级系统落地
+- **固件层 (`ble_hid/`)**：
+  - 分区表升级为双备份架构（[partitions.csv](file:///f:/py_web/ble_hid/partitions.csv)），划分 `otadata`（引导标记）以及 `ota_0` / `ota_1`（双 1800KB 应用程序槽）。
+  - 新增独立 FreeRTOS 异步升级任务 [ota_mgr.c](file:///f:/py_web/ble_hid/main/ota_mgr.c) / [ota_mgr.h](file:///f:/py_web/ble_hid/main/ota_mgr.h)，支持分块流式写入、自动对齐哈希、进度向 WebSocket 实时回传，并在校验成功后调用 `esp_ota_set_boot_partition` 自动重启切换。
+  - 在 [cmd_router.c](file:///f:/py_web/ble_hid/main/cmd_router.c) 与 [serial_cli.c](file:///f:/py_web/ble_hid/main/serial_cli.c) 中分别注册了 `ota.start` 与 `ota.status` 调度命令。
+- **服务端 (`app/`)**：
+  - 新增 `firmwares` 数据表与 ORM 模型（[models/firmware.py](file:///f:/py_web/app/database/models/firmware.py)），支持安全记录版本、文件名、SHA-256、文件大小及描述。
+  - 开放 REST 接口（[api/v2/firmwares.py](file:///f:/py_web/app/api/v2/firmwares.py)）：固件上传、版本列表、二进制直接下载（`FileResponse`）、一键推送升级及设备 live OTA 状态轮询。
+  - 在 `app/api/ws/device.py` 中解析 `ota_progress` 上行帧，实时记录至 `ota_tracker` 内存服务。
+- **前端系统 (`vue-project/`)**：
+  - 新建独立路由页面 [views/firmware.vue](file:///f:/py_web/vue-project/src/views/firmware.vue)，集成固件拖拽上传、版本库管理、在线设备多选一键推送、环形进度条与实时升级日志流水。
+  - 在侧边栏导航（[DefaultLayout.vue](file:///f:/py_web/vue-project/src/layouts/DefaultLayout.vue)）常驻“固件与 OTA”入口。
+
 ---
 
 ## 四、 遗留关键问题与接手 Agent 任务指引 (Next Steps)
