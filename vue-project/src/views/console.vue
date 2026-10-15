@@ -26,10 +26,42 @@ const targetPeer = ref('')
 const bleConnected = ref(false)
 const bleLoading = ref(false)
 
-const KEYS = [
-  'KEY_A', 'KEY_B', 'KEY_C', 'KEY_ENTER', 'KEY_SPACE', 'KEY_TAB', 'KEY_ESC', 'KEY_BACKSPACE',
-  'KEY_UP', 'KEY_DOWN', 'KEY_LEFT', 'KEY_RIGHT',
-  'KEY_ALT_TAB', 'KEY_ALT_SHIFT_TAB', 'KEY_GUI_D', 'KEY_GUI_TAB',
+// Categorized keyboard key groups
+const NAV_KEYS = [
+  { key: 'KEY_UP', label: '↑ Up', icon: '↑' },
+  { key: 'KEY_DOWN', label: '↓ Down', icon: '↓' },
+  { key: 'KEY_LEFT', label: '← Left', icon: '←' },
+  { key: 'KEY_RIGHT', label: '→ Right', icon: '→' },
+]
+
+const CONTROL_KEYS = [
+  { key: 'KEY_ENTER', label: 'Enter', primary: true },
+  { key: 'KEY_SPACE', label: 'Space' },
+  { key: 'KEY_TAB', label: 'Tab' },
+  { key: 'KEY_ESC', label: 'Esc', danger: true },
+  { key: 'KEY_BACKSPACE', label: 'Backspace' },
+]
+
+const SHORTCUT_KEYS = [
+  { key: 'KEY_GUI_D', label: 'Win + D', hint: 'Desktop' },
+  { key: 'KEY_GUI_TAB', label: 'Win + Tab', hint: 'Task View' },
+  { key: 'KEY_ALT_TAB', label: 'Alt + Tab', hint: 'App Switch' },
+  { key: 'KEY_ALT_SHIFT_TAB', label: 'Alt + Shift + Tab', hint: 'Prev App' },
+]
+
+const ALPHA_KEYS = [
+  'KEY_A', 'KEY_B', 'KEY_C', 'KEY_D', 'KEY_E', 'KEY_F',
+  'KEY_G', 'KEY_H', 'KEY_I', 'KEY_J', 'KEY_K', 'KEY_L',
+  'KEY_M', 'KEY_N', 'KEY_O', 'KEY_P', 'KEY_Q', 'KEY_R',
+  'KEY_S', 'KEY_T', 'KEY_U', 'KEY_V', 'KEY_W', 'KEY_X',
+  'KEY_Y', 'KEY_Z',
+]
+
+const QUICK_TEXTS = [
+  'Hello World!',
+  'ping 127.0.0.1',
+  'echo "test"',
+  'exit',
 ]
 
 function extractCommandResult(resp) {
@@ -119,16 +151,16 @@ watch(selected, loadBleTarget)
 async function switchTarget() {
   if (!targetPeer.value || targetPeer.value === currentPeer.value) return
   const target = bonds.value.find((item) => item.addrStr === targetPeer.value)
-  if (!target) return ElMessage.warning('Target bond not found.')
+  if (!target) return ElMessage.warning('目标配对主机未找到')
 
   bleLoading.value = true
   try {
     const response = await commandsApi.bleSwitch(selected.value, target.addr_type ?? 0, addrToBytes(targetPeer.value))
     if (response?.status === 'acked' || response?.status === 'ok') {
-      ElMessage.success(`Switched to ${targetPeer.value}`)
+      ElMessage.success(`已切换至主机 ${targetPeer.value}`)
       await loadBleTarget()
     } else {
-      ElMessage.warning(`Switch failed: ${response?.error_message || 'unknown error'}`)
+      ElMessage.warning(`切换失败: ${response?.error_message || '未知错误'}`)
     }
   } finally {
     bleLoading.value = false
@@ -136,7 +168,7 @@ async function switchTarget() {
 }
 
 async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
-  if (!selected.value) return ElMessage.warning('Select a device first.')
+  if (!selected.value) return ElMessage.warning('请先选择控制目标设备')
   sending.value = true
   try {
     const response = await actionsApi.send({
@@ -147,12 +179,17 @@ async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
       },
       timeout_ms: timeoutMs,
     })
-    lastResult.value = response
+    lastResult.value = {
+      ...response,
+      _timestamp: new Date().toLocaleTimeString(),
+      _type: payload.type,
+      _key: payload.key || payload.content,
+    }
     const result = response.results?.[0]
     if (result?.status === 'acked') {
       if (successText) ElMessage.success(successText)
     } else {
-      ElMessage.warning(`${result?.status || 'failed'} ${result?.error_message || ''}`.trim())
+      ElMessage.warning(`${result?.status || '执行异常'} ${result?.error_message || ''}`.trim())
     }
   } finally {
     sending.value = false
@@ -160,19 +197,28 @@ async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
 }
 
 function sendKey(key) {
-  send({ type: 'keyboard_tap', key }, { successText: `${key} sent` })
+  send({ type: 'keyboard_tap', key }, { successText: `按键 ${key.replace('KEY_', '')} 发送成功` })
 }
 
 function sendText() {
   if (!text.value.trim()) return
   send(
-    { type: 'text', content: text.value, interval_ms: 10 },
-    { successText: 'Text sent', timeoutMs: 6000 },
+    { type: 'text', content: text.value, interval_ms: 8 },
+    { successText: `文本已发送 (${text.value.length} 字符)`, timeoutMs: 6000 },
   )
 }
 
+function setQuickText(val) {
+  text.value = val
+  sendText()
+}
+
 function onTrackpadResult(response) {
-  lastResult.value = response
+  lastResult.value = {
+    ...response,
+    _timestamp: new Date().toLocaleTimeString(),
+    _type: 'trackpad',
+  }
 }
 
 function openTrackpadPage() {
@@ -201,120 +247,938 @@ function openKioskTrackpadPage() {
 </script>
 
 <template>
-  <el-row :gutter="16">
-    <el-col :span="8">
-      <el-card header="Device">
-        <el-select v-model="selected" placeholder="Select device" style="width: 100%">
-          <el-option
-            v-for="device in devices"
-            :key="device.id"
-            :label="`${device.name || device.device_uuid} ${online.includes(device.device_uuid) ? '[online]' : '[offline]'}`"
-            :value="device.device_uuid"
-          />
-        </el-select>
-        <div style="margin-top: 8px; display: flex; gap: 8px">
-          <el-button size="small" @click="load">Refresh</el-button>
-          <el-tag size="small" :type="isSelectedOnline ? 'success' : 'info'">
-            {{ isSelectedOnline ? 'online' : 'offline' }}
-          </el-tag>
+  <div class="console-container">
+    <!-- Top Bar with Device Switcher & Quick Launch -->
+    <div class="console-header glass-panel">
+      <div class="header-left">
+        <div class="header-icon-box">
+          <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
         </div>
-      </el-card>
-
-      <el-card style="margin-top: 16px" v-loading="bleLoading">
-        <template #header>
-          <span>BLE Target Host</span>
-          <el-tag size="small" :type="bleConnected ? 'success' : 'info'" style="margin-left: 8px">
-            {{ bleConnected ? 'connected' : 'idle' }}
-          </el-tag>
-        </template>
-
-        <div style="font-size: 12px; color: #909399; margin-bottom: 8px">
-          Current peer: {{ currentPeer || '-' }}
+        <div>
+          <h1 class="header-title">实时硬件控制中枢</h1>
+          <p class="header-subtitle">Direct Hardware Ingestion & Low-latency Input Dispatcher</p>
         </div>
-
-        <el-select
-          v-model="targetPeer"
-          placeholder="Choose a bonded host"
-          style="width: 100%"
-          :disabled="!bonds.length"
-        >
-          <el-option
-            v-for="bond in bonds"
-            :key="bond.addrStr"
-            :label="bond.addrStr + (bond.addrStr === currentPeer ? ' (current)' : '')"
-            :value="bond.addrStr"
-          />
-        </el-select>
-
-        <div style="margin-top: 8px; display: flex; gap: 8px">
-          <el-button size="small" @click="loadBleTarget">Refresh</el-button>
-          <el-button
-            size="small"
-            type="primary"
-            :disabled="!targetPeer || targetPeer === currentPeer"
-            @click="switchTarget"
-          >
-            Switch
-          </el-button>
-        </div>
-
-        <el-empty v-if="!bonds.length && selected" description="No bonded hosts on this device yet." :image-size="60" />
-      </el-card>
-
-      <el-card header="Last Result" style="margin-top: 16px">
-        <pre style="max-height: 320px; overflow: auto; margin: 0; font-size: 12px">{{ JSON.stringify(lastResult, null, 2) }}</pre>
-      </el-card>
-    </el-col>
-
-    <el-col :span="16">
-      <el-alert
-        v-if="selected && !bleConnected"
-        type="info"
-        :closable="false"
-        title="BLE host is not connected. Keyboard macros can still work over USB, but BLE host switching requires a paired and connected peer."
-        style="margin-bottom: 16px"
-        show-icon
-      />
-
-      <el-card header="Keyboard">
-        <el-button
-          v-for="key in KEYS"
-          :key="key"
-          :loading="sending"
-          size="small"
-          style="margin: 4px"
-          @click="sendKey(key)"
-        >
-          {{ key }}
-        </el-button>
-      </el-card>
-
-      <el-card header="Text Input" style="margin-top: 16px">
-        <el-input v-model="text" placeholder="Type text to send to the selected device" @keyup.enter="sendText">
-          <template #append>
-            <el-button @click="sendText" :loading="sending">Send</el-button>
-          </template>
-        </el-input>
-      </el-card>
-
-      <div style="margin-top: 16px">
-        <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:12px; flex-wrap:wrap">
-          <el-button type="primary" :disabled="!selected" @click="openKioskTrackpadPage">
-            Open Kiosk Touchpad
-          </el-button>
-          <el-button type="primary" :disabled="!selected" @click="openPureTrackpadPage">
-            Open Pure Touchpad
-          </el-button>
-          <el-button type="primary" plain :disabled="!selected" @click="openTrackpadPage">
-            Open Full Touchpad
-          </el-button>
-        </div>
-        <TrackpadPanel
-          :device-uuid="selected"
-          :device-online="isSelectedOnline"
-          @result="onTrackpadResult"
-        />
       </div>
-    </el-col>
-  </el-row>
+
+      <div class="header-actions">
+        <div class="device-selector-wrapper">
+          <span class="device-badge-indicator" :class="{ 'online': isSelectedOnline }"></span>
+          <el-select v-model="selected" placeholder="选择目标设备" filterable class="device-select-custom">
+            <el-option
+              v-for="device in devices"
+              :key="device.id"
+              :label="`${device.name || device.device_uuid} ${online.includes(device.device_uuid) ? '● 在线' : '○ 离线'}`"
+              :value="device.device_uuid"
+            >
+              <div class="device-option-row">
+                <span class="option-name">{{ device.name || '未命名设备' }}</span>
+                <span class="option-uuid">{{ device.device_uuid }}</span>
+                <span class="option-status" :class="online.includes(device.device_uuid) ? 'status-on' : 'status-off'">
+                  {{ online.includes(device.device_uuid) ? '在线' : '离线' }}
+                </span>
+              </div>
+            </el-option>
+          </el-select>
+        </div>
+
+        <el-button class="refresh-btn" @click="load">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          刷新
+        </el-button>
+
+        <div class="quick-touchpad-group">
+          <button class="action-pill-btn" :disabled="!selected" @click="openPureTrackpadPage" title="纯净手势触控板">
+            <span class="pill-dot purple"></span>
+            极简触控
+          </button>
+          <button class="action-pill-btn" :disabled="!selected" @click="openKioskTrackpadPage" title="展厅全屏触控板">
+            <span class="pill-dot cyan"></span>
+            Kiosk 展厅
+          </button>
+          <button class="action-pill-btn primary" :disabled="!selected" @click="openTrackpadPage" title="新标签打开全功能触控板">
+            <span class="pill-dot blue"></span>
+            全屏触控
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Grid: Left Control Cards & Right Virtual Input Surface -->
+    <div class="console-body">
+      <!-- Left Column: BLE Switcher, Hardware Status, Result Terminal -->
+      <div class="console-col-side">
+        <!-- BLE Target Card -->
+        <div class="console-card glass-panel" v-loading="bleLoading">
+          <div class="card-header-bar">
+            <div class="card-title-group">
+              <svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11"/>
+              </svg>
+              <span class="card-title-text">BLE 目标主机</span>
+            </div>
+            <span class="ble-status-badge" :class="{ 'connected': bleConnected }">
+              {{ bleConnected ? '已连接目标' : '待机空闲' }}
+            </span>
+          </div>
+
+          <div class="ble-peer-info">
+            <span class="peer-label">当前配对目标：</span>
+            <code class="peer-code">{{ currentPeer || '无活跃连接' }}</code>
+          </div>
+
+          <div class="ble-selector-row">
+            <el-select
+              v-model="targetPeer"
+              placeholder="选择已配对主机槽位"
+              size="default"
+              style="flex: 1"
+              :disabled="!bonds.length"
+            >
+              <el-option
+                v-for="bond in bonds"
+                :key="bond.addrStr"
+                :label="bond.addrStr + (bond.addrStr === currentPeer ? ' (当前主机)' : '')"
+                :value="bond.addrStr"
+              />
+            </el-select>
+            <el-button
+              type="primary"
+              :disabled="!targetPeer || targetPeer === currentPeer"
+              @click="switchTarget"
+            >
+              切换
+            </el-button>
+          </div>
+
+          <div v-if="!bonds.length && selected" class="card-empty-hint">
+            <span class="hint-icon">ℹ</span> 该设备当前尚未发现已绑定的蓝牙主机
+          </div>
+        </div>
+
+        <!-- Real-Time Terminal Log -->
+        <div class="console-card glass-panel terminal-card">
+          <div class="card-header-bar">
+            <div class="card-title-group">
+              <div class="terminal-dots">
+                <span class="t-dot red"></span>
+                <span class="t-dot yellow"></span>
+                <span class="t-dot green"></span>
+              </div>
+              <span class="card-title-text">指令流执行控制台</span>
+            </div>
+            <span v-if="lastResult?._timestamp" class="terminal-time">{{ lastResult._timestamp }}</span>
+          </div>
+
+          <div class="terminal-view">
+            <div v-if="!lastResult" class="terminal-placeholder">
+              <div class="term-cursor">></div>
+              <span>等待下发硬件指令...</span>
+            </div>
+            <div v-else class="terminal-content">
+              <div class="term-line status-line">
+                <span class="term-prompt">$</span>
+                <span class="term-type">{{ lastResult._type || 'action' }}</span>
+                <span v-if="lastResult._key" class="term-arg">[{{ lastResult._key }}]</span>
+                <span
+                  class="term-status-tag"
+                  :class="lastResult.results?.[0]?.status === 'acked' ? 'success' : 'failed'"
+                >
+                  {{ lastResult.results?.[0]?.status || 'UNKNOWN' }}
+                </span>
+                <span v-if="lastResult.results?.[0]?.exec_time_ms !== undefined" class="term-latency">
+                  {{ lastResult.results[0].exec_time_ms }} ms
+                </span>
+              </div>
+              <pre class="term-raw-json">{{ JSON.stringify(lastResult, null, 2) }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Virtual Keyboard & Embedded Touchpad Surface -->
+      <div class="console-col-main">
+        <!-- Top Status Alert if BLE disconnected -->
+        <div v-if="selected && !bleConnected" class="notice-banner">
+          <div class="banner-icon-circle">⚡</div>
+          <div class="banner-text">
+            <strong>BLE 主机未连接：</strong>
+            键盘动作可通过有线 USB 传输直达，若需无线蓝牙控制，请确认设备已配对并处于目标主机蓝牙覆盖范围。
+          </div>
+        </div>
+
+        <!-- Virtual Keypad Deck -->
+        <div class="console-card glass-panel keypad-deck">
+          <div class="card-header-bar">
+            <div class="card-title-group">
+              <svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>
+              </svg>
+              <span class="card-title-text">仿真机械硬件键位矩阵</span>
+            </div>
+            <span class="deck-hint">点击即刻触发设备物理按键下发</span>
+          </div>
+
+          <!-- Shortcuts & Navigation Strip -->
+          <div class="keypad-section">
+            <div class="section-label">快捷功能 & 窗口切换</div>
+            <div class="key-grid shortcuts-grid">
+              <button
+                v-for="k in SHORTCUT_KEYS"
+                :key="k.key"
+                class="mech-key special-key"
+                :disabled="sending"
+                @click="sendKey(k.key)"
+              >
+                <span class="key-cap">{{ k.label }}</span>
+                <span class="key-sub">{{ k.hint }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Functional Control & Arrows -->
+          <div class="keypad-dual-row">
+            <div class="keypad-section flex-2">
+              <div class="section-label">常用功能键</div>
+              <div class="key-grid control-grid">
+                <button
+                  v-for="k in CONTROL_KEYS"
+                  :key="k.key"
+                  class="mech-key"
+                  :class="{ 'primary-key': k.primary, 'danger-key': k.danger }"
+                  :disabled="sending"
+                  @click="sendKey(k.key)"
+                >
+                  <span class="key-cap">{{ k.label }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="keypad-section flex-1">
+              <div class="section-label">方向导航</div>
+              <div class="key-grid nav-grid">
+                <button
+                  v-for="k in NAV_KEYS"
+                  :key="k.key"
+                  class="mech-key nav-key"
+                  :disabled="sending"
+                  @click="sendKey(k.key)"
+                >
+                  <span class="key-cap">{{ k.label }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Alphabetical Matrix (Collapsible or Compact Grid) -->
+          <div class="keypad-section">
+            <div class="section-label">基础字符 (A - Z)</div>
+            <div class="key-grid alpha-grid">
+              <button
+                v-for="key in ALPHA_KEYS"
+                :key="key"
+                class="mech-key alpha-key"
+                :disabled="sending"
+                @click="sendKey(key)"
+              >
+                <span class="key-cap">{{ key.replace('KEY_', '') }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text Stream Injector -->
+        <div class="console-card glass-panel text-injector-card">
+          <div class="card-header-bar">
+            <div class="card-title-group">
+              <svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 7 4 4 20 4 20 7"/>
+                <line x1="9" y1="20" x2="15" y2="20"/>
+                <line x1="12" y1="4" x2="12" y2="20"/>
+              </svg>
+              <span class="card-title-text">流式文本批量输入</span>
+            </div>
+            <div class="quick-preset-chips">
+              <span class="chip-label">快捷预设:</span>
+              <button
+                v-for="preset in QUICK_TEXTS"
+                :key="preset"
+                class="preset-chip"
+                @click="setQuickText(preset)"
+              >
+                {{ preset }}
+              </button>
+            </div>
+          </div>
+
+          <div class="text-input-row">
+            <el-input
+              v-model="text"
+              placeholder="在此输入需要下发至受控电脑的文本字符串，支持 Enter 回车直接发送..."
+              clearable
+              size="large"
+              class="custom-input-box"
+              @keyup.enter="sendText"
+            >
+              <template #prefix>
+                <span class="input-prefix-icon">✍</span>
+              </template>
+            </el-input>
+            <el-button
+              type="primary"
+              size="large"
+              class="send-text-btn"
+              :loading="sending"
+              @click="sendText"
+            >
+              <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+              发送文本
+            </el-button>
+          </div>
+        </div>
+
+        <!-- Embedded Touchpad Surface -->
+        <div class="embedded-trackpad-wrap">
+          <TrackpadPanel
+            :device-uuid="selected"
+            :device-online="isSelectedOnline"
+            @result="onTrackpadResult"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+.console-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+/* Top Header Bar */
+.console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--color-primary);
+}
+
+.header-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.header-subtitle {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.device-selector-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.device-badge-indicator {
+  position: absolute;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  z-index: 2;
+  transition: all 0.3s;
+}
+
+.device-badge-indicator.online {
+  background: var(--color-success);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+}
+
+.device-select-custom {
+  width: 280px;
+}
+
+.device-select-custom :deep(.el-input__wrapper) {
+  padding-left: 28px;
+  background: var(--color-bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.device-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+
+.option-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.option-uuid {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: monospace;
+}
+
+.option-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.option-status.status-on {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.option-status.status-off {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-md);
+}
+
+.btn-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.quick-touchpad-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.action-pill-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  transform: translateY(-1px);
+}
+
+.action-pill-btn.primary {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+  border-color: rgba(59, 130, 246, 0.4);
+  color: var(--color-primary-glow);
+}
+
+.action-pill-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.pill-dot.purple { background: #a855f7; }
+.pill-dot.cyan { background: #06b6d4; }
+.pill-dot.blue { background: #3b82f6; }
+
+/* Console Body Layout */
+.console-body {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .console-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.console-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.console-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Card Styling */
+.console-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--color-primary);
+}
+
+.card-title-text {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.ble-status-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.ble-status-badge.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.ble-peer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.peer-label {
+  color: var(--color-text-secondary);
+}
+
+.peer-code {
+  background: rgba(15, 23, 42, 0.5);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  color: #38bdf8;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.ble-selector-row {
+  display: flex;
+  gap: 8px;
+}
+
+.card-empty-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  background: rgba(148, 163, 184, 0.05);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+}
+
+/* Terminal Card */
+.terminal-card {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.terminal-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.t-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.t-dot.red { background: #ef4444; }
+.t-dot.yellow { background: #eab308; }
+.t-dot.green { background: #22c55e; }
+
+.terminal-time {
+  font-size: 11px;
+  color: #64748b;
+  font-family: monospace;
+}
+
+.terminal-view {
+  min-height: 180px;
+  max-height: 380px;
+  overflow-y: auto;
+  background: rgba(2, 6, 23, 0.7);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+
+.terminal-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  height: 140px;
+  justify-content: center;
+}
+
+.term-cursor {
+  color: #38bdf8;
+  font-weight: bold;
+}
+
+.term-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.term-prompt {
+  color: #a855f7;
+  font-weight: bold;
+}
+
+.term-type {
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.term-arg {
+  color: #f1f5f9;
+}
+
+.term-status-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.term-status-tag.success {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.term-status-tag.failed {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.term-latency {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.term-raw-json {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Notice Banner */
+.notice-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  color: #fde047;
+  font-size: 13px;
+}
+
+.banner-icon-circle {
+  font-size: 16px;
+}
+
+.banner-text {
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.banner-text strong {
+  color: #eab308;
+}
+
+/* Keypad Deck & Keys */
+.keypad-deck {
+  gap: 16px;
+}
+
+.deck-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.keypad-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.keypad-dual-row {
+  display: flex;
+  gap: 16px;
+}
+
+.flex-1 { flex: 1; }
+.flex-2 { flex: 2; }
+
+@media (max-width: 768px) {
+  .keypad-dual-row {
+    flex-direction: column;
+  }
+}
+
+.key-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Tactile Mechanical Keycaps */
+.mech-key {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  min-width: 52px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-bottom: 3px solid rgba(15, 23, 42, 0.9);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.mech-key:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(59, 130, 246, 0.25);
+}
+
+.mech-key:active:not(:disabled) {
+  transform: translateY(2px);
+  border-bottom-width: 1px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.mech-key:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.key-cap {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.key-sub {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.special-key {
+  flex: 1;
+  min-width: 110px;
+  background: linear-gradient(180deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.8) 100%);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.primary-key {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.7) 0%, rgba(29, 78, 216, 0.9) 100%);
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+.danger-key {
+  background: linear-gradient(180deg, rgba(220, 38, 38, 0.5) 0%, rgba(153, 27, 27, 0.8) 100%);
+  border-color: #ef4444;
+}
+
+.alpha-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
+  gap: 6px;
+}
+
+.alpha-key {
+  min-width: 40px;
+  padding: 8px;
+}
+
+/* Text Stream Injector */
+.text-injector-card {
+  gap: 12px;
+}
+
+.quick-preset-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.preset-chip {
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preset-chip:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--color-primary);
+  color: var(--color-primary-glow);
+}
+
+.text-input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.custom-input-box {
+  flex: 1;
+}
+
+.input-prefix-icon {
+  font-size: 14px;
+}
+
+.send-text-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  padding: 0 20px;
+}
+
+.send-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.embedded-trackpad-wrap {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+</style>

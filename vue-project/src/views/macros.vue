@@ -1,5 +1,5 @@
 <script>
-export const meta = { title: 'Macro Manager' }
+export const meta = { title: '宏管理' }
 </script>
 
 <script setup>
@@ -25,26 +25,26 @@ const KEYS = [
 ]
 
 const STEP_TYPES = [
-  { value: 'keyboard_tap', label: 'Key Tap' },
-  { value: 'keyboard_down', label: 'Key Down' },
-  { value: 'keyboard_up', label: 'Key Up' },
-  { value: 'text', label: 'Text' },
-  { value: 'mouse_move', label: 'Mouse Move' },
-  { value: 'mouse_scroll', label: 'Mouse Scroll' },
-  { value: 'mouse_click', label: 'Mouse Click' },
-  { value: 'delay', label: 'Delay' },
+  { value: 'keyboard_tap', label: '按键敲击', category: 'key', icon: '⌨' },
+  { value: 'keyboard_down', label: '按键按下', category: 'key', icon: '⬇' },
+  { value: 'keyboard_up', label: '按键抬起', category: 'key', icon: '⬆' },
+  { value: 'text', label: '文本串输入', category: 'text', icon: '✍' },
+  { value: 'mouse_move', label: '鼠标相对位移', category: 'mouse', icon: '✛' },
+  { value: 'mouse_click', label: '鼠标按键点击', category: 'mouse', icon: '🖱' },
+  { value: 'mouse_scroll', label: '滚轮水平/垂直', category: 'mouse', icon: '⇕' },
+  { value: 'delay', label: '等待延迟 (ms)', category: 'delay', icon: '⏱' },
 ]
 
 const EXECUTION_MODES = [
   {
-    value: 'network_debug',
-    label: 'Network Debug',
-    description: 'Validate WS protocol and ACK flow only. No real HID output.',
+    value: 'ble_targeted',
+    label: 'BLE 定向物理输出 (推荐)',
+    description: '通过蓝牙切换至绑定的主机 Slot 槽位，并发出真实的物理键盘/鼠标 HID 信号。',
   },
   {
-    value: 'ble_targeted',
-    label: 'BLE Targeted',
-    description: 'Switch to configured BLE slots and emit real keyboard and mouse HID output against those targets.',
+    value: 'network_debug',
+    label: '网络调试模式 (No-HID)',
+    description: '仅校验 WebSocket 协议帧与 ACK 回执逻辑，不产生真实外设物理信号。',
   },
 ]
 
@@ -54,17 +54,17 @@ function newStep(type) {
     case 'keyboard_tap':
     case 'keyboard_down':
     case 'keyboard_up':
-      return { id, type, key: 'KEY_A', repeat: 1 }
+      return { id, type, key: 'KEY_ENTER', repeat: 1 }
     case 'text':
-      return { id, type, content: '', interval_ms: 5 }
+      return { id, type, content: 'Hello World', interval_ms: 5 }
     case 'mouse_move':
-      return { id, type, x: 0, y: 0 }
+      return { id, type, x: 10, y: 0 }
     case 'mouse_scroll':
-      return { id, type, x: 0, y: -1 }
+      return { id, type, x: 0, y: -2 }
     case 'mouse_click':
       return { id, type, button: 1 }
     case 'delay':
-      return { id, type, delay_ms: 100 }
+      return { id, type, delay_ms: 200 }
     default:
       return { id, type }
   }
@@ -117,6 +117,11 @@ async function load() {
 
 onMounted(load)
 
+// KPI Computations
+const totalMacrosCount = computed(() => rows.value.length)
+const bleMacrosCount = computed(() => rows.value.filter(r => normalizeMacroConfig(r.content_json?.config).execution_mode === 'ble_targeted').length)
+const totalStepsCount = computed(() => rows.value.reduce((acc, cur) => acc + (cur.content_json?.steps?.length || 0), 0))
+
 const editor = reactive({
   visible: false,
   id: null,
@@ -132,7 +137,7 @@ function openCreate() {
   editor.visible = true
   editor.id = null
   editor.name = ''
-  editor.steps = []
+  editor.steps = [newStep('keyboard_tap')]
   editor.config = defaultMacroConfig()
 }
 
@@ -174,8 +179,8 @@ function duplicateStep(index) {
 }
 
 async function save() {
-  if (!editor.name.trim()) return ElMessage.warning('Please enter a macro name.')
-  if (!editor.steps.length) return ElMessage.warning('Add at least one step.')
+  if (!editor.name.trim()) return ElMessage.warning('请输入宏流程名称')
+  if (!editor.steps.length) return ElMessage.warning('宏流程至少需包含一个执行动作')
 
   const payload = {
     name: editor.name.trim(),
@@ -185,10 +190,10 @@ async function save() {
 
   if (editor.id == null) {
     await macrosApi.create(payload)
-    ElMessage.success('Macro created.')
+    ElMessage.success('宏编排流程创建成功')
   } else {
     await macrosApi.update(editor.id, payload)
-    ElMessage.success('Macro saved.')
+    ElMessage.success('宏编排流程保存成功')
   }
 
   editor.visible = false
@@ -196,9 +201,9 @@ async function save() {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm(`Delete macro "${row.name}"?`, 'Confirm', { type: 'warning' })
+  await ElMessageBox.confirm(`确认删除宏流程「${row.name}」？`, '删除确认', { type: 'warning' })
   await macrosApi.remove(row.id)
-  ElMessage.success('Macro deleted.')
+  ElMessage.success('宏流程已删除')
   await load()
 }
 
@@ -220,8 +225,8 @@ const runnerMode = computed(() => runnerConfig.value.execution_mode)
 
 function formatRunnerResults(results) {
   const failed = results.filter((item) => item.status !== 'acked')
-  if (!failed.length) ElMessage.success(`Completed ${results.length} target(s).`)
-  else ElMessage.warning(`${failed.length}/${results.length} target(s) failed.`)
+  if (!failed.length) ElMessage.success(`所有 ${results.length} 个目标已成功执行！`)
+  else ElMessage.warning(`${failed.length}/${results.length} 个目标执行未确认`)
 }
 
 async function loadSlotsForRunner() {
@@ -235,7 +240,7 @@ async function loadSlotsForRunner() {
   } catch {
     runner.slots = []
   }
-  runner.selectedSlots = []
+  runner.selectedSlots = runner.slots.length ? [runner.slots[0].slot_index] : []
 }
 
 async function openRun(row) {
@@ -256,7 +261,7 @@ async function openRun(row) {
 }
 
 async function doRun() {
-  if (!runner.deviceUuid) return ElMessage.warning('Select an online device first.')
+  if (!runner.deviceUuid) return ElMessage.warning('请先选择在线的受控硬件设备')
 
   const action = {
     type: 'macro',
@@ -292,7 +297,7 @@ async function doRun() {
     }
 
     if (!runner.selectedSlots.length) {
-      return ElMessage.warning('Select at least one slot.')
+      return ElMessage.warning('请至少勾选一个目标主机 Slot 槽位')
     }
 
     const resp = await commandsApi.send(runner.deviceUuid, {
@@ -316,281 +321,929 @@ const previewJson = computed(() => JSON.stringify({
 </script>
 
 <template>
-  <el-card>
-    <div style="display:flex; justify-content:space-between; margin-bottom:12px">
-      <el-button @click="load" :loading="loading">Refresh</el-button>
-      <el-button type="primary" @click="openCreate">New Macro</el-button>
-    </div>
-
-    <el-table :data="rows" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="60" />
-      <el-table-column prop="name" label="Name" width="220" />
-      <el-table-column label="Mode" width="150">
-        <template #default="{ row }">
-          <el-tag size="small" :type="normalizeMacroConfig(row.content_json?.config).execution_mode === 'network_debug' ? 'info' : 'success'">
-            {{ modeLabel(normalizeMacroConfig(row.content_json?.config).execution_mode) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="Steps" width="80">
-        <template #default="{ row }">{{ row.content_json?.steps?.length ?? 0 }}</template>
-      </el-table-column>
-      <el-table-column label="Preview">
-        <template #default="{ row }">
-          <code style="font-size:12px">
-            {{ JSON.stringify(row.content_json?.steps?.slice(0, 3) || []) }}{{ (row.content_json?.steps?.length || 0) > 3 ? ' ...' : '' }}
-          </code>
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="Created" width="180" />
-      <el-table-column label="Actions" width="240">
-        <template #default="{ row }">
-          <el-button size="small" type="primary" @click="openRun(row)">Run</el-button>
-          <el-button size="small" @click="openEdit(row)">Edit</el-button>
-          <el-button size="small" type="danger" @click="remove(row)">Delete</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-  </el-card>
-
-  <el-dialog v-model="editor.visible" :title="editor.id == null ? 'New Macro' : `Edit Macro #${editor.id}`" width="980px" top="5vh">
-    <el-form label-width="120px">
-      <el-form-item label="Macro Name">
-        <el-input v-model="editor.name" style="width:320px" placeholder="For example: Copy and Paste" />
-      </el-form-item>
-
-      <el-form-item label="Execution Mode">
-        <div style="display:flex; flex-direction:column; gap:8px; width:100%">
-          <el-radio-group v-model="editor.config.execution_mode" @change="onEditorModeChange">
-            <el-radio-button v-for="mode in EXECUTION_MODES" :key="mode.value" :label="mode.value">
-              {{ mode.label }}
-            </el-radio-button>
-          </el-radio-group>
-          <div style="font-size:12px; color:#909399">
-            {{ EXECUTION_MODES.find((item) => item.value === editorMode)?.description }}
-          </div>
+  <div class="macros-container">
+    <!-- Header -->
+    <div class="macros-header glass-panel">
+      <div class="header-left">
+        <div class="header-icon-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+            <polyline points="2 17 12 22 22 17"/>
+            <polyline points="2 12 12 17 22 12"/>
+          </svg>
         </div>
-      </el-form-item>
-
-      <el-form-item label="Action Timeout">
-        <el-input-number v-model="editor.config.action_timeout_ms" :min="500" :max="60000" controls-position="right" />
-        <span style="margin-left:8px; font-size:12px; color:#909399">ms</span>
-      </el-form-item>
-
-      <el-form-item v-if="editorMode === 'ble_targeted'" label="Switch Timeout">
-        <el-input-number v-model="editor.config.switch_timeout_s" :min="1" :max="60" controls-position="right" />
-        <span style="margin-left:8px; font-size:12px; color:#909399">seconds</span>
-      </el-form-item>
-
-      <el-form-item v-if="editorMode === 'ble_targeted'" label="Require Connected">
-        <el-switch v-model="editor.config.require_connected" />
-      </el-form-item>
-
-      <el-alert
-        v-if="editorMode === 'ble_targeted'"
-        type="warning"
-        :closable="false"
-        title="BLE Targeted mode now emits real keyboard and mouse HID. Mouse move, click, and scroll steps can run directly over BLE."
-        style="margin-bottom: 8px"
-      />
-
-      <el-alert
-        v-if="editorMode === 'network_debug'"
-        type="info"
-        :closable="false"
-        title="Network Debug mode only validates the action envelope, queueing, ACKs, and timing. It will not emit real HID events."
-      />
-    </el-form>
-
-    <div style="display:flex; gap:12px; margin-top:16px">
-      <el-card style="width:170px; flex-shrink:0" header="Add Step">
-        <el-button
-          v-for="type in STEP_TYPES"
-          :key="type.value"
-          size="small"
-          @click="addStep(type.value)"
-          style="width:100%; margin-bottom:6px"
-        >
-          + {{ type.label }}
-        </el-button>
-      </el-card>
-
-      <div style="flex:1; min-width:0">
-        <el-empty v-if="!editor.steps.length" description="Add steps from the left panel." :image-size="80" />
-        <draggable
-          v-else
-          v-model="editor.steps"
-          item-key="id"
-          handle=".drag-handle"
-          animation="150"
-          style="display:flex; flex-direction:column; gap:8px"
-        >
-          <template #item="{ element: step, index }">
-            <div class="step-row">
-              <div class="drag-handle" title="Drag to reorder">::</div>
-              <el-tag size="small" style="width:120px; text-align:center">
-                {{ index + 1 }} / {{ STEP_TYPES.find((type) => type.value === step.type)?.label || step.type }}
-              </el-tag>
-
-              <template v-if="['keyboard_tap', 'keyboard_down', 'keyboard_up'].includes(step.type)">
-                <el-select v-model="step.key" filterable size="small" style="width:170px">
-                  <el-option v-for="key in KEYS" :key="key" :label="key" :value="key" />
-                </el-select>
-                <el-input-number v-model="step.repeat" :min="1" :max="999" size="small" controls-position="right" style="width:110px" />
-                <span style="font-size:12px; color:#909399">repeat</span>
-              </template>
-
-              <template v-else-if="step.type === 'text'">
-                <el-input v-model="step.content" placeholder="Text to type" size="small" style="flex:1; min-width:0" />
-                <el-input-number v-model="step.interval_ms" :min="0" :max="500" size="small" controls-position="right" style="width:110px" />
-                <span style="font-size:12px; color:#909399">ms/char</span>
-              </template>
-
-              <template v-else-if="step.type === 'mouse_move'">
-                <span style="font-size:12px">dx</span>
-                <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
-                <span style="font-size:12px">dy</span>
-                <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
-              </template>
-
-              <template v-else-if="step.type === 'mouse_scroll'">
-                <span style="font-size:12px">hx</span>
-                <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
-                <span style="font-size:12px">vy</span>
-                <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width:100px" />
-              </template>
-
-              <template v-else-if="step.type === 'mouse_click'">
-                <el-radio-group v-model="step.button" size="small">
-                  <el-radio-button :label="1">Left</el-radio-button>
-                  <el-radio-button :label="2">Right</el-radio-button>
-                  <el-radio-button :label="4">Middle</el-radio-button>
-                </el-radio-group>
-              </template>
-
-              <template v-else-if="step.type === 'delay'">
-                <el-input-number v-model="step.delay_ms" :min="0" :max="60000" size="small" controls-position="right" style="width:140px" />
-                <span style="font-size:12px; color:#909399">ms</span>
-              </template>
-
-              <div style="margin-left:auto; display:flex; gap:4px">
-                <el-button size="small" link @click="duplicateStep(index)">Duplicate</el-button>
-                <el-button size="small" link type="danger" @click="removeStep(index)">Delete</el-button>
-              </div>
-            </div>
-          </template>
-        </draggable>
+        <div>
+          <h1 class="header-title">外设自动化宏编排</h1>
+          <p class="header-subtitle">Visual HID Macro Pipeline, Replay Engine & Targeted Dispatch</p>
+        </div>
       </div>
 
-      <el-card style="width:300px; flex-shrink:0" header="JSON Preview">
-        <pre style="max-height:560px; overflow:auto; margin:0; font-size:11px">{{ previewJson }}</pre>
-      </el-card>
+      <div class="header-actions">
+        <el-button class="refresh-btn" :loading="loading" @click="load">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          刷新
+        </el-button>
+        <el-button type="primary" class="create-btn" @click="openCreate">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          新建宏流程
+        </el-button>
+      </div>
     </div>
 
-    <template #footer>
-      <el-button @click="editor.visible = false">Cancel</el-button>
-      <el-button type="primary" @click="save">Save</el-button>
-    </template>
-  </el-dialog>
+    <!-- KPI Metrics -->
+    <div class="kpi-grid">
+      <div class="kpi-card glass-panel">
+        <div class="kpi-label">已编排宏脚本</div>
+        <div class="kpi-value text-blue">{{ totalMacrosCount }}</div>
+        <div class="kpi-sub">预置键盘/鼠标组合指令流</div>
+      </div>
+      <div class="kpi-card glass-panel">
+        <div class="kpi-label">物理 BLE 模式</div>
+        <div class="kpi-value text-purple">{{ bleMacrosCount }}</div>
+        <div class="kpi-sub">定向下发真实 HID 外设脉冲</div>
+      </div>
+      <div class="kpi-card glass-panel">
+        <div class="kpi-label">编排动作步数</div>
+        <div class="kpi-value text-green">{{ totalStepsCount }}</div>
+        <div class="kpi-sub">平均每宏约 {{ totalMacrosCount ? Math.round(totalStepsCount / totalMacrosCount) : 0 }} 步</div>
+      </div>
+    </div>
 
-  <el-dialog v-model="runner.visible" :title="`Run Macro: ${runner.macro?.name || ''}`" width="700px">
-    <el-form label-width="120px">
-      <el-form-item label="Execution Mode">
-        <el-tag :type="runnerMode === 'network_debug' ? 'info' : 'success'">
-          {{ modeLabel(runnerMode) }}
-        </el-tag>
-      </el-form-item>
+    <!-- Macros Table Card -->
+    <div class="table-card glass-panel" v-loading="loading">
+      <el-empty v-if="!rows.length && !loading" description="暂无宏编排流程，点击上方新建宏流程开启自动化" :image-size="80" />
+      <el-table v-else :data="rows" size="default" class="modern-macro-table">
+        <el-table-column prop="id" label="ID" width="70" />
 
-      <el-form-item label="Device">
-        <el-select v-model="runner.deviceUuid" @change="loadSlotsForRunner" style="width:100%">
-          <el-option
-            v-for="device in runner.devices"
-            :key="device.id"
-            :label="`${device.name || device.device_uuid} ${runner.online.includes(device.device_uuid) ? '[online]' : '[offline]'}`"
-            :value="device.device_uuid"
-            :disabled="!runner.online.includes(device.device_uuid)"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item v-if="runnerMode === 'ble_targeted'" label="Target Slots">
-        <div v-if="!runner.slots.length" style="font-size:12px; color:#909399">
-          No slots are configured on this device. Assign BLE slots from Device Control first.
-        </div>
-        <el-checkbox-group v-else v-model="runner.selectedSlots">
-          <el-checkbox v-for="slot in runner.slots" :key="slot.slot_index" :label="slot.slot_index">
-            slot {{ slot.slot_index }} / {{ slot.name || slot.addr }}
-          </el-checkbox>
-        </el-checkbox-group>
-      </el-form-item>
-
-      <el-form-item v-else label="Debug Note">
-        <el-alert
-          type="info"
-          :closable="false"
-          title="This run uses debug_no_hid + skip_link_check. It exercises only network delivery and ACK handling."
-        />
-      </el-form-item>
-    </el-form>
-
-    <el-card v-if="runner.results" header="Execution Results" style="margin-top:8px">
-      <el-table :data="runner.results" size="small">
-        <el-table-column label="Slot" width="70">
-          <template #default="{ row }">{{ row.slot_index ?? '-' }}</template>
-        </el-table-column>
-        <el-table-column label="Target">
-          <template #default="{ row }">{{ row.name || row.addr || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="Switched" width="80">
+        <el-table-column prop="name" label="宏流程名称" min-width="180">
           <template #default="{ row }">
-            <el-tag v-if="row.switched" size="small">yes</el-tag>
-            <span v-else style="font-size:12px; color:#909399">-</span>
+            <span class="macro-name-text">{{ row.name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Status" width="110">
+
+        <el-table-column label="运行模式" width="160">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'acked' ? 'success' : 'danger'">
-              {{ row.status }}
-            </el-tag>
+            <span
+              class="mode-badge"
+              :class="normalizeMacroConfig(row.content_json?.config).execution_mode === 'ble_targeted' ? 'mode-ble' : 'mode-debug'"
+            >
+              {{ normalizeMacroConfig(row.content_json?.config).execution_mode === 'ble_targeted' ? '⚡ BLE 定向物理' : '🔍 网络调试' }}
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="Detail">
+
+        <el-table-column label="步骤数" width="100">
           <template #default="{ row }">
-            <span v-if="row.status === 'acked'">{{ row.exec_time_ms }} ms</span>
-            <span v-else style="color:#f56c6c; font-size:12px">{{ row.error_code }} {{ row.error_message }}</span>
+            <span class="step-count-pill">
+              {{ row.content_json?.steps?.length ?? 0 }} 步
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="动作摘要" min-width="220">
+          <template #default="{ row }">
+            <div class="steps-preview-tags">
+              <span
+                v-for="(step, i) in (row.content_json?.steps || []).slice(0, 4)"
+                :key="i"
+                class="step-micro-tag"
+                :class="'cat-' + (STEP_TYPES.find(s => s.value === step.type)?.category || 'key')"
+              >
+                {{ step.type.replace('keyboard_', '').replace('mouse_', '') }}
+              </span>
+              <span v-if="(row.content_json?.steps?.length || 0) > 4" class="more-steps-tag">
+                +{{ row.content_json.steps.length - 4 }}
+              </span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="created_at" label="创建时间" width="170">
+          <template #default="{ row }">
+            <span class="timestamp-text">{{ row.created_at ? new Date(row.created_at).toLocaleDateString() : '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="{ row }">
+            <div class="action-btn-row">
+              <button class="macro-run-btn" @click="openRun(row)">
+                ▶ 执行
+              </button>
+              <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="remove(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </div>
 
-    <template #footer>
-      <el-button @click="runner.visible = false">Close</el-button>
-      <el-button type="primary" :loading="runner.busy" @click="doRun">Send</el-button>
-    </template>
-  </el-dialog>
+    <!-- Dialog: Macro Pipeline Editor -->
+    <el-dialog
+      v-model="editor.visible"
+      :title="editor.id == null ? '新建可视化宏编排' : `编辑宏流程 #${editor.id} · ${editor.name}`"
+      width="1040px"
+      top="4vh"
+      class="modern-dialog macro-editor-dialog"
+    >
+      <div class="editor-body-grid">
+        <!-- Settings Bar -->
+        <div class="editor-settings-strip">
+          <div class="es-item name-field">
+            <div class="es-label">宏名称</div>
+            <el-input v-model="editor.name" placeholder="例如：自动化表格填充、复制并切换" size="default" />
+          </div>
+
+          <div class="es-item mode-field">
+            <div class="es-label">执行模式</div>
+            <el-radio-group v-model="editor.config.execution_mode" size="default" @change="onEditorModeChange">
+              <el-radio-button label="ble_targeted">BLE 定向物理</el-radio-button>
+              <el-radio-button label="network_debug">网络调试模式</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div class="es-item">
+            <div class="es-label">动作超时 (ms)</div>
+            <el-input-number v-model="editor.config.action_timeout_ms" :min="500" :max="60000" :step="1000" size="default" controls-position="right" />
+          </div>
+
+          <div class="es-item" v-if="editorMode === 'ble_targeted'">
+            <div class="es-label">切槽超时 (s)</div>
+            <el-input-number v-model="editor.config.switch_timeout_s" :min="1" :max="60" size="default" controls-position="right" />
+          </div>
+        </div>
+
+        <!-- Main Workspace: Left Add Buttons, Center Step Pipeline, Right JSON -->
+        <div class="pipeline-workspace">
+          <!-- Step Type Palette -->
+          <div class="step-palette glass-panel">
+            <div class="palette-title">添加动作节点</div>
+            <div class="palette-buttons">
+              <button
+                v-for="type in STEP_TYPES"
+                :key="type.value"
+                class="palette-btn"
+                :class="'btn-cat-' + type.category"
+                @click="addStep(type.value)"
+              >
+                <span class="btn-icon">{{ type.icon }}</span>
+                <span class="btn-label">{{ type.label }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step Pipeline Droppable -->
+          <div class="pipeline-stream">
+            <div class="stream-header">
+              <span class="stream-title">动作执行流水线 ({{ editor.steps.length }} 步)</span>
+              <span class="stream-hint">可直接拖拽左侧句柄上下重排步骤</span>
+            </div>
+
+            <el-empty v-if="!editor.steps.length" description="流水线为空，点击左侧动作按钮添加节点" :image-size="70" />
+            <draggable
+              v-else
+              v-model="editor.steps"
+              item-key="id"
+              handle=".drag-handle"
+              animation="200"
+              class="draggable-container"
+            >
+              <template #item="{ element: step, index }">
+                <div class="step-card" :class="'card-cat-' + (STEP_TYPES.find(t => t.value === step.type)?.category || 'key')">
+                  <div class="drag-handle" title="按住拖动调序">⠿</div>
+                  <div class="step-index-pill">#{{ index + 1 }}</div>
+
+                  <div class="step-type-pill">
+                    {{ STEP_TYPES.find(t => t.value === step.type)?.label || step.type }}
+                  </div>
+
+                  <!-- Dynamic Field Controls -->
+                  <div class="step-controls">
+                    <!-- Key tap / down / up -->
+                    <template v-if="['keyboard_tap', 'keyboard_down', 'keyboard_up'].includes(step.type)">
+                      <el-select v-model="step.key" filterable size="small" style="width: 170px">
+                        <el-option v-for="key in KEYS" :key="key" :label="key" :value="key" />
+                      </el-select>
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">重复:</span>
+                        <el-input-number v-model="step.repeat" :min="1" :max="999" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                    </template>
+
+                    <!-- Text -->
+                    <template v-else-if="step.type === 'text'">
+                      <el-input v-model="step.content" placeholder="输入要下发的字符串内容" size="small" style="flex: 1; min-width: 160px" />
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">打字延时(ms):</span>
+                        <el-input-number v-model="step.interval_ms" :min="0" :max="500" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                    </template>
+
+                    <!-- Mouse Move -->
+                    <template v-else-if="step.type === 'mouse_move'">
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">dx:</span>
+                        <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">dy:</span>
+                        <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                    </template>
+
+                    <!-- Mouse Scroll -->
+                    <template v-else-if="step.type === 'mouse_scroll'">
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">水平 hx:</span>
+                        <el-input-number v-model="step.x" :min="-127" :max="127" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">垂直 vy:</span>
+                        <el-input-number v-model="step.y" :min="-127" :max="127" size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                    </template>
+
+                    <!-- Mouse Click -->
+                    <template v-else-if="step.type === 'mouse_click'">
+                      <el-radio-group v-model="step.button" size="small">
+                        <el-radio-button :label="1">左键 (Left)</el-radio-button>
+                        <el-radio-button :label="2">右键 (Right)</el-radio-button>
+                        <el-radio-button :label="4">中键 (Middle)</el-radio-button>
+                      </el-radio-group>
+                    </template>
+
+                    <!-- Delay -->
+                    <template v-else-if="step.type === 'delay'">
+                      <div class="ctrl-group">
+                        <span class="ctrl-label">等待时长:</span>
+                        <el-input-number v-model="step.delay_ms" :min="0" :max="60000" :step="100" size="small" controls-position="right" style="width: 120px" />
+                        <span class="ctrl-label">ms</span>
+                      </div>
+                    </template>
+                  </div>
+
+                  <!-- Step Card Actions -->
+                  <div class="step-card-actions">
+                    <button class="step-action-btn" title="克隆节点" @click="duplicateStep(index)">⧉</button>
+                    <button class="step-action-btn danger" title="删除节点" @click="removeStep(index)">✕</button>
+                  </div>
+                </div>
+              </template>
+            </draggable>
+          </div>
+
+          <!-- JSON Live Preview -->
+          <div class="json-preview-sidebar glass-panel">
+            <div class="json-header">
+              <span>JSON 实时结构</span>
+            </div>
+            <pre class="json-code-box">{{ previewJson }}</pre>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="editor.visible = false">取消</el-button>
+        <el-button type="primary" @click="save">保存宏编排</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Dialog: Macro Runner -->
+    <el-dialog
+      v-model="runner.visible"
+      :title="`执行宏流程 · ${runner.macro?.name || ''}`"
+      width="720px"
+      class="modern-dialog"
+    >
+      <div class="runner-form-body">
+        <div class="runner-mode-banner">
+          <span class="banner-title">执行模式:</span>
+          <span
+            class="mode-badge"
+            :class="runnerMode === 'ble_targeted' ? 'mode-ble' : 'mode-debug'"
+          >
+            {{ modeLabel(runnerMode) }}
+          </span>
+        </div>
+
+        <div class="field-row">
+          <div class="field-label">下发硬件终端 (必须在线):</div>
+          <el-select v-model="runner.deviceUuid" @change="loadSlotsForRunner" style="width: 100%">
+            <el-option
+              v-for="device in runner.devices"
+              :key="device.id"
+              :label="`${device.name || device.device_uuid} ${runner.online.includes(device.device_uuid) ? '● 在线' : '○ 离线'}`"
+              :value="device.device_uuid"
+              :disabled="!runner.online.includes(device.device_uuid)"
+            />
+          </el-select>
+        </div>
+
+        <div class="field-row" v-if="runnerMode === 'ble_targeted'">
+          <div class="field-label">目标主机 Slot 槽位:</div>
+          <div v-if="!runner.slots.length" class="text-muted" style="font-size: 12px">
+            该设备尚未在“设备控制”中分配任何 BLE Slot 槽位，请先配置槽位。
+          </div>
+          <el-checkbox-group v-else v-model="runner.selectedSlots" class="slots-checkbox-group">
+            <el-checkbox
+              v-for="slot in runner.slots"
+              :key="slot.slot_index"
+              :label="slot.slot_index"
+              class="slot-check-card"
+            >
+              Slot #{{ slot.slot_index }} ({{ slot.name || slot.addr }})
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
+
+        <!-- Execution Results Table -->
+        <div v-if="runner.results" class="runner-results-card glass-panel">
+          <div class="results-header">执行响应列表</div>
+          <el-table :data="runner.results" size="small" class="custom-tab-table">
+            <el-table-column label="Slot" width="70">
+              <template #default="{ row }">#{{ row.slot_index ?? '-' }}</template>
+            </el-table-column>
+            <el-table-column label="目标主机">
+              <template #default="{ row }">{{ row.name || row.addr || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <span
+                  class="status-pill"
+                  :class="row.status === 'acked' ? 'pill-acked' : 'pill-failed'"
+                >
+                  {{ row.status }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="耗时">
+              <template #default="{ row }">
+                <span v-if="row.status === 'acked'">{{ row.exec_time_ms }} ms</span>
+                <span v-else class="text-danger">{{ row.error_code }} {{ row.error_message }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="runner.visible = false">关闭</el-button>
+        <el-button type="primary" :loading="runner.busy" @click="doRun">立即执行宏</el-button>
+      </template>
+    </el-dialog>
+  </div>
 </template>
 
 <style scoped>
-.step-row {
+.macros-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+/* Header */
+.macros-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 24px;
+  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-icon-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.2));
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-icon-badge svg {
+  width: 22px;
+  height: 22px;
+  color: var(--color-primary);
+}
+
+.header-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.header-subtitle {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-md);
+}
+
+.create-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-md);
+}
+
+.btn-svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* KPI Row */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 860px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kpi-card {
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.kpi-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+
+.kpi-sub {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.text-blue { color: #38bdf8; }
+.text-purple { color: #c084fc; }
+.text-green { color: #4ade80; }
+.text-danger { color: #f87171; }
+.text-muted { color: #94a3b8; }
+
+/* Table */
+.table-card {
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.modern-macro-table {
+  background: transparent !important;
+}
+
+.modern-macro-table :deep(.el-table__header-wrapper th) {
+  background: var(--color-bg-base) !important;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.macro-name-text {
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-size: 14px;
+}
+
+.mode-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+}
+
+.mode-ble {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.mode-debug {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+
+.step-count-pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  background: rgba(148, 163, 184, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.steps-preview-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.step-micro-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.cat-key {
+  background: rgba(59, 130, 246, 0.15);
+  color: #38bdf8;
+}
+
+.cat-text {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.cat-mouse {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.cat-delay {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+}
+
+.more-steps-tag {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.timestamp-text {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.action-btn-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: #fafafa;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
 }
+
+.macro-run-btn {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2));
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.macro-run-btn:hover {
+  background: rgba(34, 197, 94, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Editor Dialog Layout */
+.editor-body-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.editor-settings-strip {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  padding: 14px 16px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+
+.es-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.name-field { flex: 2; min-width: 220px; }
+.mode-field { flex: 1; min-width: 200px; }
+
+.es-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.pipeline-workspace {
+  display: grid;
+  grid-template-columns: 180px 1fr 280px;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .pipeline-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Step Palette */
+.step-palette {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.palette-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.palette-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.palette-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-base);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.palette-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  transform: translateX(2px);
+}
+
+.btn-icon {
+  font-size: 13px;
+}
+
+/* Pipeline Stream */
+.pipeline-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 280px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.stream-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stream-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.stream-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.draggable-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s;
+}
+
+.card-cat-key { border-left: 3px solid #3b82f6; }
+.card-cat-text { border-left: 3px solid #10b981; }
+.card-cat-mouse { border-left: 3px solid #a855f7; }
+.card-cat-delay { border-left: 3px solid #f59e0b; }
 
 .drag-handle {
   cursor: grab;
+  color: var(--color-text-muted);
+  font-size: 16px;
   user-select: none;
-  color: #c0c4cc;
-  padding: 0 6px;
-  font-size: 18px;
-  line-height: 1;
+}
+.drag-handle:active { cursor: grabbing; }
+
+.step-index-pill {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
 }
 
-.drag-handle:active {
-  cursor: grabbing;
+.step-type-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--color-text-primary);
+  min-width: 72px;
+  text-align: center;
+}
+
+.step-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ctrl-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.step-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.step-action-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  font-size: 14px;
+}
+.step-action-btn:hover { color: var(--color-primary); }
+.step-action-btn.danger:hover { color: #f87171; }
+
+/* JSON Preview Sidebar */
+.json-preview-sidebar {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 520px;
+}
+
+.json-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.json-code-box {
+  margin: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 10.5px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #38bdf8;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+}
+
+/* Runner */
+.runner-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.runner-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.slots-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slot-check-card {
+  margin-right: 0;
+}
+
+.runner-results-card {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.results-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+}
+
+.pill-acked {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.pill-failed {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
 }
 </style>

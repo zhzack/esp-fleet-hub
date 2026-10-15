@@ -64,6 +64,30 @@ const GESTURE_DEFS = [
     defaultPayload: { type: 'mouse_click', button: 2 },
   },
   {
+    id: 'two_finger_pinch_in',
+    label: 'Two-finger pinch in',
+    defaultLabel: 'Zoom out (Ctrl + -)',
+    defaultPayload: { type: 'keyboard_tap', key: 'KEY_CTRL_MINUS' },
+  },
+  {
+    id: 'two_finger_pinch_out',
+    label: 'Two-finger pinch out',
+    defaultLabel: 'Zoom in (Ctrl + =)',
+    defaultPayload: { type: 'keyboard_tap', key: 'KEY_CTRL_EQUAL' },
+  },
+  {
+    id: 'two_finger_rotate_cw',
+    label: 'Two-finger rotate CW',
+    defaultLabel: 'Rotate CW (Right)',
+    defaultPayload: { type: 'keyboard_tap', key: 'KEY_RIGHT' },
+  },
+  {
+    id: 'two_finger_rotate_ccw',
+    label: 'Two-finger rotate CCW',
+    defaultLabel: 'Rotate CCW (Left)',
+    defaultPayload: { type: 'keyboard_tap', key: 'KEY_LEFT' },
+  },
+  {
     id: 'three_finger_tap',
     label: 'Three-finger tap',
     defaultLabel: 'Middle click',
@@ -142,16 +166,25 @@ function prefsStorageKey() {
 }
 
 function loadPrefs() {
+  const defaults = {
+    pointerProfile: 'balanced',
+    enableScrollSlider: true,
+    enablePinchZoom: true,
+    enableRotateGesture: true,
+  }
   try {
     const raw = localStorage.getItem(prefsStorageKey())
-    if (!raw) return { pointerProfile: 'balanced' }
+    if (!raw) return defaults
     const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return { pointerProfile: 'balanced' }
+    if (!parsed || typeof parsed !== 'object') return defaults
     return {
       pointerProfile: typeof parsed.pointerProfile === 'string' ? parsed.pointerProfile : 'balanced',
+      enableScrollSlider: parsed.enableScrollSlider !== false,
+      enablePinchZoom: parsed.enablePinchZoom !== false,
+      enableRotateGesture: parsed.enableRotateGesture !== false,
     }
   } catch {
-    return { pointerProfile: 'balanced' }
+    return defaults
   }
 }
 
@@ -534,6 +567,14 @@ function beginSession() {
     totalDy: 0,
     oneFingerMoved: false,
     twoFingerScrolled: false,
+    initialDistance: null,
+    prevDistance: null,
+    initialAngle: null,
+    prevAngle: null,
+    pinchTriggered: false,
+    rotateTriggered: false,
+    pinchAccumulator: 0,
+    rotateAccumulator: 0,
   }
 }
 
@@ -568,6 +609,8 @@ function finalizeGesture() {
   } else if (
     fingers === 2 &&
     !session.twoFingerScrolled &&
+    !session.pinchTriggered &&
+    !session.rotateTriggered &&
     distance <= TAP_DISTANCE &&
     elapsed <= TAP_MAX_MS
   ) {
@@ -645,14 +688,59 @@ function onPointerMove(event) {
   }
 
   if (count === 2) {
-    const prev = session.prevCentroid || centroid
-    const dx = centroid.x - prev.x
-    const dy = centroid.y - prev.y
-    if (dx || dy) {
-      session.twoFingerScrolled = session.twoFingerScrolled
-        || Math.abs(session.totalDx) > 10
-        || Math.abs(session.totalDy) > 10
-      queueScrollFromPixels(dx, dy)
+    const pts = Array.from(pointers.values())
+    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+    const angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x) * (180 / Math.PI)
+
+    if (session.initialDistance === null) {
+      session.initialDistance = dist
+      session.prevDistance = dist
+      session.initialAngle = angle
+      session.prevAngle = angle
+    }
+
+    const distDelta = dist - session.prevDistance
+    let angleDelta = angle - session.prevAngle
+    if (angleDelta > 180) angleDelta -= 360
+    if (angleDelta < -180) angleDelta += 360
+
+    session.pinchAccumulator += distDelta
+    session.rotateAccumulator += angleDelta
+    session.prevDistance = dist
+    session.prevAngle = angle
+
+    // Pinch zoom check
+    if (prefs.enablePinchZoom && Math.abs(session.pinchAccumulator) >= 32) {
+      if (session.pinchAccumulator > 0) {
+        triggerGesture('two_finger_pinch_out')
+      } else {
+        triggerGesture('two_finger_pinch_in')
+      }
+      session.pinchTriggered = true
+      session.pinchAccumulator = 0
+    }
+
+    // Rotate gesture check
+    if (prefs.enableRotateGesture && Math.abs(session.rotateAccumulator) >= 22) {
+      if (session.rotateAccumulator > 0) {
+        triggerGesture('two_finger_rotate_cw')
+      } else {
+        triggerGesture('two_finger_rotate_ccw')
+      }
+      session.rotateTriggered = true
+      session.rotateAccumulator = 0
+    }
+
+    if (!session.pinchTriggered && !session.rotateTriggered) {
+      const prev = session.prevCentroid || centroid
+      const dx = centroid.x - prev.x
+      const dy = centroid.y - prev.y
+      if (dx || dy) {
+        session.twoFingerScrolled = session.twoFingerScrolled
+          || Math.abs(session.totalDx) > 10
+          || Math.abs(session.totalDy) > 10
+        queueScrollFromPixels(dx, dy)
+      }
     }
   }
 
@@ -685,6 +773,89 @@ function onPointerCancel(event) {
   finishPointer(event)
 }
 
+// ---------------- Scroll Slider Joystick (from web_mouse) ----------------
+const sliderRef = ref(null)
+const sliderThumbY = ref(null)
+const isSliderDragging = ref(false)
+let sliderTimer = null
+const SLIDER_THUMB_HEIGHT = 44
+
+function initSliderThumb() {
+  if (!sliderRef.value) return
+  const h = sliderRef.value.clientHeight || 260
+  sliderThumbY.value = Math.max(0, (h - SLIDER_THUMB_HEIGHT) / 2)
+}
+
+function onSliderPointerDown(event) {
+  if (!canControl.value) return
+  event.preventDefault()
+  isSliderDragging.value = true
+  event.currentTarget?.setPointerCapture?.(event.pointerId)
+  updateSliderPosition(event.clientY)
+  startSliderScrollTimer()
+}
+
+function onSliderPointerMove(event) {
+  if (!isSliderDragging.value) return
+  event.preventDefault()
+  updateSliderPosition(event.clientY)
+}
+
+function updateSliderPosition(clientY) {
+  if (!sliderRef.value) return
+  const rect = sliderRef.value.getBoundingClientRect()
+  const usable = Math.max(1, rect.height - SLIDER_THUMB_HEIGHT)
+  let y = clientY - rect.top - SLIDER_THUMB_HEIGHT / 2
+  sliderThumbY.value = Math.max(0, Math.min(usable, y))
+}
+
+function startSliderScrollTimer() {
+  if (sliderTimer) return
+  sliderTimer = window.setInterval(() => {
+    if (!isSliderDragging.value || !sliderRef.value) return
+    const rect = sliderRef.value.getBoundingClientRect()
+    const usable = Math.max(1, rect.height - SLIDER_THUMB_HEIGHT)
+    const center = usable / 2
+    const current = sliderThumbY.value ?? center
+    const ratio = (current - center) / (usable / 2) // -1.0 (top) to +1.0 (bottom)
+
+    if (Math.abs(ratio) < 0.12) return
+
+    // offset down -> scroll down (negative y); offset up -> scroll up (positive y)
+    const sign = ratio > 0 ? -1 : 1
+    const magnitude = Math.ceil(Math.pow(Math.abs(ratio), 1.4) * 4)
+    const scrollStep = sign * magnitude
+
+    if (scrollStep !== 0) {
+      sendStreamPayload({ type: 'mouse_scroll', x: 0, y: scrollStep })
+    }
+  }, 50)
+}
+
+function stopSliderScroll() {
+  isSliderDragging.value = false
+  if (sliderTimer) {
+    clearInterval(sliderTimer)
+    sliderTimer = null
+  }
+  if (sliderRef.value) {
+    const usable = Math.max(1, sliderRef.value.clientHeight - SLIDER_THUMB_HEIGHT)
+    sliderThumbY.value = usable / 2
+  }
+}
+
+function onSliderPointerUp(event) {
+  if (isSliderDragging.value) {
+    event.preventDefault()
+    stopSliderScroll()
+  }
+}
+
+function onSliderDblClick() {
+  stopSliderScroll()
+  setStatus('Scroll joystick centered', 'info')
+}
+
 watch(
   () => [props.deviceUuid, props.deviceOnline],
   () => {
@@ -711,12 +882,16 @@ let packetTimer = null
 onMounted(() => {
   loadMacros()
   packetTimer = window.setInterval(() => refreshPacketRate(), 250)
+  window.setTimeout(initSliderThumb, 100)
+  window.addEventListener('resize', initSliderThumb)
 })
 
 onBeforeUnmount(() => {
   clearTimer(moveQueue.timer)
   clearTimer(scrollQueue.timer)
   if (packetTimer) window.clearInterval(packetTimer)
+  stopSliderScroll()
+  window.removeEventListener('resize', initSliderThumb)
   resetInteraction()
 })
 </script>
@@ -740,22 +915,47 @@ onBeforeUnmount(() => {
     </template>
 
     <div class="trackpad-body" :class="{ fullscreen }">
-      <div
-        class="trackpad-surface"
-        :class="{ disabled: !canControl, active: activeTouches > 0 }"
-        @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerCancel"
-        @contextmenu.prevent
-      >
-        <div v-if="showSurfaceHint" class="surface-hint">
-          <div class="surface-title">{{ canControl ? 'Touch Surface' : 'Unavailable' }}</div>
-          <div class="surface-text">{{ surfaceState }}</div>
+      <div class="trackpad-interactive-area">
+        <div
+          class="trackpad-surface"
+          :class="{ disabled: !canControl, active: activeTouches > 0 }"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerCancel"
+          @contextmenu.prevent
+        >
+          <div v-if="showSurfaceHint" class="surface-hint">
+            <div class="surface-title">{{ canControl ? 'Touch Surface' : 'Unavailable' }}</div>
+            <div class="surface-text">{{ surfaceState }}</div>
+          </div>
+          <el-tag v-if="showTouchCounter" size="small" type="success" class="touch-counter">
+            {{ activeTouches }} finger{{ activeTouches > 1 ? 's' : '' }}
+          </el-tag>
         </div>
-        <el-tag v-if="showTouchCounter" size="small" type="success" class="touch-counter">
-          {{ activeTouches }} finger{{ activeTouches > 1 ? 's' : '' }}
-        </el-tag>
+
+        <div
+          v-if="prefs.enableScrollSlider"
+          ref="sliderRef"
+          class="trackpad-scroll-slider"
+          :class="{ active: isSliderDragging, disabled: !canControl }"
+          title="Drag up/down for continuous wheel scroll, double click to center"
+          @pointerdown="onSliderPointerDown"
+          @pointermove="onSliderPointerMove"
+          @pointerup="onSliderPointerUp"
+          @pointercancel="onSliderPointerUp"
+          @dblclick="onSliderDblClick"
+        >
+          <div class="slider-arrow slider-arrow-up">▲</div>
+          <div class="slider-center-line"></div>
+          <div
+            class="slider-thumb"
+            :style="{ transform: `translateY(${sliderThumbY ?? 100}px)` }"
+          >
+            <div class="thumb-grip"></div>
+          </div>
+          <div class="slider-arrow slider-arrow-down">▼</div>
+        </div>
       </div>
 
       <div v-if="!minimal" class="trackpad-toolbar">
@@ -785,7 +985,7 @@ onBeforeUnmount(() => {
 
       <div v-if="!fullscreen" class="gesture-summary">
         <div class="summary-item"><strong>1 finger</strong><span>Move pointer, tap for left click.</span></div>
-        <div class="summary-item"><strong>2 fingers</strong><span>Scroll, tap for right click.</span></div>
+        <div class="summary-item"><strong>2 fingers</strong><span>Scroll, tap right click, pinch zoom, rotate.</span></div>
         <div class="summary-item"><strong>3 fingers</strong><span>Tap for middle click, swipe for app/task actions.</span></div>
         <div class="summary-item"><strong>4 fingers</strong><span>Swipe left or right to switch desktops.</span></div>
       </div>
@@ -819,7 +1019,28 @@ onBeforeUnmount(() => {
       </div>
     </el-card>
 
-    <el-table :data="gestureRows" size="small" v-loading="macrosLoading">
+    <el-card shadow="never" class="settings-card" style="margin-top: 12px">
+      <div class="settings-title">Touchpad & Gesture Features</div>
+      <div class="settings-copy">
+        Configure extra gestures and virtual controls ported from web_mouse.
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px">
+        <el-switch
+          v-model="prefs.enableScrollSlider"
+          active-text="Side Continuous Scroll Joystick"
+        />
+        <el-switch
+          v-model="prefs.enablePinchZoom"
+          active-text="Two-Finger Pinch-to-Zoom"
+        />
+        <el-switch
+          v-model="prefs.enableRotateGesture"
+          active-text="Two-Finger Rotation Gestures"
+        />
+      </div>
+    </el-card>
+
+    <el-table :data="gestureRows" size="small" v-loading="macrosLoading" style="margin-top: 16px">
       <el-table-column prop="label" label="Gesture" min-width="200" />
       <el-table-column prop="defaultLabel" label="Default Action" min-width="180" />
       <el-table-column label="Macro Override" min-width="280">
@@ -904,8 +1125,23 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+.trackpad-interactive-area {
+  display: flex;
+  gap: 12px;
+  position: relative;
+  min-height: 280px;
+}
+
+.trackpad-card.fullscreen .trackpad-interactive-area,
+.trackpad-card.minimal .trackpad-interactive-area,
+.trackpad-card.immersive .trackpad-interactive-area {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .trackpad-surface {
   position: relative;
+  flex: 1 1 auto;
   min-height: 280px;
   border-radius: 18px;
   border: 1px solid #d9ecff;
@@ -915,6 +1151,94 @@ onBeforeUnmount(() => {
   overflow: hidden;
   touch-action: none;
   user-select: none;
+}
+
+.trackpad-scroll-slider {
+  width: 48px;
+  border-radius: 18px;
+  border: 1px solid #d9ecff;
+  background: linear-gradient(180deg, #f0f6ff 0%, #e6efff 100%);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+  box-shadow: inset 0 2px 6px rgba(64, 158, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.trackpad-scroll-slider.active {
+  cursor: grabbing;
+  box-shadow: inset 0 0 0 1px #409eff, 0 0 12px rgba(64, 158, 255, 0.25);
+  background: linear-gradient(180deg, #ebf3ff 0%, #dbe9ff 100%);
+}
+
+.trackpad-scroll-slider.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.slider-arrow {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.slider-center-line {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: rgba(64, 158, 255, 0.35);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.slider-thumb {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  right: 4px;
+  height: 44px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #c6e2ff;
+  box-shadow: 0 3px 8px rgba(64, 158, 255, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.04s ease-out, box-shadow 0.2s ease;
+  pointer-events: none;
+}
+
+.trackpad-scroll-slider.active .slider-thumb {
+  box-shadow: 0 4px 14px rgba(64, 158, 255, 0.38);
+  background: #f0f7ff;
+  border-color: #409eff;
+}
+
+.thumb-grip {
+  width: 16px;
+  height: 10px;
+  border-top: 2px solid #8cc5ff;
+  border-bottom: 2px solid #8cc5ff;
+  position: relative;
+}
+
+.thumb-grip::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #8cc5ff;
 }
 
 .trackpad-card.fullscreen .trackpad-surface {
