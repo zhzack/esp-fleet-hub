@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, JSON, Enum, CHAR, TIMESTAMP, text,
+    Column, BigInteger, Integer, String, JSON, Enum, CHAR, TIMESTAMP, text,
 )
 from app.database.base_class import Base
 
@@ -7,7 +7,11 @@ from app.database.base_class import Base
 class ActionLog(Base):
     __tablename__ = "action_logs"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     msg_id = Column(CHAR(36), unique=True, nullable=False)
     user_id = Column(BigInteger, nullable=True)
     device_id = Column(BigInteger, nullable=True)

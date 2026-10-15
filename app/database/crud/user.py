@@ -30,3 +30,12 @@ def authenticate(db: Session, username: str, password: str) -> User | None:
     if not verify_password(password, user.password_hash):
         return None
     return user
+
+
+def update_password(db: Session, user: User, new_password: str) -> User:
+    user.password_hash = hash_password(new_password)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+

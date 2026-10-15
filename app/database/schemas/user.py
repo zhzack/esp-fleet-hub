@@ -31,3 +31,9 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds
+
+
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=6, max_length=128)
+

@@ -57,6 +57,10 @@ async def dispatch_action(
 @router.get("/logs", response_model=List[ActionLogOut])
 def recent_logs(
     limit: int = 100,
+    offset: int = 0,
+    status: str | None = None,
+    action_type: str | None = None,
+    device_id: int | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -64,4 +68,9 @@ def recent_logs(
         db,
         user_id=None if user.role == "admin" else user.id,
         limit=min(limit, 1000),
+        offset=max(offset, 0),
+        status=status,
+        action_type=action_type,
+        device_id=device_id,
     )
+

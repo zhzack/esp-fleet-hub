@@ -46,9 +46,41 @@ def mark_failed(
 
 
 def list_recent(
-    db: Session, user_id: int | None = None, limit: int = 100
+    db: Session,
+    user_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    status: str | None = None,
+    action_type: str | None = None,
+    device_id: int | None = None,
 ) -> list[ActionLog]:
     q = db.query(ActionLog)
     if user_id is not None:
         q = q.filter(ActionLog.user_id == user_id)
-    return q.order_by(ActionLog.id.desc()).limit(limit).all()
+    if status:
+        q = q.filter(ActionLog.status == status)
+    if action_type:
+        q = q.filter(ActionLog.action_type == action_type)
+    if device_id is not None:
+        q = q.filter(ActionLog.device_id == device_id)
+    return q.order_by(ActionLog.id.desc()).offset(offset).limit(limit).all()
+
+
+def count_logs(
+    db: Session,
+    user_id: int | None = None,
+    status: str | None = None,
+    action_type: str | None = None,
+    device_id: int | None = None,
+) -> int:
+    q = db.query(ActionLog)
+    if user_id is not None:
+        q = q.filter(ActionLog.user_id == user_id)
+    if status:
+        q = q.filter(ActionLog.status == status)
+    if action_type:
+        q = q.filter(ActionLog.action_type == action_type)
+    if device_id is not None:
+        q = q.filter(ActionLog.device_id == device_id)
+    return q.count()
+
