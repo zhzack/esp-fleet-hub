@@ -1,11 +1,15 @@
-from sqlalchemy import Column, BigInteger, String, JSON, TIMESTAMP, ForeignKey, text
+from sqlalchemy import Column, BigInteger, Integer, String, JSON, TIMESTAMP, ForeignKey, text
 from app.database.base_class import Base
 
 
 class Macro(Base):
     __tablename__ = "macros"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     user_id = Column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

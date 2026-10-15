@@ -1,11 +1,15 @@
-from sqlalchemy import Column, BigInteger, String, TIMESTAMP, ForeignKey, text
+from sqlalchemy import Column, BigInteger, Integer, String, TIMESTAMP, ForeignKey, text
 from app.database.base_class import Base
 
 
 class DeviceGroup(Base):
     __tablename__ = "device_groups"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     owner_user_id = Column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

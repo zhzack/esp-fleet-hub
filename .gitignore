@@ -2,3 +2,6 @@
 /logs
 __pycache__/
 *.pyc
+*.db
+*.bin
+.pytest_cache/

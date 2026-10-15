@@ -15,7 +15,11 @@ class DeviceBondSlot(Base):
     """
     __tablename__ = "device_bond_slots"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     device_id = Column(
         BigInteger, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
     )

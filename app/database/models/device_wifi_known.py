@@ -4,7 +4,7 @@
 保持 password_enc 为空，回放时让用户重新输入。
 """
 from sqlalchemy import (
-    Column, BigInteger, String, Text, TIMESTAMP, DateTime, ForeignKey,
+    Column, BigInteger, Integer, String, Text, TIMESTAMP, DateTime, ForeignKey,
     UniqueConstraint, text,
 )
 from sqlalchemy.orm import relationship
@@ -14,7 +14,11 @@ from app.database.base_class import Base
 class DeviceWifiKnown(Base):
     __tablename__ = "device_wifi_known"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     device_id = Column(
         BigInteger, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
     )

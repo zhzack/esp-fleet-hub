@@ -4,10 +4,14 @@ from app.core.config.config import settings
 from app.database.base_class import Base  # 统一的 Base，所有模型必须用这个
 
 # 1. 引擎
+connect_args = {}
+if "sqlite" in settings.SQLALCHEMY_DATABASE_URI:
+    connect_args["check_same_thread"] = False
+
 engine = create_engine(
     settings.SQLALCHEMY_DATABASE_URI,
+    connect_args=connect_args,
     pool_pre_ping=True,
-    pool_recycle=3600,
     echo=False,
 )
 

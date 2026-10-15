@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, BigInteger, String, JSON, Enum, TIMESTAMP, DateTime, ForeignKey, text,
+    Column, BigInteger, Integer, String, JSON, Enum, TIMESTAMP, DateTime, ForeignKey, text,
 )
 from sqlalchemy.orm import relationship
 from app.database.base_class import Base
@@ -8,7 +8,11 @@ from app.database.base_class import Base
 class Device(Base):
     __tablename__ = "devices"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     device_uuid = Column(String(128), unique=True, nullable=False)
     owner_user_id = Column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -36,7 +40,11 @@ class Device(Base):
 class DeviceConnection(Base):
     __tablename__ = "device_connections"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     device_id = Column(
         BigInteger, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
     )
