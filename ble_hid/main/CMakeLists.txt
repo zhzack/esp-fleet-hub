@@ -13,6 +13,7 @@ idf_component_register(
         "provision.c"
         "cmd_router.c"
         "lan_mode.c"
+        "serial_cli.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

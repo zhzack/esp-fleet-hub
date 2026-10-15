@@ -25,8 +25,9 @@
 #include "provision.h"
 #include "cmd_router.h"
 #include "lan_mode.h"
+#include "serial_cli.h"
 
-#define FW_VERSION "esp32-hid-1.1"
+#define FW_VERSION "esp32-hid-1.2"
 
 static const char *TAG = "main";
 
@@ -52,6 +53,9 @@ void app_main(void)
     } else if (uerr != ESP_OK) {
         ESP_LOGW(TAG, "USB HID init failed: %s — BLE only", esp_err_to_name(uerr));
     }
+
+    /* 启动交互式串口命令行（USB CDC 虚拟串口 / UART 终端） */
+    serial_cli_start();
 
     if (cfg.wifi_ssid[0] == '\0') {
         ESP_LOGW(TAG, "no wifi configured — entering SoftAP provisioning");
