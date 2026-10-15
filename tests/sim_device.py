@@ -121,7 +121,7 @@ class SimDevice:
     def _handle_command(self, mtype: str, payload: dict) -> tuple[str, dict]:
         """返回 (status, result_or_error)。status='ok' 时第二项是 result dict；
         status='failed' 时第二项是 {code, message}。"""
-        global _SIM_BONDS, _SIM_WIFI
+        global _SIM_BONDS, _SIM_WIFI, _SIM_TRANSPORT_MODE
 
         if mtype == "get_status":
             return "ok", {
@@ -208,7 +208,6 @@ class SimDevice:
             }
 
         if mtype == "transport.set":
-            global _SIM_TRANSPORT_MODE
             m = payload.get("mode")
             if m not in ("auto", "ble", "usb"):
                 return "failed", {"code": "E004", "message": "bad mode"}

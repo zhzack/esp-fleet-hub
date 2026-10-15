@@ -99,11 +99,16 @@ docker compose -f compose.prod.yml up -d --build
 
 ### `POST /api/v1/auth/login`
 
+支持 **JSON** (`application/json`) 与 **OAuth2 Form** (`application/x-www-form-urlencoded`) 两种请求体格式：
+
 ```jsonc
-// body
+// 方式 1: JSON body
 { "username": "alice", "password": "secret123" }
 
-// 200
+// 方式 2: Form data
+username=alice&password=secret123
+
+// 200 响应
 { "access_token": "eyJ...", "token_type": "bearer", "user": { "id":1, "username":"alice", "role":"user" } }
 ```
 
@@ -117,9 +122,23 @@ docker compose -f compose.prod.yml up -d --build
 
 返回同 login。
 
+### `POST /api/v1/auth/change-password`
+
+用户在已登录状态下修改当前账户密码：
+
+```jsonc
+// Header: Authorization: Bearer <token>
+// body
+{ "old_password": "old_secret", "new_password": "new_secret_123" }
+
+// 200
+{ "message": "Password updated successfully" }
+```
+
 ### `GET /api/v1/auth/me`
 
 返回当前 token 对应的用户信息。
+
 
 ---
 
@@ -350,17 +369,29 @@ action 走 executor 队列；`payload` 见 §十二。
 ---
 
 ## 八、动作日志
+ 
+-### `GET /api/v2/logs?limit=100`
++### `GET /api/v2/logs`
 
-### `GET /api/v2/logs?limit=100`
+支持多维度条件筛选与分页：
+- `limit` (int, 默认 100，上限 1000): 返回条数
+- `offset` (int, 默认 0): 分页偏移量
+- `status` (string, 可选): 筛选状态 (`acked` / `failed` / `pending` / `sent`)
+- `action_type` (string, 可选): 筛选动作类型 (如 `keyboard_tap`, `text`, `mouse_move`, `macro` 等)
+- `device_id` (int, 可选): 筛选指定设备的日志
 
-```jsonc
-[ { "id":1, "msg_id":"...", "user_id":1, "device_id":1,
-    "action_type":"keyboard_tap", "payload":{...},
-    "status":"acked","error_code":null,"error_message":null,
-    "exec_time_ms":12, "created_at":"...", "acked_at":"..." } ]
-```
+示例请求：
+`GET /api/v2/logs?limit=50&status=acked&action_type=keyboard_tap`
+ 
+ ```jsonc
+ [ { "id":1, "msg_id":"...", "user_id":1, "device_id":1,
+     "action_type":"keyboard_tap", "payload":{...},
+     "status":"acked","error_code":null,"error_message":null,
+     "exec_time_ms":12, "created_at":"...", "acked_at":"..." } ]
+ ```
+ 
+ `status`: `pending` | `sent` | `acked` | `failed`。
 
-`status`: `pending` | `sent` | `acked` | `failed`。
 
 ---
 
