@@ -822,11 +822,11 @@ const previewJson = computed(() => JSON.stringify({
   color: var(--color-text-secondary);
 }
 
-.text-blue { color: #38bdf8; }
-.text-purple { color: #c084fc; }
-.text-green { color: #4ade80; }
-.text-danger { color: #f87171; }
-.text-muted { color: #94a3b8; }
+.text-blue { color: #2563eb; }
+.text-purple { color: #7c3aed; }
+.text-green { color: #16a34a; }
+.text-danger { color: #dc2626; }
+.text-muted { color: #64748b; }
 
 /* Table */
 .table-card {
@@ -860,20 +860,23 @@ const previewJson = computed(() => JSON.stringify({
 }
 
 .mode-ble {
-  background: rgba(168, 85, 247, 0.15);
-  color: #c084fc;
+  background: #f3e8ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
 }
 
 .mode-debug {
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 
 .step-count-pill {
   font-size: 11px;
   font-weight: 700;
   color: var(--color-text-primary);
-  background: rgba(148, 163, 184, 0.15);
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -892,23 +895,27 @@ const previewJson = computed(() => JSON.stringify({
 }
 
 .cat-key {
-  background: rgba(59, 130, 246, 0.15);
-  color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 
 .cat-text {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
 }
 
 .cat-mouse {
-  background: rgba(168, 85, 247, 0.15);
-  color: #c084fc;
+  background: #f3e8ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
 }
 
 .cat-delay {
-  background: rgba(234, 179, 8, 0.15);
-  color: #facc15;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
 }
 
 .more-steps-tag {
@@ -930,9 +937,9 @@ const previewJson = computed(() => JSON.stringify({
 .macro-run-btn {
   padding: 3px 10px;
   border-radius: var(--radius-pill);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2));
-  border: 1px solid rgba(34, 197, 94, 0.4);
-  color: #4ade80;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  color: #15803d;
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
@@ -940,7 +947,7 @@ const previewJson = computed(() => JSON.stringify({
 }
 
 .macro-run-btn:hover {
-  background: rgba(34, 197, 94, 0.3);
+  background: #bbf7d0;
   transform: translateY(-1px);
 }
 
@@ -1149,7 +1156,7 @@ const previewJson = computed(() => JSON.stringify({
   font-size: 14px;
 }
 .step-action-btn:hover { color: var(--color-primary); }
-.step-action-btn.danger:hover { color: #f87171; }
+.step-action-btn.danger:hover { color: #dc2626; }
 
 /* JSON Preview Sidebar */
 .json-preview-sidebar {
@@ -1173,8 +1180,9 @@ const previewJson = computed(() => JSON.stringify({
   overflow-y: auto;
   font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
   font-size: 10.5px;
-  background: rgba(15, 23, 42, 0.85);
+  background: #0f172a;
   color: #38bdf8;
+  border: 1px solid #1e293b;
   padding: 10px;
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
@@ -1238,12 +1246,14 @@ const previewJson = computed(() => JSON.stringify({
 }
 
 .pill-acked {
-  color: #4ade80;
-  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
 }
 
 .pill-failed {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
 }
 </style>

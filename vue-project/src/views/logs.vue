@@ -459,11 +459,11 @@ onBeforeUnmount(() => {
   color: var(--color-text-secondary);
 }
 
-.text-blue { color: #38bdf8; }
-.text-green { color: #4ade80; }
-.text-purple { color: #c084fc; }
-.text-red { color: #f87171; }
-.text-muted { color: #94a3b8; }
+.text-blue { color: #2563eb; }
+.text-green { color: #16a34a; }
+.text-purple { color: #7c3aed; }
+.text-red { color: #dc2626; }
+.text-muted { color: #64748b; }
 
 /* Filter Toolbar */
 .filter-toolbar {
@@ -509,8 +509,9 @@ onBeforeUnmount(() => {
   display: inline-block;
   font-size: 12px;
   font-weight: 600;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.1);
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -533,22 +534,25 @@ onBeforeUnmount(() => {
 }
 
 .badge-acked {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
 }
-.badge-acked .status-dot { background: #4ade80; }
+.badge-acked .status-dot { background: #16a34a; }
 
 .badge-failed {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
 }
-.badge-failed .status-dot { background: #f87171; }
+.badge-failed .status-dot { background: #dc2626; }
 
 .badge-pending {
-  background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
-.badge-pending .status-dot { background: #94a3b8; }
+.badge-pending .status-dot { background: #64748b; }
 
 .latency-badge {
   font-size: 11px;
@@ -558,16 +562,19 @@ onBeforeUnmount(() => {
 }
 
 .speed-fast {
-  background: rgba(34, 197, 94, 0.1);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
 }
 .speed-mid {
-  background: rgba(56, 189, 248, 0.1);
-  color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 .speed-slow {
-  background: rgba(234, 179, 8, 0.1);
-  color: #facc15;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
 }
 
 .msg-id-code {
@@ -588,7 +595,7 @@ onBeforeUnmount(() => {
 }
 
 .text-danger-msg {
-  color: #f87171;
+  color: #dc2626;
   font-size: 11px;
 }
 .err-code {
@@ -648,7 +655,11 @@ onBeforeUnmount(() => {
 
 .dh-msg-id code {
   font-family: monospace;
-  color: #38bdf8;
+  color: #0369a1;
+  background: #f0f9ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #bae6fd;
   word-break: break-all;
 }
 
@@ -701,8 +712,9 @@ onBeforeUnmount(() => {
   margin: 0;
   max-height: 400px;
   overflow-y: auto;
-  background: rgba(15, 23, 42, 0.85);
-  color: #94a3b8;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
   padding: 12px;
   border-radius: var(--radius-sm);
   font-family: monospace;

@@ -542,11 +542,11 @@ onMounted(() => {
   color: var(--color-text-secondary);
 }
 
-.text-blue { color: #38bdf8; }
-.text-purple { color: #c084fc; }
-.text-green { color: #4ade80; }
-.text-muted { color: #94a3b8; }
-.text-danger { color: #f87171; }
+.text-blue { color: #2563eb; }
+.text-purple { color: #7c3aed; }
+.text-green { color: #16a34a; }
+.text-muted { color: #64748b; }
+.text-danger { color: #dc2626; }
 
 /* Table Card */
 .table-card {
@@ -596,7 +596,7 @@ onMounted(() => {
 }
 
 .dispatch-link-btn {
-  color: #f59e0b !important;
+  color: #d97706 !important;
   font-weight: 600;
 }
 
@@ -625,28 +625,33 @@ onMounted(() => {
 }
 
 .pill-on {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.1);
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
 }
 
 .pill-off {
-  color: #94a3b8;
-  background: rgba(148, 163, 184, 0.1);
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
 }
 
 .pill-acked {
-  color: #4ade80;
-  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
 }
 
 .pill-failed {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
 }
 
 .pill-queued {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.15);
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
 }
 
 /* Add Devices Selection */
@@ -696,13 +701,15 @@ onMounted(() => {
 }
 
 .status-on {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.1);
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
 }
 
 .status-off {
-  color: #94a3b8;
-  background: rgba(148, 163, 184, 0.1);
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
 }
 
 /* Dispatch Form */
@@ -742,17 +749,18 @@ onMounted(() => {
 }
 
 .preset-pill-btn.active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+  background: #eff6ff;
   border-color: var(--color-primary);
-  color: var(--color-primary-glow);
+  color: var(--color-primary);
   font-weight: 600;
 }
 
 .json-editor-textarea :deep(textarea) {
   font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
   font-size: 12px;
-  background: rgba(15, 23, 42, 0.8);
+  background: #0f172a;
   color: #38bdf8;
+  border: 1px solid #1e293b;
   border-radius: var(--radius-sm);
 }
 
@@ -783,17 +791,20 @@ onMounted(() => {
 }
 
 .summary-pill.total {
-  background: rgba(56, 189, 248, 0.1);
-  color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 
 .summary-pill.success {
-  background: rgba(34, 197, 94, 0.1);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
 }
 
 .summary-pill.failed {
-  background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
 }
 </style>

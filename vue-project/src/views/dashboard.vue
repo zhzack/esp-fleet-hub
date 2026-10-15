@@ -374,14 +374,14 @@ onBeforeUnmount(() => {
 
 /* Banner */
 .welcome-banner {
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 55%, #3b82f6 100%);
   border-radius: var(--radius-lg);
   padding: 24px 28px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.15);
+  border: 1px solid #1d4ed8;
+  box-shadow: 0 8px 20px -4px rgba(37, 99, 235, 0.25);
   color: #ffffff;
 }
 
@@ -395,6 +395,7 @@ onBeforeUnmount(() => {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.3px;
+  color: #ffffff;
 }
 
 .role-tag {
@@ -404,8 +405,9 @@ onBeforeUnmount(() => {
 .banner-desc {
   margin: 6px 0 0;
   font-size: 13px;
-  color: #94a3b8;
+  color: rgba(255, 255, 255, 0.9);
   max-width: 600px;
+  line-height: 1.5;
 }
 
 .banner-actions {
@@ -485,12 +487,12 @@ onBeforeUnmount(() => {
 }
 
 .kpi-number.color-emerald {
-  color: #10b981;
+  color: #059669;
 }
 
 .kpi-sub {
   font-size: 12px;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 .online-pill {
@@ -500,6 +502,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: #059669;
   background: #ecfdf5;
+  border: 1px solid #a7f3d0;
   padding: 2px 8px;
   border-radius: 9999px;
   margin-left: 4px;
@@ -508,16 +511,16 @@ onBeforeUnmount(() => {
 .kpi-footer {
   margin-top: 16px;
   font-size: 12px;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 .footer-link {
-  color: #3b82f6;
+  color: var(--color-primary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .footer-link:hover {
@@ -541,7 +544,7 @@ onBeforeUnmount(() => {
   background: #ffffff;
   border-radius: var(--radius-md);
   padding: 20px 22px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
@@ -556,12 +559,12 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--color-text-primary);
 }
 
 .panel-subtitle {
   font-size: 12px;
-  color: #94a3b8;
+  color: #64748b;
   margin-top: 2px;
   display: block;
 }

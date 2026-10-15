@@ -892,18 +892,20 @@ function openKioskTrackpadPage() {
   min-height: 180px;
   max-height: 380px;
   overflow-y: auto;
-  background: rgba(2, 6, 23, 0.7);
+  background: #0f172a;
+  border: 1px solid #1e293b;
   border-radius: var(--radius-md);
   padding: 12px;
-  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
+  color: #f8fafc;
 }
 
 .terminal-placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #64748b;
+  color: #94a3b8;
   height: 140px;
   justify-content: center;
 }
@@ -919,10 +921,11 @@ function openKioskTrackpadPage() {
   gap: 8px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+  color: #f8fafc;
 }
 
 .term-prompt {
-  color: #a855f7;
+  color: #c084fc;
   font-weight: bold;
 }
 
@@ -932,7 +935,7 @@ function openKioskTrackpadPage() {
 }
 
 .term-arg {
-  color: #f1f5f9;
+  color: #ffffff;
 }
 
 .term-status-tag {
@@ -956,13 +959,13 @@ function openKioskTrackpadPage() {
 }
 
 .term-latency {
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 11px;
 }
 
 .term-raw-json {
   margin: 0;
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -975,23 +978,24 @@ function openKioskTrackpadPage() {
   gap: 12px;
   padding: 12px 16px;
   border-radius: var(--radius-md);
-  background: rgba(234, 179, 8, 0.1);
-  border: 1px solid rgba(234, 179, 8, 0.3);
-  color: #fde047;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
   font-size: 13px;
 }
 
 .banner-icon-circle {
   font-size: 16px;
+  color: #d97706;
 }
 
 .banner-text {
   line-height: 1.4;
-  color: var(--color-text-secondary);
+  color: #78350f;
 }
 
 .banner-text strong {
-  color: #eab308;
+  color: #92400e;
 }
 
 /* Keypad Deck & Keys */
@@ -1038,7 +1042,7 @@ function openKioskTrackpadPage() {
   gap: 8px;
 }
 
-/* Tactile Mechanical Keycaps */
+/* Tactile Mechanical Keycaps - High Contrast Clean Styling */
 .mech-key {
   position: relative;
   display: inline-flex;
@@ -1047,27 +1051,29 @@ function openKioskTrackpadPage() {
   justify-content: center;
   padding: 10px 14px;
   min-width: 52px;
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-bottom: 3px solid rgba(15, 23, 42, 0.9);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid #cbd5e1;
+  border-bottom: 3px solid #94a3b8;
   border-radius: 8px;
-  color: var(--color-text-primary);
+  color: #0f172a;
   cursor: pointer;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
   user-select: none;
 }
 
 .mech-key:hover:not(:disabled) {
-  border-color: var(--color-primary);
+  border-color: #3b82f6;
+  border-bottom-color: #2563eb;
+  color: #2563eb;
   transform: translateY(-2px);
-  box-shadow: 0 6px 14px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 4px 8px rgba(37, 99, 235, 0.15);
 }
 
 .mech-key:active:not(:disabled) {
   transform: translateY(2px);
   border-bottom-width: 1px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .mech-key:disabled {
@@ -1079,30 +1085,52 @@ function openKioskTrackpadPage() {
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  color: inherit;
 }
 
 .key-sub {
   font-size: 10px;
-  color: var(--color-text-muted);
+  color: #64748b;
   margin-top: 2px;
 }
 
 .special-key {
   flex: 1;
   min-width: 110px;
-  background: linear-gradient(180deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.8) 100%);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: linear-gradient(180deg, #f0f7ff 0%, #e0f2fe 100%);
+  border-color: #93c5fd;
+  border-bottom-color: #60a5fa;
+  color: #0369a1;
+}
+
+.special-key .key-cap {
+  color: #0369a1;
+}
+
+.special-key .key-sub {
+  color: #0284c7;
 }
 
 .primary-key {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.7) 0%, rgba(29, 78, 216, 0.9) 100%);
-  border-color: #3b82f6;
-  color: #ffffff;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border-color: #2563eb;
+  border-bottom-color: #1d4ed8;
+  color: #ffffff !important;
+}
+
+.primary-key .key-cap {
+  color: #ffffff !important;
 }
 
 .danger-key {
-  background: linear-gradient(180deg, rgba(220, 38, 38, 0.5) 0%, rgba(153, 27, 27, 0.8) 100%);
-  border-color: #ef4444;
+  background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%);
+  border-color: #fca5a5;
+  border-bottom-color: #f87171;
+  color: #b91c1c;
+}
+
+.danger-key .key-cap {
+  color: #b91c1c;
 }
 
 .alpha-grid {

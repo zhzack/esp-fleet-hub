@@ -39,16 +39,16 @@ function extractResult(resp) {
   return cur
 }
 
-async function call(fn, label) {
+async function call(fn, label, { silent = false } = {}) {
   loading.value = true
   try {
     const resp = await fn()
     lastResult.value = resp
     const r = extractResult(resp)
     if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
-      ElMessage.warning(`${label}: ${resp.status} ${resp.error_message || ''}`)
+      if (!silent) ElMessage.warning(`${label}: ${resp.status} ${resp.error_message || ''}`)
     } else {
-      ElMessage.success(`${label} 成功`)
+      if (!silent) ElMessage.success(`${label} 成功`)
     }
     return r
   } catch (e) {
@@ -58,16 +58,16 @@ async function call(fn, label) {
   }
 }
 
-async function loadStatus() {
-  statusData.value = await call(() => commandsApi.status(props.deviceUuid), '查询硬件状态')
+async function loadStatus(silent = true) {
+  statusData.value = await call(() => commandsApi.status(props.deviceUuid), '查询硬件状态', { silent })
 }
 
-async function loadWifiStatus() {
-  wifiStatusData.value = await call(() => commandsApi.wifiStatus(props.deviceUuid), 'WiFi 状态')
+async function loadWifiStatus(silent = true) {
+  wifiStatusData.value = await call(() => commandsApi.wifiStatus(props.deviceUuid), 'WiFi 状态', { silent })
 }
 
 async function doWifiScan() {
-  if (!wifiStatusData.value) await loadWifiStatus()
+  if (!wifiStatusData.value) await loadWifiStatus(true)
   if (!wifiKnownList.value.length) await loadKnownWifi()
   const r = await call(() => commandsApi.wifiScan(props.deviceUuid), 'WiFi 扫描')
   const list = r?.networks || r?.aps || (Array.isArray(r) ? r : [])
@@ -88,7 +88,7 @@ async function loadKnownWifi() {
 
 async function applyKnownWifi(row) {
   await call(() => commandsApi.applyKnownWifi(props.deviceUuid, row.ssid), `连接 ${row.ssid}`)
-  await loadWifiStatus()
+  await loadWifiStatus(true)
 }
 
 async function deleteKnownWifi(row) {
@@ -104,31 +104,31 @@ async function doWifiConnect() {
   if (!wifiForm.value.ssid) return ElMessage.warning('请填写 WiFi SSID')
   await call(() => commandsApi.wifiConnect(props.deviceUuid, wifiForm.value.ssid, wifiForm.value.password || ''),
              `连接 ${wifiForm.value.ssid}`)
-  await loadWifiStatus()
+  await loadWifiStatus(true)
 }
 
-async function loadBleInfo() {
-  bleInfoData.value = await call(() => commandsApi.bleInfo(props.deviceUuid), 'BLE 信息')
+async function loadBleInfo(silent = true) {
+  bleInfoData.value = await call(() => commandsApi.bleInfo(props.deviceUuid), 'BLE 信息', { silent })
 }
 
-async function loadBonds() {
-  const r = await call(() => commandsApi.bleBonds(props.deviceUuid), 'BLE 配对列表')
+async function loadBonds(silent = true) {
+  const r = await call(() => commandsApi.bleBonds(props.deviceUuid), 'BLE 配对列表', { silent })
   bleBonds.value = r?.bonds || (Array.isArray(r) ? r : [])
 }
 
 async function doUnpair(b) {
   await call(() => commandsApi.bleUnpair(props.deviceUuid, b.addr_type, b.addr), '取消配对')
-  await loadBonds()
+  await loadBonds(false)
 }
 
 async function doSwitch(b) {
   await call(() => commandsApi.bleSwitch(props.deviceUuid, b.addr_type, b.addr), '切换主机')
-  await loadBleInfo()
+  await loadBleInfo(true)
 }
 
 async function doDisconnect() {
   await call(() => commandsApi.bleDisconnect(props.deviceUuid), 'BLE 断开')
-  await loadBleInfo()
+  await loadBleInfo(true)
 }
 
 async function doUnpairAll() {
@@ -136,12 +136,12 @@ async function doUnpairAll() {
     await ElMessageBox.confirm('确定清除当前设备上的所有 BLE 配对记录？', '危险操作', { type: 'warning' })
   } catch { return }
   await call(() => commandsApi.bleUnpairAll(props.deviceUuid), '清除全部配对')
-  await loadBonds()
+  await loadBonds(false)
 }
 
 async function doScan() {
-  if (!bleInfoData.value) await loadBleInfo()
-  if (!bleBonds.value.length) await loadBonds()
+  if (!bleInfoData.value) await loadBleInfo(true)
+  if (!bleBonds.value.length) await loadBonds(true)
   const r = await call(() => commandsApi.bleScan(props.deviceUuid, 4000), 'BLE 扫描周边')
   const list = r?.devices || (Array.isArray(r) ? r : [])
   const curPeer = String(bleInfoData.value?.peer || '').toUpperCase()
@@ -155,13 +155,13 @@ async function doScan() {
   })
 }
 
-async function loadTransport() {
-  transportData.value = await call(() => commandsApi.transportGet(props.deviceUuid), '查询传输配置')
+async function loadTransport(silent = true) {
+  transportData.value = await call(() => commandsApi.transportGet(props.deviceUuid), '查询传输配置', { silent })
 }
 
 async function setTransport(mode) {
   await call(() => commandsApi.transportSet(props.deviceUuid, mode), `设置传输模式为 ${mode}`)
-  await loadTransport()
+  await loadTransport(false)
 }
 
 async function loadSlots() {
@@ -253,12 +253,20 @@ watch(() => props.modelValue, (v) => {
           </div>
         </div>
 
-        <button class="reboot-pill-btn" @click="doReboot" title="软重启硬件设备">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/>
-          </svg>
-          重启硬件
-        </button>
+        <div class="drawer-header-actions">
+          <button class="reboot-pill-btn" @click="doReboot" title="软重启硬件设备">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/>
+            </svg>
+            重启硬件
+          </button>
+          <button class="drawer-close-btn" @click="close" title="关闭抽屉">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </template>
 
@@ -568,7 +576,7 @@ watch(() => props.modelValue, (v) => {
 .device-control-drawer :deep(.el-drawer__header) {
   margin-bottom: 0;
   padding: 18px 24px;
-  background: var(--color-bg-sidebar);
+  background: var(--color-bg-card);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -595,8 +603,8 @@ watch(() => props.modelValue, (v) => {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -626,9 +634,9 @@ watch(() => props.modelValue, (v) => {
   gap: 6px;
   padding: 6px 14px;
   border-radius: var(--radius-pill);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #f87171;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -640,8 +648,39 @@ watch(() => props.modelValue, (v) => {
   height: 14px;
 }
 
+.drawer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drawer-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-base);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.drawer-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.drawer-close-btn:hover {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
 .reboot-pill-btn:hover {
-  background: rgba(239, 68, 68, 0.2);
+  background: #fca5a5;
   transform: translateY(-1px);
 }
 
@@ -715,12 +754,12 @@ watch(() => props.modelValue, (v) => {
   color: var(--color-text-primary);
 }
 
-.text-primary { color: #38bdf8; }
-.text-purple { color: #c084fc; }
-.text-cyan { color: #22d3ee; }
-.text-success { color: #4ade80; }
-.text-danger { color: #f87171; }
-.text-muted { color: #94a3b8; }
+.text-primary { color: #2563eb; }
+.text-purple { color: #7c3aed; }
+.text-cyan { color: #0891b2; }
+.text-success { color: #16a34a; }
+.text-danger { color: #dc2626; }
+.text-muted { color: #64748b; }
 .bold { font-weight: 600; }
 
 /* Section Boxes */
@@ -735,8 +774,8 @@ watch(() => props.modelValue, (v) => {
 }
 
 .highlight-box {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(139, 92, 246, 0.04));
-  border-color: rgba(59, 130, 246, 0.2);
+  background: #f8fafc;
+  border-color: #cbd5e1;
 }
 
 .box-header-row {
@@ -787,31 +826,39 @@ watch(() => props.modelValue, (v) => {
 }
 
 .badge-green {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
 }
 
 .badge-blue {
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
 }
 
 .badge-gray {
-  background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
 }
 
 .mac-code {
   font-family: monospace;
   font-size: 12px;
-  color: #38bdf8;
+  color: #0369a1;
+  background: #f0f9ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #bae6fd;
 }
 
 .slot-badge {
   font-size: 11px;
   font-weight: 700;
-  color: #c084fc;
-  background: rgba(192, 132, 252, 0.15);
+  color: #7e22ce;
+  background: #f3e8ff;
+  border: 1px solid #e9d5ff;
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -848,8 +895,8 @@ watch(() => props.modelValue, (v) => {
 
 .transport-mode-card.active {
   border-color: var(--color-primary);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.1));
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.2);
+  background: #eff6ff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12);
 }
 
 .tm-title {
@@ -876,8 +923,9 @@ watch(() => props.modelValue, (v) => {
   margin: 0;
   max-height: 480px;
   overflow-y: auto;
-  background: rgba(15, 23, 42, 0.85);
-  color: #94a3b8;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
   padding: 12px;
   border-radius: var(--radius-sm);
   font-family: monospace;

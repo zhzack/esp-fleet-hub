@@ -176,6 +176,7 @@ async def deliver_to_device(
                 }
             last_error = (err_code or "E000", err_message or "failed")
             logger.warning(f"[dispatcher] device returned non-ok: {last_error}")
+            break
         except asyncio.TimeoutError:
             last_error = ("E006", f"ack timeout (attempt {attempt + 1})")
             logger.warning(f"[dispatcher] {last_error[1]} msg_id={msg_id}")

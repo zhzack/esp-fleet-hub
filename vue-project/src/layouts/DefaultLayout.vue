@@ -311,17 +311,18 @@ onBeforeUnmount(() => {
   line-height: 46px;
   border-radius: 10px;
   margin-bottom: 4px;
-  color: #94a3b8;
+  color: #cbd5e1;
+  font-weight: 500;
   transition: all 0.2s ease;
 }
 
 .aside-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.05);
-  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
 }
 
 .aside-menu :deep(.el-menu-item.is-active) {
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.22) 0%, rgba(59, 130, 246, 0.05) 100%);
+  background: rgba(37, 99, 235, 0.22);
   color: #38bdf8;
   font-weight: 600;
   box-shadow: inset 3px 0 0 #38bdf8;
@@ -334,16 +335,16 @@ onBeforeUnmount(() => {
 
 .aside-footer {
   padding: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .collapse-btn {
   width: 100%;
   height: 38px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  color: #94a3b8;
+  color: #cbd5e1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -353,7 +354,7 @@ onBeforeUnmount(() => {
 }
 
 .collapse-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
 }
 
@@ -365,22 +366,20 @@ onBeforeUnmount(() => {
 }
 
 .app-header {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
 }
 
 .page-title {
   margin: 0;
   font-size: 17px;
-  font-weight: 600;
-  color: #0f172a;
+  font-weight: 700;
+  color: var(--color-text-primary);
   letter-spacing: -0.2px;
 }
 
@@ -395,12 +394,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: #f1f5f9;
+  background: #f8fafc;
   border-radius: 9999px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border);
   font-size: 12px;
-  font-weight: 500;
-  color: #475569;
+  font-weight: 600;
+  color: var(--color-text-secondary);
 }
 
 .header-action-btn {
@@ -422,7 +421,7 @@ onBeforeUnmount(() => {
 }
 
 .user-avatar {
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
   color: #ffffff;
 }
 
@@ -435,12 +434,12 @@ onBeforeUnmount(() => {
 .user-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--color-text-primary);
 }
 
 .user-role {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--color-text-muted);
 }
 
 /* Main Content Area */
