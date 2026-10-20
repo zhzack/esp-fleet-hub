@@ -19,7 +19,7 @@ Client (Web UI / REST / WS) ──> Gateway Server (FastAPI) ──> ESP32-S3 �
     - **Login & Register**: Modern frosted cards, smooth tab switching, password strength meter, remember-me.
     - **Dashboard**: Live KPI metrics (total devices, active hardware, success rates, latency gauge) and recent log stream.
     - **Device Management**: Dual grid/table view toggle, search & status filter tabs, hardware specs, one-click slide-out control drawer (WiFi scanning/connect, BLE host pairing & slot binding, USB/BLE transport switching).
-    - **Real-Time Hardware Console**: Tactile mechanical keycaps matrix (Navigation, Modifiers, Shortcuts, Alpha keys), text stream injection with presets, BLE target host switcher, and live ACK terminal.
+    - **Real-Time Hardware Console**: Tactile mechanical keycaps matrix (Navigation, Modifiers, Shortcuts, Alpha keys), text stream injection with presets, unified USB/BLE output-target switcher, multi-device concurrent dispatch, live ACK terminal, and a Pointer Lock mouse & keyboard takeover mode that streams real mouse movement, clicks, drags, scrolling and keystrokes to the target host (drag & arbitrary key combos require the updated firmware).
     - **Device Grouping & Batch Dispatch**: Cluster devices into groups with predefined action presets and latency comparison reports.
     - **Macro Pipeline Builder**: Visual drag-and-drop workflow builder with color-coded nodes (keyboard, mouse, delay, text) and live JSON schema preview.
     - **Action Log Center**: Multi-parameter filter toolbar (status, action type, limit), color-coded latency speed indicators, 3s auto-refresh, and audit inspection drawer.

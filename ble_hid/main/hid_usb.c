@@ -101,6 +101,7 @@ static const uint8_t CFG_DESC[] = {
 
 static volatile bool s_mounted = false;
 static char          s_dev_name[32];
+static uint8_t       s_mouse_buttons = 0;
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) { (void)instance; return REPORT_DESC; }
 
@@ -113,7 +114,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
 { (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)bufsize; }
 
 void tud_mount_cb  (void) { s_mounted = true;  ESP_LOGI(TAG, "USB mounted"); }
-void tud_umount_cb (void) { s_mounted = false; ESP_LOGW(TAG, "USB unmounted"); }
+void tud_umount_cb (void) { s_mounted = false; s_mouse_buttons = 0; ESP_LOGW(TAG, "USB unmounted"); }
 void tud_suspend_cb(bool remote_wakeup_en) { (void)remote_wakeup_en; s_mounted = false; }
 void tud_resume_cb (void)                  { s_mounted = true; }
 
@@ -138,19 +139,31 @@ void hid_usb_up  (uint8_t code, uint8_t mods) { (void)code; (void)mods; send_kbd
 void hid_usb_mouse_move(int8_t dx, int8_t dy)
 {
     if (!s_mounted) return;
-    tud_hid_mouse_report(RID_MOUSE, 0, dx, dy, 0, 0);
+    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, dx, dy, 0, 0);
+}
+void hid_usb_mouse_down(uint8_t button)
+{
+    if (!s_mounted) return;
+    s_mouse_buttons |= (uint8_t)(button & 0x07);
+    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, 0, 0);
+}
+void hid_usb_mouse_up(uint8_t button)
+{
+    if (!s_mounted) return;
+    s_mouse_buttons &= (uint8_t)~(button & 0x07);
+    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, 0, 0);
 }
 void hid_usb_mouse_click(uint8_t button)
 {
     if (!s_mounted) return;
-    tud_hid_mouse_report(RID_MOUSE, button, 0, 0, 0, 0);
+    hid_usb_mouse_down(button);
     vTaskDelay(pdMS_TO_TICKS(8));
-    tud_hid_mouse_report(RID_MOUSE, 0, 0, 0, 0, 0);
+    hid_usb_mouse_up(button);
 }
 void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal)
 {
     if (!s_mounted) return;
-    tud_hid_mouse_report(RID_MOUSE, 0, 0, 0, vertical, horizontal);
+    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, vertical, horizontal);
 }
 
 esp_err_t hid_usb_init(const char *device_name)
@@ -201,8 +214,10 @@ bool      hid_usb_mounted(void)                 { return false; }
 void      hid_usb_tap (uint8_t c, uint8_t m)    { (void)c; (void)m; }
 void      hid_usb_down(uint8_t c, uint8_t m)    { (void)c; (void)m; }
 void      hid_usb_up  (uint8_t c, uint8_t m)    { (void)c; (void)m; }
-void      hid_usb_mouse_move (int8_t x, int8_t y) { (void)x; (void)y; }
-void      hid_usb_mouse_click(uint8_t b)          { (void)b; }
-void      hid_usb_mouse_scroll(int8_t v, int8_t h) { (void)v; (void)h; }
+void hid_usb_mouse_move (int8_t x, int8_t y) { (void)x; (void)y; }
+void hid_usb_mouse_click(uint8_t b)          { (void)b; }
+void hid_usb_mouse_scroll(int8_t v, int8_t h) { (void)v; (void)h; }
+void hid_usb_mouse_down (uint8_t b)          { (void)b; }
+void hid_usb_mouse_up   (uint8_t b)          { (void)b; }
 
 #endif

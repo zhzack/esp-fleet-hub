@@ -43,6 +43,7 @@ static volatile bool s_adv_fields_ready = false;
 
 static uint8_t s_keyboard_report[8];
 static uint8_t s_mouse_report[5];
+static uint8_t s_mouse_buttons = 0;
 
 #define HID_REPORT_ID_KEYBOARD 1
 #define HID_REPORT_ID_MOUSE 2
@@ -285,6 +286,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_mouse_buttons = 0;
         s_advertising = false;
         schedule_advertising_retry(150);
         break;
@@ -474,10 +476,36 @@ void hid_ble_mouse_move(int8_t dx, int8_t dy)
     if (dx == 0 && dy == 0) return;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_mouse_report(0, dx, dy, 0, 0);
+    set_mouse_report(s_mouse_buttons, dx, dy, 0, 0);
     notify_input_report(s_mouse_input_report_handle, s_mouse_report,
                         sizeof(s_mouse_report));
     clear_mouse_report();
+    xSemaphoreGive(s_lock);
+}
+
+void hid_ble_mouse_down(uint8_t button)
+{
+    button &= 0x07;
+    if (button == 0) return;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_mouse_buttons |= button;
+    set_mouse_report(s_mouse_buttons, 0, 0, 0, 0);
+    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
+                        sizeof(s_mouse_report));
+    xSemaphoreGive(s_lock);
+}
+
+void hid_ble_mouse_up(uint8_t button)
+{
+    button &= 0x07;
+    if (button == 0) return;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_mouse_buttons &= (uint8_t)~button;
+    set_mouse_report(s_mouse_buttons, 0, 0, 0, 0);
+    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
+                        sizeof(s_mouse_report));
     xSemaphoreGive(s_lock);
 }
 
@@ -485,15 +513,9 @@ void hid_ble_mouse_click(uint8_t button)
 {
     if ((button & 0x07) == 0) return;
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_mouse_report(button, 0, 0, 0, 0);
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
+    hid_ble_mouse_down(button);
     vTaskDelay(pdMS_TO_TICKS(8));
-    clear_mouse_report();
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
-    xSemaphoreGive(s_lock);
+    hid_ble_mouse_up(button);
 }
 
 void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal)
@@ -501,7 +523,7 @@ void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal)
     if (vertical == 0 && horizontal == 0) return;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_mouse_report(0, 0, 0, vertical, horizontal);
+    set_mouse_report(s_mouse_buttons, 0, 0, vertical, horizontal);
     notify_input_report(s_mouse_input_report_handle, s_mouse_report,
                         sizeof(s_mouse_report));
     clear_mouse_report();

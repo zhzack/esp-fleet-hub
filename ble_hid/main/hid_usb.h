@@ -25,6 +25,10 @@ void hid_usb_up  (uint8_t keycode, uint8_t modifiers);
 void hid_usb_mouse_move (int8_t dx, int8_t dy);
 void hid_usb_mouse_click(uint8_t button);
 void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal);
+/* Press / release a mouse button (bitmask). While held, move/scroll reports
+ * keep the button bits set so the host sees a proper drag. */
+void hid_usb_mouse_down (uint8_t button);
+void hid_usb_mouse_up   (uint8_t button);
 
 #ifdef __cplusplus
 }

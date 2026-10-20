@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 
 #include "app_config.h"
 #include "executor.h"
@@ -339,16 +340,45 @@ static int h_transport_get(const cJSON *p, cJSON *r, char *err, int errlen)
     return 0;
 }
 
+/* ---------- transport persistence ---------- */
+
+/* transport.set 仅改 RAM 的话，重启 / OTA 后会退回编译期默认，导致
+ * "USB 用着用着变回 BLE"的失联体验。这里把显式选择落到 NVS("app" 命名空间，
+ * 键 transport_mode)，开机时在 cmd_router_init 恢复。 */
+static void persist_transport(uint8_t mode)
+{
+    nvs_handle_t h;
+    if (nvs_open("app", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "transport_mode", mode);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void restore_transport(void)
+{
+    nvs_handle_t h;
+    uint8_t mode = EXECUTOR_DEFAULT_TRANSPORT_MODE;
+    if (nvs_open("app", NVS_READONLY, &h) != ESP_OK) return;
+    esp_err_t err = nvs_get_u8(h, "transport_mode", &mode);
+    nvs_close(h);
+    if (err != ESP_OK) return; /* 从未显式设置过 — 保持编译期默认 */
+    if (mode > (uint8_t)EXECUTOR_TRANSPORT_USB) return;
+    executor_set_transport((executor_transport_t)mode);
+}
+
 static int h_transport_set(const cJSON *p, cJSON *r, char *err, int errlen)
 {
     (void)r;
     const cJSON *jm = cJSON_GetObjectItem(p, "mode");
     if (!cJSON_IsString(jm)) { snprintf(err, errlen, "mode missing"); return 400; }
     const char *m = jm->valuestring;
-    if      (!strcmp(m, "ble"))  executor_set_transport(EXECUTOR_TRANSPORT_BLE);
-    else if (!strcmp(m, "usb"))  executor_set_transport(EXECUTOR_TRANSPORT_USB);
-    else if (!strcmp(m, "auto")) executor_set_transport(EXECUTOR_TRANSPORT_AUTO);
+    executor_transport_t t;
+    if      (!strcmp(m, "ble"))  t = EXECUTOR_TRANSPORT_BLE;
+    else if (!strcmp(m, "usb"))  t = EXECUTOR_TRANSPORT_USB;
+    else if (!strcmp(m, "auto")) t = EXECUTOR_TRANSPORT_AUTO;
     else { snprintf(err, errlen, "bad mode (ble|usb|auto)"); return 400; }
+    executor_set_transport(t);
+    persist_transport((uint8_t)t);
     return 0;
 }
 
@@ -415,6 +445,7 @@ static int h_ota_status(const cJSON *p, cJSON *r, char *err, int errlen)
 
 void cmd_router_init(void)
 {
+    restore_transport();
     cmd_router_register("get_status",     h_get_status);
     cmd_router_register("wifi.status",    h_wifi_status);
     cmd_router_register("wifi.scan",      h_wifi_scan);

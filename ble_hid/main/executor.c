@@ -72,6 +72,18 @@ static void hid_mouse_click(uint8_t button)
     else                                                       hid_ble_mouse_click(button);
 }
 
+static void hid_mouse_down(uint8_t button)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_down(button);
+    else                                                       hid_ble_mouse_down(button);
+}
+
+static void hid_mouse_up(uint8_t button)
+{
+    if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_up(button);
+    else                                                       hid_ble_mouse_up(button);
+}
+
 static void hid_mouse_scroll(int8_t vertical, int8_t horizontal)
 {
     if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) hid_usb_mouse_scroll(vertical, horizontal);
@@ -176,6 +188,8 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
             strcpy(err_msg, "unknown key");
             return false;
         }
+        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
+        if (cJSON_IsNumber(jm)) mods |= (uint8_t)(jm->valueint & 0xFF);
         if (!opts.debug_no_hid) hid_down(code, mods);
         return true;
     }
@@ -187,6 +201,8 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
             strcpy(err_msg, "unknown key");
             return false;
         }
+        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
+        if (cJSON_IsNumber(jm)) mods |= (uint8_t)(jm->valueint & 0xFF);
         if (!opts.debug_no_hid) hid_up(code, mods);
         return true;
     }
@@ -234,6 +250,20 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
         const cJSON *jb = cJSON_GetObjectItem(step, "button");
         int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
         if (!opts.debug_no_hid) hid_mouse_click((uint8_t)b);
+        return true;
+    }
+
+    if (!strcmp(type, "mouse_down")) {
+        const cJSON *jb = cJSON_GetObjectItem(step, "button");
+        int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
+        if (!opts.debug_no_hid) hid_mouse_down((uint8_t)b);
+        return true;
+    }
+
+    if (!strcmp(type, "mouse_up")) {
+        const cJSON *jb = cJSON_GetObjectItem(step, "button");
+        int b = cJSON_IsNumber(jb) ? jb->valueint : 1;
+        if (!opts.debug_no_hid) hid_mouse_up((uint8_t)b);
         return true;
     }
 

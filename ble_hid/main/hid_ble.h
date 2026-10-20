@@ -31,6 +31,11 @@ void hid_ble_mouse_click(uint8_t button);
 /** Relative wheel / pan scroll deltas. */
 void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal);
 
+/** Press / release a mouse button bitmask (1=left, 2=right, 4=middle).
+ *  While held, subsequent move/scroll reports keep the button bits set. */
+void hid_ble_mouse_down(uint8_t button);
+void hid_ble_mouse_up  (uint8_t button);
+
 /* ---------- multi-host management (PR4) ---------- */
 
 typedef struct {

@@ -20,10 +20,12 @@ typedef enum {
 /* Build-time default transport selection.
  * 0 = AUTO, 1 = BLE, 2 = USB
  * Change this macro or override it from compiler flags when you want a
- * different startup transport. The current default is BLE.
+ * different startup transport. The current default is AUTO (prefer USB when
+ * mounted, else BLE); an explicit transport.set is persisted to NVS by
+ * cmd_router and restored on boot.
  */
 #ifndef EXECUTOR_DEFAULT_TRANSPORT_MODE
-#define EXECUTOR_DEFAULT_TRANSPORT_MODE 1
+#define EXECUTOR_DEFAULT_TRANSPORT_MODE 0
 #endif
 
 void                executor_set_transport(executor_transport_t t);

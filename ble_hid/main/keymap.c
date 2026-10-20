@@ -38,6 +38,20 @@ static const struct {
     {"KEY_F1", 0x3A, 0}, {"KEY_F2", 0x3B, 0}, {"KEY_F3", 0x3C, 0}, {"KEY_F4", 0x3D, 0},
     {"KEY_F5", 0x3E, 0}, {"KEY_F6", 0x3F, 0}, {"KEY_F7", 0x40, 0}, {"KEY_F8", 0x41, 0},
     {"KEY_F9", 0x42, 0}, {"KEY_F10",0x43, 0}, {"KEY_F11",0x44, 0}, {"KEY_F12",0x45, 0},
+    /* Punctuation (US layout) */
+    {"KEY_LBRACKET",  0x2F, 0}, {"KEY_RBRACKET", 0x30, 0}, {"KEY_BACKSLASH", 0x31, 0},
+    {"KEY_SEMICOLON", 0x33, 0}, {"KEY_QUOTE",    0x34, 0}, {"KEY_BACKQUOTE", 0x35, 0},
+    {"KEY_COMMA",     0x36, 0}, {"KEY_DOT",      0x37, 0}, {"KEY_SLASH",     0x38, 0},
+    /* Editing keys */
+    {"KEY_CAPSLOCK", 0x39, 0},
+    {"KEY_INSERT",   0x49, 0}, {"KEY_HOME",     0x4A, 0}, {"KEY_PAGEUP",   0x4B, 0},
+    {"KEY_DELETE",   0x4C, 0}, {"KEY_END",      0x4D, 0}, {"KEY_PAGEDOWN", 0x4E, 0},
+    /* Modifiers — code 0 with the modifier bit set (pure modifier report).
+     * Right-side variants map onto the left bits; hosts rarely distinguish. */
+    {"KEY_LEFTCTRL",   0x00, MOD_LCTRL},  {"KEY_LEFTSHIFT", 0x00, MOD_LSHIFT},
+    {"KEY_LEFTALT",    0x00, MOD_LALT},   {"KEY_LEFTGUI",   0x00, MOD_LGUI},
+    {"KEY_RIGHTCTRL",  0x00, MOD_LCTRL},  {"KEY_RIGHTSHIFT",0x00, MOD_LSHIFT},
+    {"KEY_RIGHTALT",   0x00, MOD_LALT},   {"KEY_RIGHTGUI",  0x00, MOD_LGUI},
     /* Combos (common) */
     {"KEY_CTRL_C",     0x06, MOD_LCTRL},
     {"KEY_CTRL_V",     0x19, MOD_LCTRL},

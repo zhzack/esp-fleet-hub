@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
 import TrackpadPanel from '@/components/TrackpadPanel.vue'
+import MouseTakeoverPanel from '@/components/MouseTakeoverPanel.vue'
 import { actionsApi } from '@/api/actions'
 import { commandsApi } from '@/api/commands'
 import { devicesApi } from '@/api/devices'
@@ -15,7 +16,7 @@ import { devicesApi } from '@/api/devices'
 const router = useRouter()
 const devices = ref([])
 const online = ref([])
-const selected = ref('')
+const selected = ref([]) // 多选：同时下发控制指令的设备 uuid 列表
 const text = ref('')
 const sending = ref(false)
 const lastResult = ref(null)
@@ -25,6 +26,9 @@ const currentPeer = ref('')
 const targetPeer = ref('')
 const bleConnected = ref(false)
 const bleLoading = ref(false)
+const transportMode = ref('') // 当前输出通道: 'ble' | 'usb' | 'auto' | ''
+const activeTransport = ref('') // auto 模式下实际生效的通道: 'usb' | 'ble'
+const usbConnected = ref(false) // USB 线缆是否已枚举到主机
 
 // Categorized keyboard key groups
 const NAV_KEYS = [
@@ -85,13 +89,45 @@ function addrToBytes(value) {
   return value.split(':').map((item) => parseInt(item, 16))
 }
 
-const selectedDevice = computed(() => devices.value.find((item) => item.device_uuid === selected.value) || null)
-const isSelectedOnline = computed(() => !!selected.value && online.value.includes(selected.value))
+// 仅当选中恰好 1 台设备时才有"唯一目标"概念（触控板/输出目标卡片依赖）
+const soleSelected = computed(() => (selected.value.length === 1 ? selected.value[0] : ''))
+const selectedDevice = computed(() => devices.value.find((item) => item.device_uuid === soleSelected.value) || null)
+const isSelectedOnline = computed(() => selected.value.some((uuid) => online.value.includes(uuid)))
+const isSoleOnline = computed(() => !!soleSelected.value && online.value.includes(soleSelected.value))
+
+const USB_TARGET = '__usb__' // 输出目标下拉中 USB 主机选项的哨兵值
+
+const targetOptions = computed(() => [
+  {
+    value: USB_TARGET,
+    label: `🔌 USB 主机（线缆直连）${usbConnected.value ? ' ● 已连接' : ' ○ 未连接'}`,
+  },
+  ...bonds.value.map((item) => ({
+    value: item.addrStr,
+    label: `📡 ${item.name || item.addrStr}${item.addrStr === currentPeer.value ? '（当前主机）' : ''}`,
+  })),
+])
+
+const transportLabel = computed(() => {
+  if (transportMode.value === 'usb') return `USB${usbConnected.value ? ' · 已挂载' : ' · 未连接'}`
+  if (transportMode.value === 'ble') return currentPeer.value ? `BLE · ${currentPeer.value}` : 'BLE · 无活跃连接'
+  if (transportMode.value === 'auto') {
+    if (activeTransport.value === 'usb') return `auto · 当前走 USB${usbConnected.value ? '' : '（未连接）'}`
+    return `auto · 当前走 ${currentPeer.value || 'BLE'}`
+  }
+  return '未知'
+})
+
+const isCurrentTarget = computed(() => {
+  if (!targetPeer.value) return false
+  if (targetPeer.value === USB_TARGET) return transportMode.value === 'usb'
+  return targetPeer.value === currentPeer.value && transportMode.value === 'ble'
+})
 
 async function load() {
   devices.value = await devicesApi.list()
   online.value = (await devicesApi.online()).online
-  if (!selected.value && online.value.length) selected.value = online.value[0]
+  if (!selected.value.length && online.value.length) selected.value = [online.value[0]]
 }
 
 async function silentRefresh() {
@@ -115,64 +151,99 @@ onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
 })
 
-async function loadBleTarget() {
-  if (!selected.value || !isSelectedOnline.value) {
+async function loadTarget() {
+  if (!soleSelected.value || !isSoleOnline.value) {
     bonds.value = []
     currentPeer.value = ''
     targetPeer.value = ''
     bleConnected.value = false
+    transportMode.value = ''
+    activeTransport.value = ''
+    usbConnected.value = false
     return
   }
 
   bleLoading.value = true
   try {
-    const info = extractCommandResult(await commandsApi.bleInfo(selected.value)) || {}
-    bleConnected.value = !!info.connected
-    currentPeer.value = fmtAddr(info.peer?.addr || info.peer || info.current?.addr)
+    const uuid = soleSelected.value
+    // 四路信息并行拉取；单路失败（如固件不支持 usb.info）不阻塞其余
+    const [info, bondResult, transport, usb] = await Promise.all([
+      commandsApi.bleInfo(uuid).catch(() => null),
+      commandsApi.bleBonds(uuid).catch(() => null),
+      commandsApi.transportGet(uuid).catch(() => null),
+      commandsApi.usbInfo(uuid).catch(() => null),
+    ])
 
-    const bondResult = extractCommandResult(await commandsApi.bleBonds(selected.value)) || {}
-    bonds.value = (bondResult.bonds || []).map((item) => ({
+    const infoData = extractCommandResult(info) || {}
+    const bondData = extractCommandResult(bondResult) || {}
+    const transportData = extractCommandResult(transport) || {}
+    const usbData = extractCommandResult(usb) || {}
+
+    transportMode.value = String(transportData.mode || transportData.transport || '')
+    activeTransport.value = String(transportData.active || '')
+    // 固件 usb.info 返回 {mounted}; transport.get 返回 {usb_mounted} —— 两者皆可判定
+    usbConnected.value = !!(usbData.mounted ?? usbData.connected ?? transportData.usb_mounted)
+    bleConnected.value = !!infoData.connected
+    currentPeer.value = fmtAddr(infoData.peer?.addr || infoData.peer || infoData.current?.addr)
+
+    bonds.value = (bondData.bonds || []).map((item) => ({
       ...item,
       addrStr: fmtAddr(item.addr),
     }))
-    targetPeer.value = currentPeer.value || bonds.value[0]?.addrStr || ''
+    // 默认选中当前活跃的输出目标
+    targetPeer.value =
+      transportMode.value === 'usb'
+        ? USB_TARGET
+        : currentPeer.value || bonds.value[0]?.addrStr || ''
   } catch {
     bonds.value = []
     currentPeer.value = ''
     targetPeer.value = ''
     bleConnected.value = false
+    transportMode.value = ''
+    usbConnected.value = false
   } finally {
     bleLoading.value = false
   }
 }
 
-watch(selected, loadBleTarget)
+watch(soleSelected, loadTarget)
 
 async function switchTarget() {
-  if (!targetPeer.value || targetPeer.value === currentPeer.value) return
-  const target = bonds.value.find((item) => item.addrStr === targetPeer.value)
-  if (!target) return ElMessage.warning('目标配对主机未找到')
+  const uuid = soleSelected.value
+  if (!uuid || !targetPeer.value || isCurrentTarget.value) return
 
   bleLoading.value = true
   try {
-    const response = await commandsApi.bleSwitch(selected.value, target.addr_type ?? 0, addrToBytes(targetPeer.value))
-    if (response?.status === 'acked' || response?.status === 'ok') {
-      ElMessage.success(`已切换至主机 ${targetPeer.value}`)
-      await loadBleTarget()
+    if (targetPeer.value === USB_TARGET) {
+      // USB 主机 = 线缆所连的唯一机器，"切换"即切换输出通道
+      await commandsApi.transportSet(uuid, 'usb')
+      ElMessage.success('输出通道已切换至 USB 主机')
     } else {
-      ElMessage.warning(`切换失败: ${response?.error_message || '未知错误'}`)
+      const target = bonds.value.find((item) => item.addrStr === targetPeer.value)
+      if (!target) return ElMessage.warning('目标配对主机未找到')
+      if (transportMode.value && transportMode.value !== 'ble' && transportMode.value !== 'auto') {
+        await commandsApi.transportSet(uuid, 'ble')
+      }
+      const response = await commandsApi.bleSwitch(uuid, target.addr_type ?? 0, addrToBytes(targetPeer.value))
+      if (response?.status === 'acked' || response?.status === 'ok') {
+        ElMessage.success(`已切换至主机 ${target.name || targetPeer.value}`)
+      } else {
+        ElMessage.warning(`切换失败: ${response?.error_message || '未知错误'}`)
+      }
     }
+    await loadTarget()
   } finally {
     bleLoading.value = false
   }
 }
 
 async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
-  if (!selected.value) return ElMessage.warning('请先选择控制目标设备')
+  if (!selected.value.length) return ElMessage.warning('请先选择控制目标设备')
   sending.value = true
   try {
     const response = await actionsApi.send({
-      device_id: selected.value,
+      target_devices: selected.value, // 多设备并发下发，后端 gather 聚合 results
       payload: {
         ...payload,
         need_ack: true,
@@ -185,11 +256,21 @@ async function send(payload, { successText = '', timeoutMs = 3000 } = {}) {
       _type: payload.type,
       _key: payload.key || payload.content,
     }
-    const result = response.results?.[0]
-    if (result?.status === 'acked') {
-      if (successText) ElMessage.success(successText)
+    const results = response.results || []
+    if (results.length <= 1) {
+      const result = results[0]
+      if (result?.status === 'acked') {
+        if (successText) ElMessage.success(successText)
+      } else {
+        ElMessage.warning(`${result?.status || '执行异常'} ${result?.error_message || ''}`.trim())
+      }
     } else {
-      ElMessage.warning(`${result?.status || '执行异常'} ${result?.error_message || ''}`.trim())
+      const acked = results.filter((r) => r.status === 'acked').length
+      if (acked === results.length) {
+        if (successText) ElMessage.success(`${successText}（${acked} 台设备全部确认）`)
+      } else {
+        ElMessage.warning(`${acked}/${results.length} 台设备确认成功`)
+      }
     }
   } finally {
     sending.value = false
@@ -224,7 +305,7 @@ function onTrackpadResult(response) {
 function openTrackpadPage() {
   const route = router.resolve({
     path: '/trackpad',
-    query: selected.value ? { device: selected.value } : {},
+    query: soleSelected.value ? { device: soleSelected.value } : {},
   })
   window.open(route.href, '_blank', 'noopener')
 }
@@ -232,7 +313,7 @@ function openTrackpadPage() {
 function openPureTrackpadPage() {
   const route = router.resolve({
     path: '/trackpad-pure',
-    query: selected.value ? { device: selected.value } : {},
+    query: soleSelected.value ? { device: soleSelected.value } : {},
   })
   window.open(route.href, '_blank', 'noopener')
 }
@@ -240,7 +321,7 @@ function openPureTrackpadPage() {
 function openKioskTrackpadPage() {
   const route = router.resolve({
     path: '/trackpad-kiosk',
-    query: selected.value ? { device: selected.value } : {},
+    query: soleSelected.value ? { device: soleSelected.value } : {},
   })
   window.open(route.href, '_blank', 'noopener')
 }
@@ -267,7 +348,15 @@ function openKioskTrackpadPage() {
       <div class="header-actions">
         <div class="device-selector-wrapper">
           <span class="device-badge-indicator" :class="{ 'online': isSelectedOnline }"></span>
-          <el-select v-model="selected" placeholder="选择目标设备" filterable class="device-select-custom">
+          <el-select
+            v-model="selected"
+            placeholder="选择目标设备（可多选并发控制）"
+            filterable
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            class="device-select-custom"
+          >
             <el-option
               v-for="device in devices"
               :key="device.id"
@@ -293,15 +382,15 @@ function openKioskTrackpadPage() {
         </el-button>
 
         <div class="quick-touchpad-group">
-          <button class="action-pill-btn" :disabled="!selected" @click="openPureTrackpadPage" title="纯净手势触控板">
+          <button class="action-pill-btn" :disabled="!soleSelected" @click="openPureTrackpadPage" title="纯净手势触控板">
             <span class="pill-dot purple"></span>
             极简触控
           </button>
-          <button class="action-pill-btn" :disabled="!selected" @click="openKioskTrackpadPage" title="展厅全屏触控板">
+          <button class="action-pill-btn" :disabled="!soleSelected" @click="openKioskTrackpadPage" title="展厅全屏触控板">
             <span class="pill-dot cyan"></span>
             Kiosk 展厅
           </button>
-          <button class="action-pill-btn primary" :disabled="!selected" @click="openTrackpadPage" title="新标签打开全功能触控板">
+          <button class="action-pill-btn primary" :disabled="!soleSelected" @click="openTrackpadPage" title="新标签打开全功能触控板">
             <span class="pill-dot blue"></span>
             全屏触控
           </button>
@@ -313,51 +402,54 @@ function openKioskTrackpadPage() {
     <div class="console-body">
       <!-- Left Column: BLE Switcher, Hardware Status, Result Terminal -->
       <div class="console-col-side">
-        <!-- BLE Target Card -->
+        <!-- Unified Output Target Card (USB + BLE) -->
         <div class="console-card glass-panel" v-loading="bleLoading">
           <div class="card-header-bar">
             <div class="card-title-group">
               <svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11"/>
               </svg>
-              <span class="card-title-text">BLE 目标主机</span>
+              <span class="card-title-text">输出目标主机</span>
             </div>
-            <span class="ble-status-badge" :class="{ 'connected': bleConnected }">
-              {{ bleConnected ? '已连接目标' : '待机空闲' }}
+            <span class="ble-status-badge" :class="{ 'connected': bleConnected || (transportMode === 'usb' && usbConnected) }">
+              {{ bleConnected || (transportMode === 'usb' && usbConnected) ? '已连接目标' : '待机空闲' }}
             </span>
           </div>
 
           <div class="ble-peer-info">
-            <span class="peer-label">当前配对目标：</span>
-            <code class="peer-code">{{ currentPeer || '无活跃连接' }}</code>
+            <span class="peer-label">当前输出通道：</span>
+            <code class="peer-code">{{ transportLabel }}</code>
           </div>
 
           <div class="ble-selector-row">
             <el-select
               v-model="targetPeer"
-              placeholder="选择已配对主机槽位"
+              placeholder="选择输出目标主机"
               size="default"
               style="flex: 1"
-              :disabled="!bonds.length"
+              :disabled="!soleSelected"
             >
               <el-option
-                v-for="bond in bonds"
-                :key="bond.addrStr"
-                :label="bond.addrStr + (bond.addrStr === currentPeer ? ' (当前主机)' : '')"
-                :value="bond.addrStr"
+                v-for="opt in targetOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
               />
             </el-select>
             <el-button
               type="primary"
-              :disabled="!targetPeer || targetPeer === currentPeer"
+              :disabled="!targetPeer || isCurrentTarget"
               @click="switchTarget"
             >
               切换
             </el-button>
           </div>
 
-          <div v-if="!bonds.length && selected" class="card-empty-hint">
-            <span class="hint-icon">ℹ</span> 该设备当前尚未发现已绑定的蓝牙主机
+          <div v-if="!bonds.length && soleSelected" class="card-empty-hint">
+            <span class="hint-icon">ℹ</span> 该设备尚未发现蓝牙配对主机，可选择 USB 主机（线缆直连）作为输出目标
+          </div>
+          <div v-if="selected.length > 1" class="card-empty-hint">
+            <span class="hint-icon">ℹ</span> 已选中 {{ selected.length }} 台设备：输出目标仅对单选设备可配置，指令将同时下发至全部选中设备
           </div>
         </div>
 
@@ -385,15 +477,24 @@ function openKioskTrackpadPage() {
                 <span class="term-prompt">$</span>
                 <span class="term-type">{{ lastResult._type || 'action' }}</span>
                 <span v-if="lastResult._key" class="term-arg">[{{ lastResult._key }}]</span>
-                <span
-                  class="term-status-tag"
-                  :class="lastResult.results?.[0]?.status === 'acked' ? 'success' : 'failed'"
-                >
-                  {{ lastResult.results?.[0]?.status || 'UNKNOWN' }}
+                <span v-if="(lastResult.results || []).length > 1" class="term-arg">
+                  × {{ (lastResult.results || []).length }} 台设备
                 </span>
-                <span v-if="lastResult.results?.[0]?.exec_time_ms !== undefined" class="term-latency">
-                  {{ lastResult.results[0].exec_time_ms }} ms
+              </div>
+              <div
+                v-for="r in lastResult.results || []"
+                :key="r.msg_id"
+                class="term-line status-line"
+              >
+                <span class="term-prompt">›</span>
+                <span class="term-type">{{ r.device_id }}</span>
+                <span class="term-status-tag" :class="r.status === 'acked' ? 'success' : 'failed'">
+                  {{ r.status || 'UNKNOWN' }}
                 </span>
+                <span v-if="r.exec_time_ms != null" class="term-latency">
+                  {{ r.exec_time_ms }} ms
+                </span>
+                <span v-if="r.error_message" class="term-arg">{{ r.error_message }}</span>
               </div>
               <pre class="term-raw-json">{{ JSON.stringify(lastResult, null, 2) }}</pre>
             </div>
@@ -403,12 +504,12 @@ function openKioskTrackpadPage() {
 
       <!-- Right Column: Virtual Keyboard & Embedded Touchpad Surface -->
       <div class="console-col-main">
-        <!-- Top Status Alert if BLE disconnected -->
-        <div v-if="selected && !bleConnected" class="notice-banner">
+        <!-- Top Status Alert if no output target connected -->
+        <div v-if="soleSelected && !bleConnected && !usbConnected" class="notice-banner">
           <div class="banner-icon-circle">⚡</div>
           <div class="banner-text">
-            <strong>BLE 主机未连接：</strong>
-            键盘动作可通过有线 USB 传输直达，若需无线蓝牙控制，请确认设备已配对并处于目标主机蓝牙覆盖范围。
+            <strong>输出目标未就绪：</strong>
+            未检测到活跃的 BLE 连接或 USB 主机，输入动作可能无法送达目标机器。请在左侧选择输出目标，或检查线缆连接与蓝牙配对状态。
           </div>
         </div>
 
@@ -549,11 +650,18 @@ function openKioskTrackpadPage() {
         <!-- Embedded Touchpad Surface -->
         <div class="embedded-trackpad-wrap">
           <TrackpadPanel
-            :device-uuid="selected"
-            :device-online="isSelectedOnline"
+            :device-uuid="soleSelected"
+            :device-online="isSoleOnline"
             @result="onTrackpadResult"
           />
         </div>
+
+        <!-- Real mouse & keyboard takeover via Pointer Lock -->
+        <MouseTakeoverPanel
+          class="console-card glass-panel"
+          :device-uuid="soleSelected"
+          :device-online="isSoleOnline"
+        />
       </div>
     </div>
   </div>
