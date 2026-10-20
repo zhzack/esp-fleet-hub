@@ -20,7 +20,8 @@ WS_DEVICE = "ws://127.0.0.1:8000/ws/device"
 
 
 async def run():
-    async with httpx.AsyncClient(base_url=BASE, timeout=10) as cli:
+    # trust_env=False：绕过系统代理（如 Clash），本机直连
+    async with httpx.AsyncClient(base_url=BASE, timeout=10, trust_env=False) as cli:
         # 注册（已存在则忽略）
         r = await cli.post("/api/v1/auth/register", json={
             "username": "alice", "password": "secret123", "role": "user",

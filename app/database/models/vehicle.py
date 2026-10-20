@@ -13,4 +13,4 @@ class VehicleModel(Base):
     chip_platform = Column(String(50))
     wheel_size = Column(Integer)
     has_data_device = Column(Boolean)
-    current_status = Column(String(20))
+    current_status = Column(String(20), default="空闲")

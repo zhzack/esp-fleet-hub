@@ -50,7 +50,9 @@ def get_devices_in_group(db: Session, group_id: int) -> list[Device]:
 
 
 def add_devices_to_group(db: Session, group_id: int, device_ids: list[int]) -> None:
-    for device_id in device_ids:
+    # dict.fromkeys 保序去重：session 为 autoflush=False 时未提交的行对查询不可见，
+    # 单次请求里重复的 device_id 会在 commit 时撞 (group_id, device_id) 唯一约束
+    for device_id in dict.fromkeys(device_ids):
         existing = (
             db.query(DeviceGroupMember)
             .filter(
