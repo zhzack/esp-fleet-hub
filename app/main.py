@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -10,10 +11,25 @@ from app.api.ws import ws_router
 from app.core.config.config import settings
 from app.core.logger.logger import logger
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 兜底创建新增的 ORM 表（已有的旧表保留不动）。
+    # 生产建议改 alembic；开发期 create_all 足够。
+    from app.database.base import Base  # noqa: F401 — 拉齐所有 model
+    from app.database.session import engine
+    Base.metadata.create_all(bind=engine)
+    logger.info(
+        f"🚀 {settings.PROJECT_NAME} v{settings.VERSION} 启动"
+        f" | DB={settings.MYSQL_DB} | Queue={settings.QUEUE_BACKEND}"
+    )
+    yield
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     debug=settings.DEBUG,
+    lifespan=lifespan,
 )
 
 # CORS：显式白名单优先，同时在 debug 下放行常见局域网开发源
@@ -80,19 +96,6 @@ if FRONTEND_DIST.exists():
         return FileResponse(FRONTEND_DIST / "index.html")
 else:
     logger.warning(f"前端构建目录不存在，跳过挂载：{FRONTEND_DIST}")
-
-
-@app.on_event("startup")
-async def on_startup():
-    # 兜底创建新增的 ORM 表（已有的旧表保留不动）。
-    # 生产建议改 alembic；开发期 create_all 足够。
-    from app.database.base import Base  # noqa: F401 — 拉齐所有 model
-    from app.database.session import engine
-    Base.metadata.create_all(bind=engine)
-    logger.info(
-        f"🚀 {settings.PROJECT_NAME} v{settings.VERSION} 启动"
-        f" | DB={settings.MYSQL_DB} | Queue={settings.QUEUE_BACKEND}"
-    )
 
 
 if __name__ == "__main__":

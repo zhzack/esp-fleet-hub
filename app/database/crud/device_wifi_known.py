@@ -1,5 +1,5 @@
 """device_wifi_known CRUD。"""
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -40,7 +40,7 @@ def upsert(db: Session, device_id: int, ssid: str,
             ssid=ssid,
             password_enc=enc,
             label=label,
-            last_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.now(timezone.utc),
         )
         db.add(row)
     else:
@@ -48,7 +48,7 @@ def upsert(db: Session, device_id: int, ssid: str,
             row.password_enc = enc
         if label is not None:
             row.label = label
-        row.last_seen_at = datetime.utcnow()
+        row.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(row)
     return row

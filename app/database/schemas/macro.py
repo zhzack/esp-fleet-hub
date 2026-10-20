@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 MacroExecutionMode = Literal["network_debug", "ble_targeted"]
@@ -50,5 +50,4 @@ class MacroOut(BaseModel):
     content_json: Dict[str, Any]
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

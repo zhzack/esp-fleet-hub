@@ -4,7 +4,7 @@
 """
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -84,7 +84,7 @@ async def client_ws(websocket: WebSocket):
                                 "msg_id": str(uuid.uuid4()),
                                 "ref_msg_id": header.get("msg_id"),
                                 "type": "ack",
-                                "timestamp": int(datetime.utcnow().timestamp()),
+                                "timestamp": int(datetime.now(timezone.utc).timestamp()),
                             },
                             "payload": {"results": results},
                         }
@@ -114,7 +114,7 @@ def _err(ref_msg_id, code, message):
             "msg_id": str(uuid.uuid4()),
             "ref_msg_id": ref_msg_id,
             "type": "error",
-            "timestamp": int(datetime.utcnow().timestamp()),
+            "timestamp": int(datetime.now(timezone.utc).timestamp()),
         },
         "payload": {"code": code, "message": message},
     }

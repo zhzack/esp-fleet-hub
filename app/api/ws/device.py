@@ -5,7 +5,7 @@
 import asyncio
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
@@ -39,7 +39,7 @@ def _wrap_legacy(raw: dict) -> dict:
         "header": {
             "msg_id": raw.get("msg_id") or str(uuid.uuid4()),
             "type": msg_type,
-            "timestamp": int(datetime.utcnow().timestamp()),
+            "timestamp": int(datetime.now(timezone.utc).timestamp()),
             "source": "legacy",
         },
         "routing": {},
@@ -128,7 +128,7 @@ async def device_ws(websocket: WebSocket):
                             "msg_id": str(uuid.uuid4()),
                             "ref_msg_id": msg_id,
                             "type": "ack",
-                            "timestamp": int(datetime.utcnow().timestamp()),
+                            "timestamp": int(datetime.now(timezone.utc).timestamp()),
                         },
                         "payload": {"status": "ok", "server_session": session_id},
                     }
@@ -139,7 +139,7 @@ async def device_ws(websocket: WebSocket):
                 if device_uuid:
                     dev = crud_device.get_by_uuid(db, device_uuid)
                     if dev:
-                        dev.last_online_at = datetime.utcnow()
+                        dev.last_online_at = datetime.now(timezone.utc)
                         dev.status = "online"
                         db.commit()
                 # 不强制回复
@@ -156,7 +156,7 @@ async def device_ws(websocket: WebSocket):
                         dev = crud_device.get_by_uuid(db, device_uuid)
                         if dev:
                             dev.status = state
-                            dev.last_online_at = datetime.utcnow()
+                            dev.last_online_at = datetime.now(timezone.utc)
                             db.commit()
 
             elif mtype == "error":
@@ -211,7 +211,7 @@ def _error_env(ref_msg_id: str | None, code: str, message: str) -> dict:
             "msg_id": str(uuid.uuid4()),
             "ref_msg_id": ref_msg_id,
             "type": "error",
-            "timestamp": int(datetime.utcnow().timestamp()),
+            "timestamp": int(datetime.now(timezone.utc).timestamp()),
         },
         "payload": {"code": code, "message": message},
     }

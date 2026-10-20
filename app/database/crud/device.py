@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database.models.device import Device, DeviceConnection
 
 
@@ -52,7 +52,7 @@ def upsert_from_register(
             name=name or device_uuid,
             capabilities=capabilities or [],
             status="online",
-            last_online_at=datetime.utcnow(),
+            last_online_at=datetime.now(timezone.utc),
         )
         db.add(dev)
     else:
@@ -61,7 +61,7 @@ def upsert_from_register(
         if capabilities is not None:
             dev.capabilities = capabilities
         dev.status = "online"
-        dev.last_online_at = datetime.utcnow()
+        dev.last_online_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(dev)
     return dev
@@ -124,5 +124,5 @@ def close_connection(db: Session, session_id: str) -> None:
         .first()
     )
     if conn:
-        conn.disconnected_at = datetime.utcnow()
+        conn.disconnected_at = datetime.now(timezone.utc)
         db.commit()

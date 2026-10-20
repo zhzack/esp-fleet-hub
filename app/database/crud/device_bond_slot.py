@@ -1,5 +1,5 @@
 """device_bond_slot CRUD。"""
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.database.models.device_bond_slot import DeviceBondSlot
@@ -66,5 +66,5 @@ def delete(db: Session, device_id: int, slot_index: int) -> bool:
 def touch(db: Session, device_id: int, slot_index: int) -> None:
     row = get(db, device_id, slot_index)
     if row:
-        row.last_used_at = datetime.utcnow()
+        row.last_used_at = datetime.now(timezone.utc)
         db.commit()
