@@ -2,10 +2,12 @@
 # 公共函数库：颜色输出 / 端口检测 / 项目根
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_PORT="${APP_PORT:-8000}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-app}"
 IMAGE_NAME="${IMAGE_NAME:-hid-gateway:latest}"
+# sh 脚本默认使用 prod 栈（与旧根目录 docker-compose.yml 行为一致），可用 COMPOSE_FILE 覆盖
+COMPOSE_FILE="${COMPOSE_FILE:-$PROJECT_ROOT/compose.prod.yml}"
 
 c_red()   { printf "\033[31m%s\033[0m\n" "$*"; }
 c_grn()   { printf "\033[32m%s\033[0m\n" "$*"; }

@@ -32,10 +32,10 @@ if [ "$DEL_VOL" -eq 1 ]; then
     exit 1
   fi
   c_cyn "==> docker compose down -v"
-  docker compose down -v
+  docker compose -f "$COMPOSE_FILE" down -v
 else
   c_cyn "==> docker compose down"
-  docker compose down
+  docker compose -f "$COMPOSE_FILE" down
 fi
 
 if [ "$DEL_IMG" -eq 1 ]; then

@@ -8,7 +8,7 @@ Prefer the Python entrypoints on Windows:
 - `python scripts/py/clean.py`
 - `python scripts/py/build_image.py`
 
-The shell scripts under `scripts/sh/` are still available for Git Bash, WSL, Linux, and macOS.
+The shell scripts under `scripts/sh/` are still available for Git Bash, WSL, Linux, and macOS. They target the **prod** stack by default (`compose.prod.yml`); override with the `COMPOSE_FILE` environment variable if needed.
 
 ## Web stack
 

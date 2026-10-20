@@ -23,14 +23,14 @@ cd "$PROJECT_ROOT"
 
 if [ "$ONLY_APP" -eq 1 ]; then
   c_cyn "==> docker compose stop $COMPOSE_SERVICE"
-  docker compose stop "$COMPOSE_SERVICE"
+  docker compose -f "$COMPOSE_FILE" stop "$COMPOSE_SERVICE"
 elif [ "$DOWN" -eq 1 ]; then
   c_cyn "==> docker compose down"
-  docker compose down
+  docker compose -f "$COMPOSE_FILE" down
 else
   c_cyn "==> docker compose stop"
-  docker compose stop
+  docker compose -f "$COMPOSE_FILE" stop
 fi
 
 c_grn "==> 完成"
-docker compose ps
+docker compose -f "$COMPOSE_FILE" ps

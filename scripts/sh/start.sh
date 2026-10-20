@@ -45,11 +45,11 @@ done
 
 if [ "$BUILD" -eq 1 ]; then
   c_cyn "==> docker compose build $COMPOSE_SERVICE"
-  docker compose build "$COMPOSE_SERVICE"
+  docker compose -f "$COMPOSE_FILE" build "$COMPOSE_SERVICE"
 fi
 
 c_cyn "==> docker compose up -d"
-docker compose up -d
+docker compose -f "$COMPOSE_FILE" up -d
 
 c_cyn "==> 等待 app healthy ..."
 for i in $(seq 1 60); do
@@ -61,5 +61,5 @@ for i in $(seq 1 60); do
   printf '.'
   sleep 1
 done
-c_red "等待超时（60s），用 docker compose logs app 排查"
+c_red "等待超时（60s），用 docker compose -f compose.prod.yml logs app 排查"
 exit 1

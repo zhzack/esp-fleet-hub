@@ -21,7 +21,7 @@ done
 
 cd "$PROJECT_ROOT"
 c_cyn "==> docker compose build $COMPOSE_SERVICE $EXTRA"
-docker compose build $EXTRA "$COMPOSE_SERVICE"
+docker compose -f "$COMPOSE_FILE" build $EXTRA "$COMPOSE_SERVICE"
 
 if [ -n "$TAG" ]; then
   c_cyn "==> 额外打 tag: $IMAGE_NAME -> hid-gateway:$TAG"

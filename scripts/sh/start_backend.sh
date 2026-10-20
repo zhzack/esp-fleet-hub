@@ -30,7 +30,7 @@ if port_in_use "$PORT"; then
   # 如果占用方是 docker 容器（端口转发由 vpnkit/dockerd 完成），直接拒绝 kill
   if command -v docker >/dev/null 2>&1 && \
      docker ps --filter "publish=$PORT" --format '{{.Names}}' 2>/dev/null | grep -q .; then
-    c_red "端口被 docker 容器占用，请先：docker compose stop app"
+    c_red "端口被 docker 容器占用，请先：docker compose -f compose.prod.yml stop app"
     exit 1
   fi
   if [ "$KILL" -eq 1 ] && [ -n "$pids" ]; then

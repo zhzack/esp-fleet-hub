@@ -21,4 +21,4 @@ while [ $# -gt 0 ]; do
 done
 
 cd "$PROJECT_ROOT"
-docker compose logs $FOLLOW $TAIL $TARGET
+docker compose -f "$COMPOSE_FILE" logs $FOLLOW $TAIL $TARGET

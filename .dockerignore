@@ -19,7 +19,11 @@ vue-project/.vite
 
 # tests / docs not needed at runtime
 tests/
-makedown/
+docs/
+
+# runtime data (DB backups, uploaded firmware binaries)
+backups/
+uploads/
 
 # misc local stuff
 *.sh

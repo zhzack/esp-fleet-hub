@@ -94,10 +94,10 @@ docker compose -f compose.dev.yml up
 docker compose -f compose.prod.yml up -d --build
 ```
 
-或用根目录的 `docker-compose.yml`（保留兼容，与 `compose.prod.yml` 等价）：
+或使用脚本（等价）：
 
 ```bash
-docker compose up -d --build
+python scripts/py/start.py --prod --build
 ```
 
 | 服务 | 端口 | 行为 |
@@ -287,7 +287,7 @@ python flash.py            # 自动找口、烧、进 monitor
 python flash.py --erase    # 烧前清 NVS（默认值才会生效）
 ```
 
-详见 [ESP32 固件 Docker README](../ble_hid/README.md)（如有）和 [api_reference.md §15.8](api_reference.md#158-编译时配置固件-kconfigprojbuild)。
+详见 [api_reference.md §15.8](api_reference.md#158-编译时配置固件-kconfigprojbuild)。
 
 ### 清重建
 
