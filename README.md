@@ -44,17 +44,26 @@ py_web/
 │   ├── modules/          # Business logic modules (auth, device, macro, queue)
 │   ├── services/         # Device manager, queue worker, protocol handlers
 │   └── main.py           # FastAPI entrypoint and static mount
-├── ble_hid/              # ESP32-S3 ESP-IDF firmware project
-│   ├── main/             # BLE HID, USB HID, and Wi-Fi / WebSocket logic
-│   └── CMakeLists.txt
 ├── vue-project/          # Vue 3 SPA frontend
 │   ├── src/              # Components, views, stores, router, API client
 │   └── vite.config.js
-├── scripts/              # Python & Shell runner scripts (start, stop, logs, clean)
-│   ├── py/               # Cross-platform Python execution scripts
-│   └── sh/               # Shell scripts (Linux/macOS/Git Bash)
-├── makerdown/            # System architecture, protocol specifications, API docs
-├── deploy/               # Docker & deployment configs (MySQL, Redis, Nginx)
+├── ble_hid/              # ESP32-S3 ESP-IDF firmware project
+│   ├── main/             # BLE HID, USB HID, Wi-Fi / WebSocket logic, OTA
+│   └── flash.py          # Firmware build / flash / monitor helper
+├── scripts/              # Runner & ops scripts
+│   ├── py/               # Cross-platform Python scripts (start, stop, logs, clean, build)
+│   ├── sh/               # Shell equivalents (Git Bash / WSL / Linux / macOS)
+│   └── mysql/            # MySQL backup / restore / schema dump helpers
+├── tools/                # Host-side utilities (PC passthrough, macro recorder, WS tester)
+├── tests/                # Pytest suite (REST & WS APIs, schemas, services, ESP32 dispatch E2E, smoke)
+├── docs/                 # System architecture, protocol specs, API reference
+├── deploy/               # Deployment configs (MySQL init SQL)
+├── backups/              # Database backups (gitignored)
+├── uploads/              # Firmware upload storage (gitignored)
+├── logs/                 # Runtime logs (gitignored)
+├── Dockerfile            # Production image (multi-stage: frontend build + backend runtime)
+├── Dockerfile.backend    # Backend-only image (used by compose.dev.yml)
+├── Dockerfile.frontend.dev # Vite dev-server image (used by compose.dev.yml)
 ├── compose.dev.yml       # Docker compose configuration (Development)
 ├── compose.prod.yml      # Docker compose configuration (Production)
 ├── run.py                # Local FastAPI runner with local IP display
@@ -103,7 +112,17 @@ npm run dev
 
 Frontend development server will be running at `http://127.0.0.1:5173`.
 
-### 4. Docker Stack (Recommended for Integrated Testing)
+### 4. Run Tests
+
+```bash
+# Full pytest suite (REST/WS APIs, schemas, ESP32 dispatch E2E; uses in-memory SQLite)
+.venv\Scripts\pytest
+
+# E2E smoke test against a running backend (simulates an ESP32 over WebSocket)
+python tests/smoke_test.py
+```
+
+### 5. Docker Stack (Recommended for Integrated Testing)
 
 Using the cross-platform Python scripts:
 
@@ -134,11 +153,11 @@ docker run --rm -v "%cd%/ble_hid:/project" -w /project espressif/idf:release-v5.
 
 ## 📖 Documentation Reference
 
-Detailed architectural and design specifications are available in the [makerdown/](makerdown/) directory:
+Detailed architectural and design specifications are available in the [docs/](docs/) directory:
 
-- [API Reference](makerdown/api_reference.md)
-- [System Architecture (V1.1)](makerdown/hid_gateway_detailed_architecture_v_1.md)
-- [Protocol V2 Design](makerdown/hid_gateway_protocol_v_2_design.md)
-- [Backend Design](makerdown/hid_gateway_backend_design_v_1.md)
-- [ESP32 Firmware Design](makerdown/hid_gateway_esp_32_firmware_design_v_1.md)
-- [Docker Usage Guide](makerdown/docker_usage.md)
+- [API Reference](docs/api_reference.md)
+- [System Architecture (V1.1)](docs/hid_gateway_detailed_architecture_v_1.md)
+- [Protocol V2 Design](docs/hid_gateway_protocol_v_2_design.md)
+- [Backend Design](docs/hid_gateway_backend_design_v_1.md)
+- [ESP32 Firmware Design](docs/hid_gateway_esp_32_firmware_design_v_1.md)
+- [Docker Usage Guide](docs/docker_usage.md)

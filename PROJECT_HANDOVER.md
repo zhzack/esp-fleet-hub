@@ -1,7 +1,7 @@
 # HID Gateway 项目交付与交接文档 (Project Handover Document)
 
 > **交付对象**：接手本项目的后续 AI Agent 或研发工程师  
-> **更新时间**：2026-10-16  
+> **更新时间**：2026-10-20  
 > **当前状态**：后端服务正常运行中、ESP32 硬件已在线连入、前端已编译上线、端到端链路验证打通。
 
 ---
@@ -84,7 +84,7 @@
 - **抽屉后台查询静默优化**：将 `DeviceControl.vue` 中打开抽屉时触发的状态轮询改为静默模式（`silent: true`），消除了此前关闭抽屉后突然“跳出延迟弹窗”的逻辑体验问题。
 
 ### 4. 运行历史日志归档保存
-- 已完整导出此前所有的 WebSocket 握手报文、心跳、动作日志和错误详情至根目录 **`saved_device_logs.txt`**（82.5 KB），任何时候都可用于追溯历史行为。
+- 已完整导出此前所有的 WebSocket 握手报文、心跳、动作日志和错误详情至 **`logs/saved_device_logs.txt`**（82.5 KB），任何时候都可用于追溯历史行为。
 
 ### 5. 全链路 ESP32 双分区 OTA 升级系统落地
 - **固件层 (`ble_hid/`)**：
@@ -98,6 +98,20 @@
 - **前端系统 (`vue-project/`)**：
   - 新建独立路由页面 [views/firmware.vue](file:///f:/py_web/vue-project/src/views/firmware.vue)，集成固件拖拽上传、版本库管理、在线设备多选一键推送、环形进度条与实时升级日志流水。
   - 在侧边栏导航（[DefaultLayout.vue](file:///f:/py_web/vue-project/src/layouts/DefaultLayout.vue)）常驻“固件与 OTA”入口。
+
+### 6. 项目结构与 Git 跟踪整理 (2026-10-20)
+- **文档目录更名**：`makerdown/` → `docs/`（修正拼写，README 引用同步更新）。
+- **根目录遗留文件清理**：删除未被任何代码使用的根目录 `package.json` / `package-lock.json`（仅含 axios-mock-adapter），删除与 `compose.prod.yml` 完全重复的根目录 `docker-compose.yml`。
+- **sh 脚本行为对齐**：`scripts/sh/` 下所有 compose 调用改为显式 `-f "$COMPOSE_FILE"`（默认 `compose.prod.yml`，可用环境变量 `COMPOSE_FILE` 覆盖），与旧根目录 `docker-compose.yml` 行为完全等价；`scripts/py/*.py` 本就显式指定，不受影响。
+- **顺手修复 `_common.sh` 预存 Bug**：`PROJECT_ROOT` 原先只向上回溯一级（解析到 `scripts/` 而非仓库根目录），导致 sh 脚本的 `cd "$PROJECT_ROOT"` 与 compose 文件定位一直指向错误路径；已改为 `../..` 并验证 `COMPOSE_FILE` 正确解析到仓库根的 `compose.prod.yml`。
+- **运行时产物移出 Git 跟踪**：SQL 备份统一归档至根目录 `backups/`（已加入 `.gitignore`，原 `scripts/mysql/backups/` 下的历史备份已迁入）；`saved_device_logs.txt` 移至 `logs/`。文件均保留在磁盘，历史版本仍可从 Git 历史追溯。
+- **备份脚本路径对齐**：`scripts/mysql/backup.sh` 备份输出目录统一为根目录 `backups/`，与 `restore.sh` 的示例路径一致。
+- **工作区缓存清理**：删除 `tools/`、`scripts/py/`、`tests/`、`ble_hid/` 下的 `__pycache__` 与根目录 `.pytest_cache`。
+- **`.dockerignore` 同步修正**：原 `makedown/` 排除项（拼写错误且目录已更名）改为 `docs/`，并新增 `backups/`、`uploads/` 运行时数据目录排除，避免 SQL 备份与固件二进制进入镜像构建上下文；同时移除 `docs/docker_usage.md` 中指向不存在的 `ble_hid/README.md` 的死链。
+- **框架弃用警告清零**：7 处 Pydantic `class Config:` 迁移为 `model_config = ConfigDict(from_attributes=True)`（schemas 下 6 个 + `api/v2/slots.py`）；`app/main.py` 的 `@app.on_event("startup")` 迁移为 `lifespan` 上下文管理器（启动逻辑不变）；`app/database/base_class.py` 的 `as_declarative` import 从弃用的 `sqlalchemy.ext.declarative` 移至 `sqlalchemy.orm`；`app/services/ping_service.py` 的 `datetime.utcnow()` 改为时区感知的 `datetime.now(timezone.utc)`。pytest 由 10 warnings 降为 0。
+- **测试补齐（6 → 23 个用例）**：新增 `tests/test_schemas.py`（7 个迁移 schema 的 from_attributes 序列化 + `WsEnvelope` 协议信封解析）、`tests/test_devices_api.py`（设备 CRUD/归属过滤/认领 + BLE 槽位绑定校验）、`tests/test_device_groups_api.py`（分组 CRUD/成员管理/越权 403）、`tests/test_macros_api.py`（宏 CRUD/config 归一化/跨用户隔离）、`tests/test_vehicles_api.py`（车辆列表与 chip 过滤）、`tests/test_main_lifespan.py`（lifespan 建表与 health 可用性，通过 monkeypatch 测试引擎隔离真实 DB）。
+- **测试期间发现的预存问题（已修复）**：① `crud/device_group.py` 的 `add_devices_to_group` 在单次请求中传入重复 device_id 会触发 `IntegrityError`（autoflush=False 导致查重看不到未提交的行），已用 `dict.fromkeys` 保序去重输入修复，测试覆盖单请求与跨请求两种重复场景；② `VehicleModel.current_status` 列无默认值，ORM 层插入 NULL 而 `VehicleOut` 要求 str，已为该列增加 `default="空闲"`（与 `VehicleBase` schema 的默认值对齐），测试验证端到端生效。
+- **运行验证与 ESP32 链路测试补齐（23 → 44 个用例）**：本地启动 uvicorn 验证 lifespan 迁移后启动正常；跑通 `tests/smoke_test.py` E2E 冒烟（register → WS 注册 → action 下发 → 设备 ack → logs）。期间修复三类问题：① smoke test 502——httpx 默认走 Windows 系统代理（Clash），已加 `trust_env=False` 本机直连；② 控制台日志每条重复两次——`LOG_PIPELINE` 的 default（INFO）与 debug（DEBUG）两个 handler 都挂 console，DEBUG 级 handler 放行所有 ≥DEBUG 记录，已为 debug 管道增加 `only_below: INFO` 过滤器（`app/core/logger/logger.py` 支持 `only_below` 配置项）；③ 13 处 `datetime.utcnow()` 弃用（`ws/device.py`、`ws/client.py`、`crud/device.py`、`crud/device_bond_slot.py`、`crud/device_wifi_known.py`）统一改为 `datetime.now(timezone.utc)`，同时消除了 naive `.timestamp()` 按本地时区解释的隐患。新增 `tests/test_ws_device.py`（8 用例：register ack 与持久化、缺 device_id 拒绝 E004/1008、V1 legacy 帧兼容、msg_id 幂等去重、heartbeat/status 状态上报、action 派发-ACK 全链路 E2E、离线设备 E002 快速失败、同设备重连踢旧连接 1012）与 `tests/test_device_services.py`（13 用例：`_parse_ack_payload` 各分支、AckTracker resolve/timeout、OtaTracker 进度管理、幂等去重语义）。WS 测试要点：`device_ws` 不走依赖注入（内部自建 `SessionLocal`），测试需 monkeypatch `app.api.ws.device.SessionLocal` 为 `TestingSessionLocal`；WS 会话与 HTTP 请求必须共享同一 TestClient portal（`with TestClient(app)`），否则 `ack_tracker` 的 Future 会跨事件循环。
 
 ---
 
