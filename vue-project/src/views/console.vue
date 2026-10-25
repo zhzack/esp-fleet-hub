@@ -9,6 +9,7 @@ import { useRouter } from 'vue-router'
 
 import TrackpadPanel from '@/components/TrackpadPanel.vue'
 import MouseTakeoverPanel from '@/components/MouseTakeoverPanel.vue'
+import DeviceControl from '@/views/device-control.vue'
 import { actionsApi } from '@/api/actions'
 import { commandsApi } from '@/api/commands'
 import { devicesApi } from '@/api/devices'
@@ -20,6 +21,7 @@ const selected = ref([]) // 多选：同时下发控制指令的设备 uuid 列�
 const text = ref('')
 const sending = ref(false)
 const lastResult = ref(null)
+const settingsOpen = ref(false) // 设备快速设置抽屉（复用 DeviceControl）
 
 const bonds = ref([])
 const currentPeer = ref('')
@@ -29,6 +31,7 @@ const bleLoading = ref(false)
 const transportMode = ref('') // 当前输出通道: 'ble' | 'usb' | 'auto' | ''
 const activeTransport = ref('') // auto 模式下实际生效的通道: 'usb' | 'ble'
 const usbConnected = ref(false) // USB 线缆是否已枚举到主机
+const blePeers = ref([]) // 多连接（镜像广播）：ble.info 的 peers 数组
 
 // Categorized keyboard key groups
 const NAV_KEYS = [
@@ -92,8 +95,18 @@ function addrToBytes(value) {
 // 仅当选中恰好 1 台设备时才有"唯一目标"概念（触控板/输出目标卡片依赖）
 const soleSelected = computed(() => (selected.value.length === 1 ? selected.value[0] : ''))
 const selectedDevice = computed(() => devices.value.find((item) => item.device_uuid === soleSelected.value) || null)
+const selectedDeviceName = computed(() => selectedDevice.value?.name || soleSelected.value || '')
 const isSelectedOnline = computed(() => selected.value.some((uuid) => online.value.includes(uuid)))
 const isSoleOnline = computed(() => !!soleSelected.value && online.value.includes(soleSelected.value))
+
+// 多连接（镜像广播）：在线主机数与地址串，用于"×N 镜像"徽标
+const connectedPeerCount = computed(() => blePeers.value.length || (bleConnected.value ? 1 : 0))
+const connectedPeerAddrs = computed(() =>
+  (blePeers.value.length
+    ? blePeers.value.map((p) => fmtAddr(p.addr))
+    : currentPeer.value ? [currentPeer.value] : []
+  ).join(' / '),
+)
 
 const USB_TARGET = '__usb__' // 输出目标下拉中 USB 主机选项的哨兵值
 
@@ -185,6 +198,7 @@ async function loadTarget() {
     usbConnected.value = !!(usbData.mounted ?? usbData.connected ?? transportData.usb_mounted)
     bleConnected.value = !!infoData.connected
     currentPeer.value = fmtAddr(infoData.peer?.addr || infoData.peer || infoData.current?.addr)
+    blePeers.value = Array.isArray(infoData.peers) ? infoData.peers : []
 
     bonds.value = (bondData.bonds || []).map((item) => ({
       ...item,
@@ -341,7 +355,7 @@ function openKioskTrackpadPage() {
         </div>
         <div>
           <h1 class="header-title">实时硬件控制中枢</h1>
-          <p class="header-subtitle">Direct Hardware Ingestion & Low-latency Input Dispatcher</p>
+          <p class="header-subtitle">低延迟键鼠输入调度 · 多设备并发</p>
         </div>
       </div>
 
@@ -350,7 +364,7 @@ function openKioskTrackpadPage() {
           <span class="device-badge-indicator" :class="{ 'online': isSelectedOnline }"></span>
           <el-select
             v-model="selected"
-            placeholder="选择目标设备（可多选并发控制）"
+            placeholder="目标设备（可多选）"
             filterable
             multiple
             collapse-tags
@@ -374,6 +388,16 @@ function openKioskTrackpadPage() {
           </el-select>
         </div>
 
+        <el-tooltip content="设备快速设置：硬件状态 / WiFi / 蓝牙配对 / 传输模式 / 重启（单选设备时可用）" placement="bottom">
+          <el-button class="refresh-btn" :disabled="!soleSelected" @click="settingsOpen = true">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            设置
+          </el-button>
+        </el-tooltip>
+
         <el-button class="refresh-btn" @click="load">
           <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
@@ -381,20 +405,22 @@ function openKioskTrackpadPage() {
           刷新
         </el-button>
 
-        <div class="quick-touchpad-group">
-          <button class="action-pill-btn" :disabled="!soleSelected" @click="openPureTrackpadPage" title="纯净手势触控板">
-            <span class="pill-dot purple"></span>
-            极简触控
-          </button>
-          <button class="action-pill-btn" :disabled="!soleSelected" @click="openKioskTrackpadPage" title="展厅全屏触控板">
-            <span class="pill-dot cyan"></span>
-            Kiosk 展厅
-          </button>
-          <button class="action-pill-btn primary" :disabled="!soleSelected" @click="openTrackpadPage" title="新标签打开全功能触控板">
-            <span class="pill-dot blue"></span>
-            全屏触控
-          </button>
-        </div>
+        <el-tooltip content="极简手势触控板（新标签页） / Kiosk 展厅全屏 / 全功能触控板" placement="bottom">
+          <div class="quick-touchpad-group">
+            <button class="action-pill-btn" :disabled="!soleSelected" @click="openPureTrackpadPage">
+              <span class="pill-dot purple"></span>
+              极简触控
+            </button>
+            <button class="action-pill-btn" :disabled="!soleSelected" @click="openKioskTrackpadPage">
+              <span class="pill-dot cyan"></span>
+              Kiosk 展厅
+            </button>
+            <button class="action-pill-btn primary" :disabled="!soleSelected" @click="openTrackpadPage">
+              <span class="pill-dot blue"></span>
+              全屏触控
+            </button>
+          </div>
+        </el-tooltip>
       </div>
     </div>
 
@@ -419,6 +445,13 @@ function openKioskTrackpadPage() {
           <div class="ble-peer-info">
             <span class="peer-label">当前输出通道：</span>
             <code class="peer-code">{{ transportLabel }}</code>
+            <el-tooltip
+              v-if="connectedPeerCount > 1"
+              :content="`镜像广播模式：${connectedPeerCount} 台蓝牙主机同时接收输入（${connectedPeerAddrs}）`"
+              placement="top"
+            >
+              <span class="mirror-badge">×{{ connectedPeerCount }} 镜像</span>
+            </el-tooltip>
           </div>
 
           <div class="ble-selector-row">
@@ -445,12 +478,16 @@ function openKioskTrackpadPage() {
             </el-button>
           </div>
 
-          <div v-if="!bonds.length && soleSelected" class="card-empty-hint">
-            <span class="hint-icon">ℹ</span> 该设备尚未发现蓝牙配对主机，可选择 USB 主机（线缆直连）作为输出目标
-          </div>
           <div v-if="selected.length > 1" class="card-empty-hint">
-            <span class="hint-icon">ℹ</span> 已选中 {{ selected.length }} 台设备：输出目标仅对单选设备可配置，指令将同时下发至全部选中设备
+            <span class="hint-icon">ℹ</span> 已选 {{ selected.length }} 台并发下发，输出目标仅单选时可配置
           </div>
+          <el-tooltip
+            v-else-if="!bonds.length && soleSelected"
+            content="该设备尚未发现蓝牙配对主机。新主机可直接搜索 esp32 广播名配对（最多 3 台同时连接，镜像接收）；也可选 USB 主机（线缆直连）"
+            placement="top"
+          >
+            <div class="card-empty-hint slim"><span class="hint-icon">ℹ</span> 未发现配对主机，如何连接第二台？</div>
+          </el-tooltip>
         </div>
 
         <!-- Real-Time Terminal Log -->
@@ -505,11 +542,16 @@ function openKioskTrackpadPage() {
       <!-- Right Column: Virtual Keyboard & Embedded Touchpad Surface -->
       <div class="console-col-main">
         <!-- Top Status Alert if no output target connected -->
-        <div v-if="soleSelected && !bleConnected && !usbConnected" class="notice-banner">
+        <div v-if="soleSelected && !bleConnected && !usbConnected" class="notice-banner slim-banner">
           <div class="banner-icon-circle">⚡</div>
           <div class="banner-text">
-            <strong>输出目标未就绪：</strong>
-            未检测到活跃的 BLE 连接或 USB 主机，输入动作可能无法送达目标机器。请在左侧选择输出目标，或检查线缆连接与蓝牙配对状态。
+            <strong>输出目标未就绪</strong>
+            <el-tooltip
+              content="未检测到活跃的 BLE 连接或 USB 主机，输入动作无法送达。请在左侧选择输出目标，或检查线缆与蓝牙配对状态"
+              placement="bottom"
+            >
+              <span class="banner-more">详情</span>
+            </el-tooltip>
           </div>
         </div>
 
@@ -521,9 +563,11 @@ function openKioskTrackpadPage() {
                 <rect x="2" y="4" width="20" height="16" rx="2"/>
                 <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>
               </svg>
-              <span class="card-title-text">仿真机械硬件键位矩阵</span>
+              <span class="card-title-text">键位矩阵</span>
             </div>
-            <span class="deck-hint">点击即刻触发设备物理按键下发</span>
+            <el-tooltip content="点击即刻触发设备物理按键下发，支持多选设备并发" placement="top">
+              <span class="info-dot">i</span>
+            </el-tooltip>
           </div>
 
           <!-- Shortcuts & Navigation Strip -->
@@ -621,7 +665,7 @@ function openKioskTrackpadPage() {
           <div class="text-input-row">
             <el-input
               v-model="text"
-              placeholder="在此输入需要下发至受控电脑的文本字符串，支持 Enter 回车直接发送..."
+              placeholder="输入下发文本，Enter 发送"
               clearable
               size="large"
               class="custom-input-box"
@@ -664,6 +708,9 @@ function openKioskTrackpadPage() {
         </div>
       </div>
     </div>
+
+    <!-- 设备快速设置抽屉（复用设备管理页的 DeviceControl：状态/WiFi/蓝牙/传输/重启） -->
+    <DeviceControl v-model="settingsOpen" :device-uuid="soleSelected" :device-name="selectedDeviceName" />
   </div>
 </template>
 
@@ -1104,6 +1151,58 @@ function openKioskTrackpadPage() {
 
 .banner-text strong {
   color: #92400e;
+}
+
+/* 精简版 Banner：一行 + 详情收进 tooltip */
+.notice-banner.slim-banner {
+  padding: 8px 14px;
+}
+
+.banner-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.banner-more {
+  font-size: 12px;
+  color: #b45309;
+  cursor: help;
+  border-bottom: 1px dashed #d97706;
+}
+
+/* 卡片标题旁的 info 小圆点（说明收纳进 tooltip） */
+.info-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--color-text-muted, #909399);
+  background: rgba(144, 147, 153, 0.14);
+  cursor: help;
+}
+
+/* 多连接镜像徽标 */
+.mirror-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5b21b6;
+  background: #ede9fe;
+  cursor: help;
+}
+
+/* 单行精简版 hint */
+.card-empty-hint.slim {
+  cursor: help;
 }
 
 /* Keypad Deck & Keys */

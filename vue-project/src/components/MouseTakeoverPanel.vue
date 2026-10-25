@@ -421,6 +421,12 @@ onBeforeUnmount(() => {
   <div class="takeover-card">
     <div class="takeover-head">
       <span class="takeover-title">真实键鼠接管</span>
+      <el-tooltip
+        content="激活后锁定本机指针，真实鼠标的移动 / 点击 / 滚轮与键盘实时透传（USB / BLE 自动路由）。按 Esc 退出。物理 Win / Alt+Tab 会被本机系统截胡，请用下方组合键按钮。"
+        placement="top"
+      >
+        <span class="info-dot">i</span>
+      </el-tooltip>
       <span class="takeover-target" :class="{ online: canControl }">
         {{
           props.deviceUuid
@@ -429,11 +435,6 @@ onBeforeUnmount(() => {
         }}
       </span>
     </div>
-
-    <p class="takeover-desc">
-      激活后锁定本机指针，真实鼠标的移动 / 点击 / 滚轮与键盘输入将实时透传到目标设备
-      （USB / BLE 自动路由，支持拖拽与组合键）。按 Esc 退出接管。
-    </p>
 
     <div class="takeover-toolbar">
       <el-button type="primary" :disabled="!canControl || armed" @click="engage">
@@ -459,7 +460,9 @@ onBeforeUnmount(() => {
           {{ combo.label }}
         </el-button>
       </div>
-      <span class="combo-hint">物理 Win / Alt+Tab 会被控制端系统截胡，组合键请用按钮直发</span>
+      <el-tooltip content="物理 Win / Alt+Tab 会被控制端系统截胡（弹开始菜单/切本机窗口），浏览器收不到事件；组合键需用按钮直发序列" placement="top">
+        <span class="info-dot">i</span>
+      </el-tooltip>
     </div>
 
     <div
@@ -518,6 +521,22 @@ onBeforeUnmount(() => {
 .takeover-desc {
   margin: 0;
   font-size: 13px;
+}
+
+/* 标题旁 info 小圆点（说明收纳进 tooltip） */
+.info-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--text-secondary, #909399);
+  background: rgba(144, 147, 153, 0.14);
+  cursor: help;
 }
 
 .combo-row {
