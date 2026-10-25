@@ -32,6 +32,21 @@ const transportMode = ref('') // 当前输出通道: 'ble' | 'usb' | 'auto' | ''
 const activeTransport = ref('') // auto 模式下实际生效的通道: 'usb' | 'ble'
 const usbConnected = ref(false) // USB 线缆是否已枚举到主机
 const blePeers = ref([]) // 多连接（镜像广播）：ble.info 的 peers 数组
+const hostMeta = ref([]) // 主机平台标记（设置抽屉维护），按地址关联
+
+/* 当前输出目标的平台（''=未标记）：驱动快捷键/组合键适配。
+ * 优先当前活跃 BLE 对端；USB 通道时取用户在目标下拉里选的主机标记 */
+const PLATFORM_ICONS = { win: '🪟', mac: '', linux: '🐧' }
+function platformOfAddr(addr) {
+  if (!addr) return ''
+  const norm = fmtAddr(addr)
+  return hostMeta.value.find((m) => m.addr === norm)?.platform || ''
+}
+const activePlatform = computed(() => {
+  if (currentPeer.value) return platformOfAddr(currentPeer.value)
+  if (targetPeer.value && targetPeer.value !== USB_TARGET) return platformOfAddr(targetPeer.value)
+  return ''
+})
 
 // Categorized keyboard key groups
 const NAV_KEYS = [
@@ -49,12 +64,22 @@ const CONTROL_KEYS = [
   { key: 'KEY_BACKSPACE', label: 'Backspace' },
 ]
 
-const SHORTCUT_KEYS = [
+const SHORTCUT_KEYS_WIN = [
   { key: 'KEY_GUI_D', label: 'Win + D', hint: 'Desktop' },
   { key: 'KEY_GUI_TAB', label: 'Win + Tab', hint: 'Task View' },
   { key: 'KEY_ALT_TAB', label: 'Alt + Tab', hint: 'App Switch' },
   { key: 'KEY_ALT_SHIFT_TAB', label: 'Alt + Shift + Tab', hint: 'Prev App' },
 ]
+const SHORTCUT_KEYS_MAC = [
+  { key: 'KEY_GUI_TAB', label: 'Cmd + Tab', hint: 'App Switch' },
+  { key: 'KEY_GUI_CTRL_LEFT', label: 'Cmd + Ctrl + ←', hint: 'Desk Left' },
+  { key: 'KEY_GUI_CTRL_RIGHT', label: 'Cmd + Ctrl + →', hint: 'Desk Right' },
+  { key: 'KEY_ALT_TAB', label: 'Alt + Tab', hint: 'Win 兼容' },
+]
+// 平台标记驱动快捷键组；未标记时用 Windows 组（历史默认）
+const SHORTCUT_KEYS = computed(() =>
+  activePlatform.value === 'mac' ? SHORTCUT_KEYS_MAC : SHORTCUT_KEYS_WIN,
+)
 
 const ALPHA_KEYS = [
   'KEY_A', 'KEY_B', 'KEY_C', 'KEY_D', 'KEY_E', 'KEY_F',
@@ -115,10 +140,13 @@ const targetOptions = computed(() => [
     value: USB_TARGET,
     label: `🔌 USB 主机（线缆直连）${usbConnected.value ? ' ● 已连接' : ' ○ 未连接'}`,
   },
-  ...bonds.value.map((item) => ({
-    value: item.addrStr,
-    label: `📡 ${item.name || item.addrStr}${item.addrStr === currentPeer.value ? '（当前主机）' : ''}`,
-  })),
+  ...bonds.value.map((item) => {
+    const icon = PLATFORM_ICONS[platformOfAddr(item.addrStr)] || '📡'
+    return {
+      value: item.addrStr,
+      label: `${icon} ${item.name || item.addrStr}${item.addrStr === currentPeer.value ? '（当前主机）' : ''}`,
+    }
+  }),
 ])
 
 const transportLabel = computed(() => {
@@ -173,24 +201,28 @@ async function loadTarget() {
     transportMode.value = ''
     activeTransport.value = ''
     usbConnected.value = false
+    blePeers.value = []
+    hostMeta.value = []
     return
   }
 
   bleLoading.value = true
   try {
     const uuid = soleSelected.value
-    // 四路信息并行拉取；单路失败（如固件不支持 usb.info）不阻塞其余
-    const [info, bondResult, transport, usb] = await Promise.all([
+    // 五路信息并行拉取；单路失败（如固件不支持 usb.info）不阻塞其余
+    const [info, bondResult, transport, usb, meta] = await Promise.all([
       commandsApi.bleInfo(uuid).catch(() => null),
       commandsApi.bleBonds(uuid).catch(() => null),
       commandsApi.transportGet(uuid).catch(() => null),
       commandsApi.usbInfo(uuid).catch(() => null),
+      commandsApi.listHostMeta(uuid).catch(() => null),
     ])
 
     const infoData = extractCommandResult(info) || {}
     const bondData = extractCommandResult(bondResult) || {}
     const transportData = extractCommandResult(transport) || {}
     const usbData = extractCommandResult(usb) || {}
+    hostMeta.value = Array.isArray(meta) ? meta : []
 
     transportMode.value = String(transportData.mode || transportData.transport || '')
     activeTransport.value = String(transportData.active || '')
@@ -696,6 +728,7 @@ function openKioskTrackpadPage() {
           class="console-card glass-panel"
           :device-uuid="soleSelected"
           :device-online="isSoleOnline"
+          :platform="activePlatform"
         />
 
         <!-- Embedded Touchpad Surface -->

@@ -20,8 +20,10 @@ const KEYS = [
   'KEY_ENTER', 'KEY_SPACE', 'KEY_TAB', 'KEY_ESC', 'KEY_BACKSPACE',
   'KEY_UP', 'KEY_DOWN', 'KEY_LEFT', 'KEY_RIGHT',
   'KEY_F1', 'KEY_F2', 'KEY_F3', 'KEY_F4', 'KEY_F5', 'KEY_F6', 'KEY_F7', 'KEY_F8', 'KEY_F9', 'KEY_F10', 'KEY_F11', 'KEY_F12',
-  'KEY_LCTRL', 'KEY_LSHIFT', 'KEY_LALT', 'KEY_LMETA',
+  // 修饰键（固件 keymap 规范名；旧版 KEY_LCTRL/LSHIFT/LALT/LMETA 不存在，已修正）
+  'KEY_LEFTCTRL', 'KEY_LEFTSHIFT', 'KEY_LEFTALT', 'KEY_LEFTGUI',
   'KEY_ALT_TAB', 'KEY_ALT_SHIFT_TAB', 'KEY_GUI_D', 'KEY_GUI_TAB', 'KEY_GUI_CTRL_LEFT', 'KEY_GUI_CTRL_RIGHT',
+  'KEY_CTRL_C', 'KEY_CTRL_V', 'KEY_CTRL_X', 'KEY_CTRL_Z', 'KEY_CTRL_A', 'KEY_CTRL_S',
 ]
 
 const STEP_TYPES = [
@@ -128,10 +130,32 @@ const editor = reactive({
   name: '',
   steps: [],
   config: defaultMacroConfig(),
+  // 平台变体：每个平台一套独立步骤，运行时按目标主机平台标记选取，
+  // 无匹配变体（或未标记）回退通用 steps
+  activeVariant: 'default', // 'default' | 'win' | 'mac' | 'linux'
+  variants: { win: [], mac: [], linux: [] },
 })
 
 const editorConfig = computed(() => normalizeMacroConfig(editor.config))
 const editorMode = computed(() => editorConfig.value.execution_mode)
+
+const VARIANT_TABS = [
+  { value: 'default', label: '通用（默认）' },
+  { value: 'win', label: '🪟 Windows' },
+  { value: 'mac', label: ' macOS' },
+  { value: 'linux', label: '🐧 Linux' },
+]
+
+/* 当前标签页正在编辑的步骤数组（引用切换，供现有步骤编辑器复用） */
+const activeSteps = computed({
+  get: () => (editor.activeVariant === 'default'
+    ? editor.steps
+    : editor.variants[editor.activeVariant]),
+  set: (val) => {
+    if (editor.activeVariant === 'default') editor.steps = val
+    else editor.variants[editor.activeVariant] = val
+  },
+})
 
 function openCreate() {
   editor.visible = true
@@ -139,6 +163,16 @@ function openCreate() {
   editor.name = ''
   editor.steps = [newStep('keyboard_tap')]
   editor.config = defaultMacroConfig()
+  editor.activeVariant = 'default'
+  editor.variants = { win: [], mac: [], linux: [] }
+}
+
+function decorateSteps(src) {
+  return (src || []).map((step) => ({
+    id: Math.random().toString(36).slice(2, 10),
+    repeat: 1,
+    ...step,
+  }))
 }
 
 function openEdit(row) {
@@ -146,12 +180,14 @@ function openEdit(row) {
   editor.id = row.id
   editor.name = row.name
   editor.config = normalizeMacroConfig(row.content_json?.config)
-  const src = row.content_json?.steps || []
-  editor.steps = src.map((step) => ({
-    id: Math.random().toString(36).slice(2, 10),
-    repeat: 1,
-    ...step,
-  }))
+  editor.steps = decorateSteps(row.content_json?.steps)
+  editor.activeVariant = 'default'
+  const saved = row.content_json?.variants || {}
+  editor.variants = {
+    win: decorateSteps(saved.win),
+    mac: decorateSteps(saved.mac),
+    linux: decorateSteps(saved.linux),
+  }
 }
 
 function onEditorModeChange(mode) {
@@ -163,16 +199,16 @@ function onEditorModeChange(mode) {
 }
 
 function addStep(type) {
-  editor.steps.push(newStep(type))
+  activeSteps.value.push(newStep(type))
 }
 
 function removeStep(index) {
-  editor.steps.splice(index, 1)
+  activeSteps.value.splice(index, 1)
 }
 
 function duplicateStep(index) {
-  const step = editor.steps[index]
-  editor.steps.splice(index + 1, 0, {
+  const step = activeSteps.value[index]
+  activeSteps.value.splice(index + 1, 0, {
     ...step,
     id: Math.random().toString(36).slice(2, 10),
   })
@@ -182,10 +218,17 @@ async function save() {
   if (!editor.name.trim()) return ElMessage.warning('请输入宏流程名称')
   if (!editor.steps.length) return ElMessage.warning('宏流程至少需包含一个执行动作')
 
+  const variants = {}
+  for (const platform of ['win', 'mac', 'linux']) {
+    const flat = flattenForSave(editor.variants[platform])
+    if (flat.length) variants[platform] = flat
+  }
+
   const payload = {
     name: editor.name.trim(),
     steps: flattenForSave(editor.steps),
     config: normalizeMacroConfig(editor.config),
+    variants,
   }
 
   if (editor.id == null) {
@@ -216,6 +259,7 @@ const runner = reactive({
   devices: [],
   online: [],
   slots: [],
+  hostMeta: [],       // 主机平台标记：addr → platform
   results: null,
   busy: false,
 })
@@ -233,6 +277,7 @@ async function loadSlotsForRunner() {
   if (!runner.deviceUuid || runnerMode.value !== 'ble_targeted') {
     runner.slots = []
     runner.selectedSlots = []
+    runner.hostMeta = []
     return
   }
   try {
@@ -240,7 +285,26 @@ async function loadSlotsForRunner() {
   } catch {
     runner.slots = []
   }
+  try {
+    runner.hostMeta = (await commandsApi.listHostMeta(runner.deviceUuid)) || []
+  } catch {
+    runner.hostMeta = []
+  }
   runner.selectedSlots = runner.slots.length ? [runner.slots[0].slot_index] : []
+}
+
+/* 槽位对应主机的平台（未标记返回 ''） */
+function slotPlatform(slot) {
+  const row = runner.hostMeta.find((m) => m.addr === slot.addr)
+  return row?.platform || ''
+}
+
+/* 按平台标记选取该槽位应使用的宏步骤 */
+function stepsForSlot(slot) {
+  const content = runner.macro?.content_json || {}
+  const platform = slotPlatform(slot)
+  const variant = platform ? content.variants?.[platform] : null
+  return (variant && variant.length) ? variant : (content.steps || [])
 }
 
 async function openRun(row) {
@@ -300,14 +364,44 @@ async function doRun() {
       return ElMessage.warning('请至少勾选一个目标主机 Slot 槽位')
     }
 
-    const resp = await commandsApi.send(runner.deviceUuid, {
-      slots: [...runner.selectedSlots],
-      action,
-      require_connected: runnerConfig.value.require_connected,
-      switch_timeout_s: runnerConfig.value.switch_timeout_s,
-      action_timeout_ms: runnerConfig.value.action_timeout_ms,
-    })
-    runner.results = resp.results || []
+    // 按平台变体分组：同组槽位使用同一份 steps，一次 send 下发；
+    // 未标记平台或无匹配变体的槽位都使用通用 steps
+    const slotRows = runner.selectedSlots
+      .map((idx) => runner.slots.find((s) => s.slot_index === idx))
+      .filter(Boolean)
+    const groups = new Map() // platform -> slots[]
+    for (const slot of slotRows) {
+      const platform = slotPlatform(slot)
+      if (!groups.has(platform)) groups.set(platform, [])
+      groups.get(platform).push(slot)
+    }
+
+    const variantUsed = new Map() // slot_index -> variant label
+    const allResults = []
+    for (const [platform, slots] of groups) {
+      const content = runner.macro?.content_json || {}
+      const variant = platform ? content.variants?.[platform] : null
+      const useVariant = !!(variant && variant.length)
+      const label = useVariant ? `${platform} 变体` : '通用配置'
+      for (const slot of slots) variantUsed.set(slot.slot_index, label)
+
+      const groupAction = {
+        type: 'macro',
+        steps: useVariant ? variant : (content.steps || []),
+      }
+      const resp = await commandsApi.send(runner.deviceUuid, {
+        slots: slots.map((s) => s.slot_index),
+        action: groupAction,
+        require_connected: runnerConfig.value.require_connected,
+        switch_timeout_s: runnerConfig.value.switch_timeout_s,
+        action_timeout_ms: runnerConfig.value.action_timeout_ms,
+      })
+      allResults.push(...(resp.results || []))
+    }
+    runner.results = allResults.map((item) => ({
+      ...item,
+      variant: variantUsed.get(item.slot_index) || '通用配置',
+    }))
     formatRunnerResults(runner.results)
   } finally {
     runner.busy = false
@@ -500,14 +594,39 @@ const previewJson = computed(() => JSON.stringify({
           <!-- Step Pipeline Droppable -->
           <div class="pipeline-stream">
             <div class="stream-header">
-              <span class="stream-title">动作执行流水线 ({{ editor.steps.length }} 步)</span>
+              <span class="stream-title">
+                动作执行流水线
+                <el-tag size="small" :type="editor.activeVariant === 'default' ? 'info' : 'warning'" style="margin-left: 6px">
+                  {{ VARIANT_TABS.find(t => t.value === editor.activeVariant)?.label }}
+                </el-tag>
+                ({{ activeSteps.length }} 步)
+              </span>
               <span class="stream-hint">可直接拖拽左侧句柄上下重排步骤</span>
             </div>
 
-            <el-empty v-if="!editor.steps.length" description="流水线为空，点击左侧动作按钮添加节点" :image-size="70" />
+            <el-tabs v-model="editor.activeVariant" class="variant-tabs">
+              <el-tab-pane
+                v-for="tab in VARIANT_TABS"
+                :key="tab.value"
+                :name="tab.value"
+              >
+                <template #label>
+                  {{ tab.label }}
+                  <el-tag v-if="tab.value !== 'default' && editor.variants[tab.value].length" size="small" type="success" style="margin-left: 2px">
+                    {{ editor.variants[tab.value].length }} 步
+                  </el-tag>
+                </template>
+              </el-tab-pane>
+            </el-tabs>
+            <div v-if="editor.activeVariant !== 'default'" class="variant-note">
+              此变体仅在目标主机标记为「{{ VARIANT_TABS.find(t => t.value === editor.activeVariant)?.label }}」时使用；
+              步骤为空则回退通用配置。主机平台在 设备设置 → 蓝牙 → 配对列表 中标记。
+            </div>
+
+            <el-empty v-if="!activeSteps.length" description="流水线为空，点击左侧动作按钮添加节点" :image-size="70" />
             <draggable
               v-else
-              v-model="editor.steps"
+              v-model="activeSteps"
               item-key="id"
               handle=".drag-handle"
               animation="200"
@@ -657,8 +776,12 @@ const previewJson = computed(() => JSON.stringify({
               class="slot-check-card"
             >
               Slot #{{ slot.slot_index }} ({{ slot.name || slot.addr }})
+              <el-tag v-if="slotPlatform(slot)" size="small" style="margin-left: 4px">{{ slotPlatform(slot) }}</el-tag>
             </el-checkbox>
           </el-checkbox-group>
+          <div v-if="runner.slots.length && (runner.macro?.content_json?.variants || false)" class="text-muted" style="font-size: 12px; margin-top: 4px">
+            此宏含平台变体：将按各槽位主机的平台标记自动选取对应配置（未标记用通用配置）。
+          </div>
         </div>
 
         <!-- Execution Results Table -->
@@ -670,6 +793,13 @@ const previewJson = computed(() => JSON.stringify({
             </el-table-column>
             <el-table-column label="目标主机">
               <template #default="{ row }">{{ row.name || row.addr || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="使用配置" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.variant && row.variant !== '通用配置' ? 'warning' : 'info'" size="small">
+                  {{ row.variant || '通用配置' }}
+                </el-tag>
+              </template>
             </el-table-column>
             <el-table-column label="状态" width="100">
               <template #default="{ row }">
@@ -1255,5 +1385,24 @@ const previewJson = computed(() => JSON.stringify({
   color: #b91c1c;
   background: #fee2e2;
   border: 1px solid #fecaca;
+}
+
+/* 平台变体标签页 */
+.variant-tabs {
+  margin-bottom: 4px;
+}
+
+.variant-tabs :deep(.el-tabs__header) {
+  margin-bottom: 6px;
+}
+
+.variant-note {
+  font-size: 12px;
+  color: var(--text-secondary, #909399);
+  background: rgba(230, 162, 60, 0.08);
+  border: 1px dashed #e6a23c;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
 }
 </style>

@@ -114,6 +114,37 @@ async function loadBleInfo(silent = true) {
 async function loadBonds(silent = true) {
   const r = await call(() => commandsApi.bleBonds(props.deviceUuid), 'BLE 配对列表', { silent })
   bleBonds.value = r?.bonds || (Array.isArray(r) ? r : [])
+  loadHostMeta(true)
+}
+
+/* 主机平台标记（win/mac/linux）：存服务端 DeviceHostMeta，按地址关联，
+ * 宏的平台变体与控制台快捷键适配都读这里 */
+const hostMeta = ref([])
+
+async function loadHostMeta(silent = true) {
+  try {
+    hostMeta.value = await commandsApi.listHostMeta(props.deviceUuid)
+  } catch {
+    if (!silent) ElMessage.warning('主机标记加载失败')
+  }
+}
+
+function platformOf(addr) {
+  const row = hostMeta.value.find((m) => m.addr === fmtAddr(addr))
+  return row?.platform || ''
+}
+
+async function setPlatform(bondRow, platform) {
+  try {
+    await commandsApi.putHostMeta(props.deviceUuid, fmtAddr(bondRow.addr), {
+      platform,
+      addr_type: bondRow.addr_type ?? 0,
+    })
+    await loadHostMeta(true)
+    ElMessage.success(platform ? `已标记为 ${platform}` : '已清除平台标记')
+  } catch {
+    ElMessage.error('平台标记保存失败')
+  }
 }
 
 async function doUnpair(b) {
@@ -428,6 +459,22 @@ watch(() => props.modelValue, (v) => {
                 <el-table-column label="MAC 地址">
                   <template #default="{ row }">
                     <code class="mac-code">{{ fmtAddr(row.addr) }}</code>
+                    <el-tag v-if="row.connected" size="small" type="success" style="margin-left: 6px">在线</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="平台" width="130">
+                  <template #default="{ row }">
+                    <el-select
+                      :model-value="platformOf(row.addr)"
+                      size="small"
+                      style="width: 110px"
+                      @change="(val) => setPlatform(row, val)"
+                    >
+                      <el-option label="未标记" value="" />
+                      <el-option label="🪟 Windows" value="win" />
+                      <el-option label=" macOS" value="mac" />
+                      <el-option label="🐧 Linux" value="linux" />
+                    </el-select>
                   </template>
                 </el-table-column>
                 <el-table-column prop="addr_type" label="地址类型" width="90" />

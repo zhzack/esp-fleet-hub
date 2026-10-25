@@ -30,6 +30,10 @@ export const commandsApi = {
   putSlot(uuid, idx, body)           { return http.put(`${base(uuid)}/slots/${idx}`, body) },
   deleteSlot(uuid, idx)              { return http.delete(`${base(uuid)}/slots/${idx}`) },
 
+  // 主机平台标记（win/mac/linux，按蓝牙地址，供宏平台变体/快捷键适配）
+  listHostMeta(uuid)                 { return http.get(`${base(uuid)}/host-meta`) },
+  putHostMeta(uuid, addr, body)      { return http.put(`${base(uuid)}/host-meta/${encodeURIComponent(addr)}`, body) },
+
   // 多目标编排发送
   send(uuid, body)                   { return http.post(`${base(uuid)}/send`, body, { timeout: 30000 }) },
 

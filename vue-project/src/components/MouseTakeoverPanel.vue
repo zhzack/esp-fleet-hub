@@ -16,6 +16,8 @@ import { useAuthStore } from '@/stores/auth'
 const props = defineProps({
   deviceUuid: { type: String, default: '' },
   deviceOnline: { type: Boolean, default: false },
+  // 目标主机平台（''=未标记 / win / mac / linux）：驱动系统组合键按钮组
+  platform: { type: String, default: '' },
 })
 
 const auth = useAuthStore()
@@ -65,43 +67,37 @@ const surfaceRef = ref(null)
 
 /* 系统组合键按钮：物理 Win / Alt+Tab 会被控制端操作系统拦截（弹开始菜单/
  * 切窗口），浏览器根本收不到，只能用按钮把序列直接下发。修饰键经固件
- * 按住状态机携带：先 down 修饰键，再 down/up 主键，最后 up 修饰键。 */
-const COMBO_KEYS = [
-  {
-    label: 'Win / Cmd 键',
-    steps: [
-      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 80 },
-      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
-    ],
-  },
-  {
-    label: 'Cmd+Tab 切应用',
-    steps: [
-      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 50 },
-      { t: 'keyboard_down', key: 'KEY_TAB', d: 100 },
-      { t: 'keyboard_up', key: 'KEY_TAB', d: 50 },
-      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
-    ],
-  },
-  {
-    label: 'Alt+Tab 切窗口',
-    steps: [
-      { t: 'keyboard_down', key: 'KEY_LEFTALT', d: 50 },
-      { t: 'keyboard_down', key: 'KEY_TAB', d: 100 },
-      { t: 'keyboard_up', key: 'KEY_TAB', d: 50 },
-      { t: 'keyboard_up', key: 'KEY_LEFTALT', d: 40 },
-    ],
-  },
-  {
-    label: 'Cmd+Space',
-    steps: [
-      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 50 },
-      { t: 'keyboard_down', key: 'KEY_SPACE', d: 80 },
-      { t: 'keyboard_up', key: 'KEY_SPACE', d: 50 },
-      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
-    ],
-  },
+ * 按住状态机携带：先 down 修饰键，再 down/up 主键，最后 up 修饰键。
+ * 按目标主机平台标记（props.platform）切换按钮组；未标记显示通用双语组。 */
+const seq = (...keys) => {
+  // keys: [['down','KEY_X',50], ...] → steps
+  return keys.map(([t, key, d]) => ({ t: `keyboard_${t}`, key, d }))
+}
+
+const COMBO_GENERIC = [
+  { label: 'Win / Cmd 键', steps: seq(['down', 'KEY_LEFTGUI', 80], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Cmd+Tab 切应用', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_TAB', 100], ['up', 'KEY_TAB', 50], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Alt+Tab 切窗口', steps: seq(['down', 'KEY_LEFTALT', 50], ['down', 'KEY_TAB', 100], ['up', 'KEY_TAB', 50], ['up', 'KEY_LEFTALT', 40]) },
+  { label: 'Cmd+Space', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_SPACE', 80], ['up', 'KEY_SPACE', 50], ['up', 'KEY_LEFTGUI', 40]) },
 ]
+const COMBO_WIN = [
+  { label: 'Win 键', steps: seq(['down', 'KEY_LEFTGUI', 80], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Win+Tab 任务视图', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_TAB', 100], ['up', 'KEY_TAB', 50], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Alt+Tab 切窗口', steps: seq(['down', 'KEY_LEFTALT', 50], ['down', 'KEY_TAB', 100], ['up', 'KEY_TAB', 50], ['up', 'KEY_LEFTALT', 40]) },
+  { label: 'Win+D 显示桌面', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_D', 80], ['up', 'KEY_D', 50], ['up', 'KEY_LEFTGUI', 40]) },
+]
+const COMBO_MAC = [
+  { label: 'Cmd 键', steps: seq(['down', 'KEY_LEFTGUI', 80], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Cmd+Tab 切应用', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_TAB', 100], ['up', 'KEY_TAB', 50], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: 'Cmd+Space 聚焦搜索', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_SPACE', 80], ['up', 'KEY_SPACE', 50], ['up', 'KEY_LEFTGUI', 40]) },
+  { label: '桌面 ←/→ 切换', steps: seq(['down', 'KEY_LEFTGUI', 50], ['down', 'KEY_LEFTCTRL', 50], ['down', 'KEY_LEFT', 100], ['up', 'KEY_LEFT', 50], ['up', 'KEY_LEFTCTRL', 40], ['up', 'KEY_LEFTGUI', 40]) },
+]
+
+const COMBO_KEYS = computed(() => {
+  if (props.platform === 'win') return COMBO_WIN
+  if (props.platform === 'mac') return COMBO_MAC
+  return COMBO_GENERIC
+})
 
 async function sendCombo(combo) {
   if (sendingCombo.value || !canControl.value) return
