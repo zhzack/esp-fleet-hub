@@ -280,7 +280,7 @@ static const struct ble_gatt_svc_def GATT_SERVICES[] = {
 static void start_advertising(void);
 static void schedule_advertising_retry(uint32_t delay_ms);
 static int ensure_advertising_fields(void);
-static void mouse_flush_locked(void);
+static void mouse_flush_locked(bool force);
 
 /* NimBLE config store 的入口函数（IDF 移植未纳入公共头文件，参照官方
  * bleprph 示例前置声明）：挂载 NVS 持久化 store 回调并装载历史配对密钥 */
@@ -489,16 +489,18 @@ static void set_mouse_report(uint8_t buttons, int8_t dx, int8_t dy,
     s_mouse_report[4] = (uint8_t)pan;
 }
 
-/* ---------- 鼠标报告合并（连接间隔背压下零丢失） ----------
+/* ---------- 鼠标报告合并与节拍 ----------
  * BLE 每 1 个连接间隔只能发 1 个 notification（macOS HID 通常 15~30ms，
- * 即 33~66 报告/s），前端 10ms 冲刷 ~100 包/s 灌入；此前 move/scroll
- * 直接 notify 无积累，NimBLE mbuf 池打满（ENOMEM）后新报告被丢弃——
- * 表现为移动量凭空丢失、光标跟不上手。对策：增量累积进 pending 缓冲，
- * 每次调用与 10ms 排空定时器取 clamp(±127) 发送、余量保留；mbuf 满
- * (ENOMEM) 时本份不发、下轮重试，与连接间隔自然匹配，零移动量丢失。
- * 注意不能用 NOTIFY_TX 事件做发送完成节流——本 NimBLE 版本该事件在
- * notify 入队时同步回调（非空口完成），置忙后事件已跑完，标记永久
- * 卡死（真机表现为鼠标只动一帧即冻结，已踩坑验证）。
+ * 即 33~66 报告/s），前端 10ms 冲刷 ~100 包/s 灌入。设计要点：
+ * ① 位移流按 MOUSE_PACING_MS 节拍发送，发后清空 dx/dy 积压——超速部分
+ *    丢弃（真实鼠标的编码器也不排队）。若把超速部分结转，积压随持续
+ *    移动无界增长，"零丢失"退化为光标越用越滞后（真机已复现）。
+ * ② 按键事件（down/up）旁路节拍立即发送：移动流打满 mbuf 池期间若无
+ *    旁路，按下/抬起可能都赶不上任何一次成功发送，点击凭空消失。
+ * ③ 滚轮是事件流（丢步 = 丢滚动），结转剩余步数不丢弃。
+ * ④ 不能用 NOTIFY_TX 事件做发送完成节流——本 NimBLE 版本该事件在
+ *    notify 入队时同步回调（非空口完成），置忙后事件已跑完，标记永久
+ *    卡死（真机表现为鼠标只动一帧即冻结，已踩坑验证）。
  * s_mouse_drain_timer 定义于文件头部全局区。 */
 
 static int16_t clamp8i(int16_t v)
@@ -506,7 +508,14 @@ static int16_t clamp8i(int16_t v)
     return v > 127 ? 127 : (v < -127 ? -127 : v);
 }
 
-static void mouse_flush_locked(void)
+/* 移动流发送节拍：每 MOUSE_PACING_MS 最多 1 份报告（约等于 1 个连接间隔
+ * 一份）。发完即清空 dx/dy 积压——超出单报告容量的部分直接丢弃（与真实
+ * 鼠标一致：编码器不排队），否则积压随移动持续增长，表现为光标越用越滞后。
+ * 滚轮是事件流（丢步会丢滚动），保留跨周期结转。 */
+#define MOUSE_PACING_MS 10
+static TickType_t s_last_mouse_tx_tick;
+
+static void mouse_flush_locked(bool force)
 {
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
@@ -514,12 +523,18 @@ static void mouse_flush_locked(void)
     }
     if (!s_pending_dx && !s_pending_dy && !s_pending_wheel && !s_pending_pan) return;
 
+    TickType_t now = xTaskGetTickCount();
+    if (!force &&
+        (now - s_last_mouse_tx_tick) < pdMS_TO_TICKS(MOUSE_PACING_MS)) return;
+
     int16_t dx = clamp8i(s_pending_dx), dy = clamp8i(s_pending_dy);
     int16_t wv = clamp8i(s_pending_wheel), wh = clamp8i(s_pending_pan);
     set_mouse_report(s_mouse_buttons, (int8_t)dx, (int8_t)dy, (int8_t)wv, (int8_t)wh);
     if (notify_input_report(s_mouse_input_report_handle, s_mouse_report,
                             sizeof(s_mouse_report)) == 0) {
-        s_pending_dx -= dx; s_pending_dy -= dy;
+        s_last_mouse_tx_tick = now;
+        /* 位移增量：发即弃余（有界延迟）；滚轮：结转剩余步数 */
+        s_pending_dx = 0; s_pending_dy = 0;
         s_pending_wheel -= wv; s_pending_pan -= wh;
     }
 }
@@ -528,7 +543,7 @@ static void mouse_drain_timer_cb(TimerHandle_t t)
 {
     (void)t;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    mouse_flush_locked();
+    mouse_flush_locked(false);
     xSemaphoreGive(s_lock);
 }
 
@@ -571,7 +586,7 @@ void hid_ble_mouse_move(int8_t dx, int8_t dy)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_pending_dx += dx;
     s_pending_dy += dy;
-    mouse_flush_locked();
+    mouse_flush_locked(false);
     xSemaphoreGive(s_lock);
 }
 
@@ -582,7 +597,7 @@ void hid_ble_mouse_down(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons |= button;
-    mouse_flush_locked();  /* 按键状态并入下一份报告（连同积压增量） */
+    mouse_flush_locked(true);  /* 按键事件旁路节拍，立即发送（防点击丢失） */
     xSemaphoreGive(s_lock);
 }
 
@@ -593,7 +608,7 @@ void hid_ble_mouse_up(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons &= (uint8_t)~button;
-    mouse_flush_locked();
+    mouse_flush_locked(true);
     xSemaphoreGive(s_lock);
 }
 
@@ -613,7 +628,7 @@ void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_pending_wheel += vertical;
     s_pending_pan += horizontal;
-    mouse_flush_locked();
+    mouse_flush_locked(false);
     xSemaphoreGive(s_lock);
 }
 
