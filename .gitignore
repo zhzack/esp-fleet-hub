@@ -13,3 +13,6 @@ clash-cross-platform/
 uploads/
 .env
 setup_mac_ssh.ps1
+
+# ZCode 会话缓存
+.zcode/

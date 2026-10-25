@@ -1,8 +1,8 @@
 # HID Gateway 项目交付与交接文档 (Project Handover Document)
 
 > **交付对象**：接手本项目的后续 AI Agent 或研发工程师  
-> **更新时间**：2026-10-20  
-> **当前状态**：后端服务正常运行中、ESP32 硬件已在线连入、前端已编译上线、端到端链路验证打通。
+> **更新时间**：2026-10-26  
+> **当前状态**：全链路稳定运行——后端 + 前端 + ESP32（BLE 多连接固件）+ Mac 受控机均已打通；蓝牙配对/断连/鼠标流控/组合键/点击丢失等历史问题全部修复（详见第三节）；自动化测试 56 用例全绿。
 
 ---
 
@@ -47,8 +47,9 @@
   - 启动命令：`.\\.venv\\Scripts\\python -m uvicorn app.main:app --host 192.168.68.159 --port 8000`
   - **端口 8000 冲突陷阱（2026-10-25）**：微信（Weixin.exe）会以 `Bound`（bind 未 listen）状态占住 `0.0.0.0:8000`，导致 `--host 0.0.0.0` 启动报 `[winerror 10048]`；通配绑定被挡但具体 IP 绑定不受影响，故绑定 `192.168.68.159`。不要起两个实例分别绑 127.0.0.1 / LAN IP——`device_registry` / `ack_tracker` 是进程内存态，会脑裂；本机访问前端/接口也走 `http://192.168.68.159:8000/`。
   - 服务端局域网 IP：`192.168.68.159`
-- **前端托管**：由 FastAPI 直接接管 `vue-project/dist`，访问 `http://127.0.0.1:8000/` 即是最新编译的前端。
-- **数据库**：`app.db`（SQLite），已全部拉齐模型结构。
+- **前端托管**：由 FastAPI 直接接管 `vue-project/dist`，访问 `http://192.168.68.159:8000/` 即是最新编译的前端（注意用局域网 IP，勿用 127.0.0.1，见上方端口陷阱）。
+- **数据库**：`app.db`（SQLite，WAL 模式），已全部拉齐模型结构（含 `device_host_meta` 主机平台标记表）。
+- **受控目标机**：Mac（macOS 27，`192.168.68.97`，SSH `greyblue/zzzz`，设备清单见 [docs/devices.md](docs/devices.md)）——已配对并标记平台 `mac`；局域网另有 fnOS NAS 与阿里云 ECS（连通性实测记录见同文件）。
 - **内置测试账号**：
   - 管理员：`admin` / `admin123` (角色：`admin`)
   - 普通控制员：`alice` / `secret123` (角色：`user`)
@@ -57,9 +58,11 @@
 - **硬件芯片**：ESP32-S3 (8MB PSRAM, 16MB Flash)
 - **本地连接端口**：`COM5`（板载 CH343 USB-TTL，波特率 `115200` 串口日志 / `921600` 烧录）
 - **Wi-Fi 连接**：已连接至路由器（SSID: `1`），芯片分配 IP: `192.168.68.142`
-- **长连接链路**：已通过 WebSocket 连入 `ws://192.168.68.159:8000/ws/device`
+- **长连接链路**：已通过 WebSocket 连入 `ws://192.168.68.159:8000/ws/device`（HMAC 挑战-应答鉴权）
 - **设备标识**：`esp32_001`（状态：`online`，声明能力：`["ble_keyboard", "ble_mouse"]`）
-- **当前传输模式**：`usb`（显式 `transport.set` 已持久化到 NVS，重启/OTA 后不丢；通过 `GET /api/v2/devices/esp32_001/transport` 可实时确认）
+- **当前传输模式**：`auto`（USB 挂载走 USB，否则 BLE；持久化 NVS，重启/OTA 不丢；`GET /api/v2/devices/esp32_001/transport` 实时确认）
+- **当前 BLE 连接**：Mac 主机 `32:F4:7F:E5:11:D0`（连接间隔 15ms，节拍 66.67fps 自适应）；支持最多 3 台主机同时连接（镜像广播，连接保持时持续广播可被新主机搜到）
+- **固件版本**：跟随 git commit hash 自动生成（`git describe`，无 tag 时为短哈希）；OTA 升级走固件管理页一键推送（健康自检 + sha256 校验 + 90s 自动回滚三重保护）
 
 ---
 
@@ -137,9 +140,15 @@
 
 ## 四、 遗留关键问题与接手 Agent 任务指引 (Next Steps)
 
-> **状态更新（2026-10-25 接手日）**：下方蓝牙断连问题的**固件端根治已落地并 OTA 上机**（固件 `7af52b0`，见第三节记录）——配对密钥已持久化 NVS + 重配对自动清理旧 bond。剩余动作只有用户侧一次性操作：受控电脑删除旧配对后重新配对一次，此后重启应自动重连。本节保留原分析供追溯。
+> **状态更新（2026-10-26）**：本节原列的蓝牙断连问题**已彻底解决并真机闭环**——配对密钥 NVS 持久化（`a286d1c`）+ macOS 强制加密配对修复（`13fefbc`）+ 多连接镜像广播（`05e22ad`）；Mac 重启后 3 秒自动重连、bond 不丢。原分析保留在下方供追溯。
+>
+> **当前真正的遗留事项**（按优先级）：
+> 1. **多连接单台定向控制**：现语义为镜像广播（所有主机收相同输入）；"只发给某一台"需在 action 协议加目标寻址字段（executor/hid_ble 预研已做完，改动路径清晰）。
+> 2. **第二台主机多连接实测**：固件已支持 3 台，但仅 Mac 单台真机验证过；控制端 Windows 有 RZ616 蓝牙适配器（开关关闭未擅动），开蓝牙搜 `esp32_001` 配对即可验证。
+> 3. **键盘状态机两份实现合并**：hid_usb/hid_ble 的按住状态机逻辑重复约 30 行，值得抽 `hid_kbd_common.c`（注入发送回调）；鼠标积累骨架两边背压来源不同，不建议强行合并。
+> 4. **git 未推送远端**：本轮全部 commit 在本地 `blue_hid` 分支；`.env` 历史密钥轮换已完成但 git 历史未清洗（filter-repo 视需要）。
 
-当前最核心的待解决事项是**受控电脑连接 ESP32 蓝牙时的自动断连问题**：
+当前最核心的待解决事项是**受控电脑连接 ESP32 蓝牙时的自动断连问题**（已解决，见上）：
 
 ### 1. 现象分析：蓝牙反复自动连接与断开 (Bluetooth Flapping Loop)
 - **原因机理**：
@@ -178,3 +187,14 @@ $env:IDF_TOOLS_PATH="C:\Users\zz101\esp"; $env:IDF_PYTHON_ENV_PATH="C:\Users\zz1
 .\.venv\Scripts\python ble_hid/flash.py --port COM5 --no-monitor
 #    设备在线时优先走 OTA（无需拔线）：admin 上传固件后 POST /api/v2/firmwares/{id}/push
 ```
+
+### 调试与远程验证工具速查（详见第三节各条目）
+
+| 场景 | 工具 | 用法 |
+|---|---|---|
+| 抓设备串口日志 | `tools/serial_capture.py` | `python tools/serial_capture.py [秒]`（COM5，open 后拉低 dtr/rts） |
+| Mac 光标位置探针 | `/tmp/blefix/cursor`（Mac 上） | SSH 执行，返回 `x y`——验证 HID 移动无需用户在场 |
+| Mac 按键/点击对账 | `tools/clickcount.m` → Mac `/tmp/blefix/clickcount` | 系统计数器 API，免授权精确计数（对账首选） |
+| BLE 广播扫描（Windows） | `bleak` 库 | venv 已装；需控制端蓝牙已开启 |
+| 固件 MSYSTEM 编译陷阱 | 见第三节 | PowerShell 内先 `Remove-Item Env:\MSYSTEM` |
+
