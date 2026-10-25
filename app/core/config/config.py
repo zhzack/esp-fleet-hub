@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_EXPIRE_MINUTES: int = Field(default=1440)
 
+    # --- 设备 WS 鉴权：预共享密钥（HMAC-SHA256 挑战-应答）。
+    # 为空 = 鉴权关闭（兼容旧部署）；非空 = 设备注册须完成挑战应答。 ---
+    DEVICE_SHARED_SECRET: str = Field(default="")
+
     # --- 队列后端：memory | redis ---
     QUEUE_BACKEND: str = Field(default="memory")
 

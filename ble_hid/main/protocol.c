@@ -224,6 +224,16 @@ void protocol_feed(const char *data, int len)
         return;
     }
 
+    /* 注册鉴权挑战：转交 ws_client 计算 HMAC 并重新 register */
+    if (!strcmp(type, "auth_challenge")) {
+        const cJSON *jn = cJSON_GetObjectItem(payload, "nonce");
+        if (cJSON_IsString(jn) && jn->valuestring[0]) {
+            ws_client_handle_auth_challenge(jn->valuestring);
+        }
+        cJSON_Delete(root);
+        return;
+    }
+
     if (msg_id && dedup_seen(msg_id)) {
         ESP_LOGW(TAG, "dup msg_id %s ignored", msg_id);
         if (need_ack) ws_client_send(protocol_make_ack(msg_id, true, 0, NULL, NULL));

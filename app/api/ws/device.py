@@ -3,7 +3,10 @@
 协议见 makedown/hid_gateway_protocol_v_2_design.md（V2 envelope）。
 """
 import asyncio
+import hashlib
+import hmac
 import json
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -11,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 
+from app.core.config.config import settings
 from app.core.logger.logger import logger
 from app.database.crud import device as crud_device
 from app.database.session import SessionLocal
@@ -58,6 +62,8 @@ async def device_ws(websocket: WebSocket):
 
     db = _new_db()
 
+    auth_nonce_issued: str | None = None  # 本连接待应答的设备鉴权 nonce
+
     async def _sender_loop(dev_uuid: str):
         """消费 queue，把 envelope 发给设备。"""
         while True:
@@ -104,6 +110,43 @@ async def device_ws(websocket: WebSocket):
                     await websocket.send_json(_error_env(msg_id, "E004", "missing device_id"))
                     await websocket.close(code=1008)
                     break
+
+                # --- 设备鉴权（HMAC-SHA256 挑战-应答，防重放） ---
+                shared_secret = settings.DEVICE_SHARED_SECRET
+                if shared_secret:
+                    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+                    if not auth.get("proof"):
+                        # 首次 register：下发 nonce 挑战，暂不注册
+                        auth_nonce_issued = secrets.token_hex(16)
+                        await websocket.send_json({
+                            "header": {
+                                "msg_id": str(uuid.uuid4()),
+                                "ref_msg_id": msg_id,
+                                "type": "auth_challenge",
+                                "timestamp": int(datetime.now(timezone.utc).timestamp()),
+                            },
+                            "payload": {"nonce": auth_nonce_issued},
+                        })
+                        continue
+                    # 携带应答：校验 nonce 与 HMAC
+                    expected = hmac.new(
+                        shared_secret.encode(),
+                        str(auth.get("nonce", "")).encode(),
+                        hashlib.sha256,
+                    ).hexdigest()
+                    proof_ok = (
+                        auth.get("nonce") == auth_nonce_issued
+                        and hmac.compare_digest(expected, str(auth.get("proof", "")))
+                    )
+                    auth_nonce_issued = None
+                    if not proof_ok:
+                        logger.warning(
+                            f"[ws/device] auth failed for {device_uuid}, closing"
+                        )
+                        await websocket.send_json(_error_env(msg_id, "E401", "device auth failed"))
+                        await websocket.close(code=4401)
+                        break
+
                 # 同一 device 重连：先把旧连接踢掉，避免两路并存导致 ack 路由错乱
                 old_ws = device_registry.get(device_uuid)
                 if old_ws is not None and old_ws is not websocket:

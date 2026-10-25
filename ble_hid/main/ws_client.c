@@ -8,7 +8,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "cJSON.h"
+#include "mbedtls/md.h"
 
+#include "app_config.h"
 #include "protocol.h"
 
 static const char *TAG = "ws";
@@ -18,10 +20,25 @@ static QueueHandle_t s_tx_queue;          /* cJSON* envelopes pending send */
 static volatile bool s_online = false;
 static volatile bool s_registered = false;  /* sent register on current TCP session */
 static char s_device_id[64];
+static char s_auth_nonce[65];              /* 服务端下发的挑战 nonce（一次性） */
 
 static void send_register(void);
 
 bool ws_client_online(void) { return s_online; }
+
+void ws_client_handle_auth_challenge(const char *nonce)
+{
+    if (!nonce || !nonce[0]) return;
+    const char *secret = app_config_get()->device_secret;
+    if (!secret[0]) {
+        ESP_LOGE(TAG, "server requires auth but no device_secret set — "
+                      "provision via serial CLI: secret <value>, then reboot");
+        return; /* 未配置密钥时不应答，避免 register/challenge 死循环 */
+    }
+    strlcpy(s_auth_nonce, nonce, sizeof s_auth_nonce);
+    ESP_LOGI(TAG, "auth challenge received, re-registering with proof");
+    send_register();
+}
 
 esp_err_t ws_client_send(cJSON *envelope)
 {
@@ -85,6 +102,31 @@ static void send_register(void)
     cJSON *caps = cJSON_AddArrayToObject(pl, "capabilities");
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble_keyboard"));
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble_mouse"));
+
+    /* 注册鉴权：携带挑战 nonce 的 HMAC-SHA256 应答（服务端 auth_challenge 触发） */
+    const char *secret = app_config_get()->device_secret;
+    if (s_auth_nonce[0] && secret[0]) {
+        uint8_t mac[32];
+        mbedtls_md_info_t const *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+        if (mbedtls_md_hmac(info, (const unsigned char *)secret, strlen(secret),
+                            (const unsigned char *)s_auth_nonce, strlen(s_auth_nonce),
+                            mac) == 0) {
+            static const char hex[] = "0123456789abcdef";
+            char proof[65];
+            for (int i = 0; i < 32; i++) {
+                proof[2 * i]     = hex[mac[i] >> 4];
+                proof[2 * i + 1] = hex[mac[i] & 0xF];
+            }
+            proof[64] = '\0';
+            cJSON *auth = cJSON_AddObjectToObject(pl, "auth");
+            cJSON_AddStringToObject(auth, "nonce", s_auth_nonce);
+            cJSON_AddStringToObject(auth, "proof", proof);
+        } else {
+            ESP_LOGE(TAG, "HMAC compute failed");
+        }
+    }
+    s_auth_nonce[0] = '\0'; /* nonce 一次性 */
+
     ws_client_send(env);
     s_online = true;  /* assume online; will be downgraded if register ack errors */
 }

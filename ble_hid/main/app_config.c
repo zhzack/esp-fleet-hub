@@ -55,6 +55,7 @@ static void apply_defaults(app_config_t *cfg)
     cfg->server_port = DEFAULT_SERVER_PORT;
     strlcpy(cfg->device_id,    DEFAULT_DEVICE_ID,    sizeof cfg->device_id);
     cfg->device_token[0] = '\0';
+    cfg->device_secret[0] = '\0';
     cfg->strict_seq   = false;
     cfg->queue_size   = 128;
     cfg->queue_policy = 0;
@@ -91,6 +92,7 @@ esp_err_t app_config_load(app_config_t *cfg)
     cfg->server_port = port;
     nvs_read_str(h, "device_id",    cfg->device_id,    sizeof cfg->device_id);
     nvs_read_str(h, "device_token", cfg->device_token, sizeof cfg->device_token);
+    nvs_read_str(h, "device_secret", cfg->device_secret, sizeof cfg->device_secret);
     uint8_t b = cfg->strict_seq ? 1 : 0;
     nvs_get_u8(h, "strict_seq", &b);
     cfg->strict_seq = b != 0;
@@ -116,6 +118,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
     nvs_set_u16(h, "server_port",  cfg->server_port);
     nvs_set_str(h, "device_id",    cfg->device_id);
     nvs_set_str(h, "device_token", cfg->device_token);
+    nvs_set_str(h, "device_secret", cfg->device_secret);
     nvs_set_u8 (h, "strict_seq",   cfg->strict_seq ? 1 : 0);
     nvs_set_u16(h, "queue_size",   cfg->queue_size);
     nvs_set_u8 (h, "queue_policy", cfg->queue_policy);

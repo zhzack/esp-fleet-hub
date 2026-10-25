@@ -40,6 +40,14 @@ def db_session():
     Base.metadata.drop_all(bind=test_engine)
 
 
+@pytest.fixture(autouse=True)
+def _device_auth_off(monkeypatch):
+    """设备 WS 鉴权默认关闭（本地 .env 可能配置了 DEVICE_SHARED_SECRET，
+    测试默认保持旧行为；鉴权专项测试自行开启）。"""
+    from app.core.config.config import settings
+    monkeypatch.setattr(settings, "DEVICE_SHARED_SECRET", "")
+
+
 @pytest.fixture
 def client():
     """FastAPI TestClient 夹具"""

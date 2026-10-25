@@ -13,6 +13,7 @@ extern "C" {
 #define APP_HOST_LEN        64
 #define APP_SSID_LEN        33
 #define APP_PASS_LEN        65
+#define APP_SECRET_LEN      65
 
 typedef struct {
     char     wifi_ssid[APP_SSID_LEN];
@@ -21,6 +22,7 @@ typedef struct {
     uint16_t server_port;
     char     device_id[APP_DEVICE_ID_LEN];
     char     device_token[APP_TOKEN_LEN];
+    char     device_secret[APP_SECRET_LEN]; /* 设备 WS 注册鉴权（与服务端 DEVICE_SHARED_SECRET 一致） */
     bool     strict_seq;
     uint16_t queue_size;
     uint8_t  queue_policy;   /* 0 = drop_oldest, 1 = reject_new */

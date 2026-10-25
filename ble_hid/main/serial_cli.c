@@ -37,6 +37,7 @@ static void print_help(void)
     printf("  wifi <ssid> [password]   : Connect WiFi and save to NVS\r\n");
     printf("  wifi_scan                : Scan nearby access points (~3s)\r\n");
     printf("  server <host> [port]     : Set WebSocket server, saved to NVS\r\n");
+    printf("  secret [<value>]         : Set/show device auth secret (NVS, no arg = show)\r\n");
     printf("  transport <auto|ble|usb> : Set HID transport (persisted to NVS)\r\n");
     printf("  tap <KEY_NAME>           : Tap a key (e.g. tap KEY_A)\r\n");
     printf("  text <string>            : Type text via HID\r\n");
@@ -222,6 +223,19 @@ static void cmd_transport(char *args)
     cJSON_Delete(pl);
 }
 
+static void cmd_secret(char *args)
+{
+    while (*args == ' ') args++;
+    cJSON *pl = cJSON_CreateObject();
+    if (*args) {
+        cJSON_AddStringToObject(pl, "secret", args);
+    }
+    if (cmd_generic("auth.secret", pl) == 0 && *args) {
+        printf("Secret saved. Reboot ('reboot') to reconnect with auth.\r\n");
+    }
+    cJSON_Delete(pl);
+}
+
 static void cmd_tap(char *args)
 {
     while (*args == ' ') args++;
@@ -316,6 +330,8 @@ static void handle_command(char *line)
         cmd_wifi_scan();
     } else if (!strcmp(cmd, "server")) {
         cmd_server(args);
+    } else if (!strcmp(cmd, "secret")) {
+        cmd_secret(args);
     } else if (!strcmp(cmd, "transport")) {
         cmd_transport(args);
     } else if (!strcmp(cmd, "tap")) {

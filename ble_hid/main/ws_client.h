@@ -17,6 +17,9 @@ esp_err_t ws_client_send(cJSON *envelope);
 /** True when register-ack received. */
 bool ws_client_online(void);
 
+/** 服务端 auth_challenge 处理：计算 HMAC 并携带 proof 重新注册。 */
+void ws_client_handle_auth_challenge(const char *nonce);
+
 #ifdef __cplusplus
 }
 #endif

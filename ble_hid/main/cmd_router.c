@@ -417,6 +417,32 @@ static int h_server_set(const cJSON *p, cJSON *r, char *err, int errlen)
     return 0;
 }
 
+/* `auth.secret` — 设置/查询设备注册鉴权预共享密钥（写 NVS，重启生效须重连 WS）。
+ * secret 参数缺省时仅查询（脱敏显示：前 4 位 + 长度）。 */
+static int h_auth_secret(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    const cJSON *js = cJSON_GetObjectItem(p, "secret");
+    app_config_t cfg;
+    if (app_config_load(&cfg) != ESP_OK) {
+        snprintf(err, errlen, "config load failed"); return 500;
+    }
+    if (cJSON_IsString(js) && js->valuestring[0]) {
+        if (strlen(js->valuestring) >= APP_SECRET_LEN) {
+            snprintf(err, errlen, "secret too long (max %d)", APP_SECRET_LEN - 1); return 400;
+        }
+        strlcpy(cfg.device_secret, js->valuestring, sizeof cfg.device_secret);
+        if (app_config_save(&cfg) != ESP_OK) {
+            snprintf(err, errlen, "config save failed"); return 500;
+        }
+        ESP_LOGI("cmd_router", "device_secret updated (%zu chars)", strlen(cfg.device_secret));
+    }
+    char masked[12];
+    snprintf(masked, sizeof masked, "%.4s...", cfg.device_secret);
+    cJSON_AddStringToObject(r, "secret", masked);
+    cJSON_AddNumberToObject(r, "secret_len", (int)strlen(cfg.device_secret));
+    return 0;
+}
+
 /* `action` — one router type that runs the executor-format payload synchronously.
  * Used by LAN /api/action. Cloud's `action` envelope still goes through the
  * executor queue (handled in protocol.c) and never reaches the router. */
@@ -496,6 +522,7 @@ void cmd_router_init(void)
     cmd_router_register("transport.get",  h_transport_get);
     cmd_router_register("transport.set",  h_transport_set);
     cmd_router_register("server.set",     h_server_set);
+    cmd_router_register("auth.secret",    h_auth_secret);
     cmd_router_register("reboot",         h_reboot);
     cmd_router_register("action",         h_action);
     cmd_router_register("ota.start",      h_ota_start);
