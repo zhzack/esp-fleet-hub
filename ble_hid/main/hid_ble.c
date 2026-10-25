@@ -19,7 +19,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "freertos/timers.h"
 #include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -54,7 +53,6 @@ static uint8_t s_kbd_held_mods = 0;
 
 /* 鼠标增量积压缓冲（连接间隔背压下零丢失，见 mouse_flush_locked） */
 static int16_t s_pending_dx, s_pending_dy, s_pending_wheel, s_pending_pan;
-static TimerHandle_t s_mouse_drain_timer;
 /* 实际连接间隔（1.25ms 单位），0=未知——移动流节拍按它自适应，
  * 即"按每秒能传多少帧定采集频率"：1 个连接间隔最多发 1 个 notification */
 static uint16_t s_conn_itvl_125us;
@@ -522,7 +520,8 @@ static void set_mouse_report(uint8_t buttons, int8_t dx, int8_t dy,
  * ④ 不能用 NOTIFY_TX 事件做发送完成节流——本 NimBLE 版本该事件在
  *    notify 入队时同步回调（非空口完成），置忙后事件已跑完，标记永久
  *    卡死（真机表现为鼠标只动一帧即冻结，已踩坑验证）。
- * s_mouse_drain_timer 定义于文件头部全局区。 */
+ * ⑤ 排空由专用任务 mouse_drain_task 承担（4KB 栈）——不可用软件定时器：
+ *    Tmr Svc 栈仅 3KB，回调里调 notify 会栈溢出崩溃（已踩坑验证）。 */
 
 static int16_t clamp8i(int16_t v)
 {
@@ -570,12 +569,19 @@ static void mouse_flush_locked(bool force)
     }
 }
 
-static void mouse_drain_timer_cb(TimerHandle_t t)
+/* 10ms 周期排空任务。不能用 FreeRTOS 软件定时器：Tmr Svc 栈仅 3KB，
+ * 在其回调里调 ble_gatts_notify_custom 会栈溢出崩溃（真机复现：
+ * "***ERROR*** A stack overflow in task Tmr Svc"，约 10 次通知即触发，
+ * 设备崩溃循环、WS/Mac 反复重连，表现为鼠标死亡）。 */
+static void mouse_drain_task(void *arg)
 {
-    (void)t;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    mouse_flush_locked(false);
-    xSemaphoreGive(s_lock);
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        mouse_flush_locked(false);
+        xSemaphoreGive(s_lock);
+    }
 }
 
 void hid_ble_tap(uint8_t code, uint8_t mods)
@@ -853,10 +859,8 @@ esp_err_t hid_ble_init(const char *device_name)
     strlcpy(s_dev_name, device_name ? device_name : "esp32-hid", sizeof(s_dev_name));
     s_lock = xSemaphoreCreateMutex();
 
-    /* 10ms 周期排空鼠标积压增量（输入停止后余量也能发完） */
-    s_mouse_drain_timer = xTimerCreate("ble_m_drain", pdMS_TO_TICKS(10),
-                                       pdTRUE, NULL, mouse_drain_timer_cb);
-    if (s_mouse_drain_timer) xTimerStart(s_mouse_drain_timer, 0);
+    /* 10ms 周期排空鼠标积压（专用任务，4KB 栈——不可用软件定时器，见任务注释） */
+    xTaskCreate(mouse_drain_task, "ble_m_drain", 4096, NULL, 2, NULL);
 
     esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {
