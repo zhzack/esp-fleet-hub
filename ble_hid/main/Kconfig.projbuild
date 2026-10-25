@@ -29,4 +29,11 @@ menu "ble_hid app config"
         help
             注册时上报给后端的 device_id。
 
+    config APP_OTA_TEST_UNHEALTHY
+        bool "Force OTA health-check to fail (E2E rollback test)"
+        default n
+        help
+            打开后新固件的健康自检永远不通过，OTA 升级后 90s 必定回滚旧分区。
+            仅用于真机验证自动回滚链路，量产构建严禁开启。
+
 endmenu

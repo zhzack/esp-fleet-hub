@@ -20,6 +20,10 @@
 
 #define CLI_BUFFER_SIZE 256
 
+static volatile bool s_activity = false;  /* 收到过完整命令行（OTA 健康自检兜底判据） */
+
+bool serial_cli_activity(void) { return s_activity; }
+
 static void print_banner(void)
 {
     printf("\r\n");
@@ -43,7 +47,7 @@ static void print_help(void)
     printf("  text <string>            : Type text via HID\r\n");
     printf("  move <dx> <dy>           : Move mouse by delta (e.g. move 20 -10)\r\n");
     printf("  click [1|2|4]            : Click mouse button (1=left 2=right 4=mid)\r\n");
-    printf("  ota [status|<url>]       : Show OTA status or upgrade from URL\r\n");
+    printf("  ota [status|<url> [sha256]] : Show OTA status or upgrade (optional sha256)\r\n");
     printf("  reboot                   : Restart the ESP32\r\n\r\n");
 }
 
@@ -297,8 +301,19 @@ static void cmd_ota(char *args)
     if (!*args || !strcmp(args, "status")) {
         cmd_generic("ota.status", NULL);
     } else {
+        char *url = args;
+        char *sep = strchr(args, ' ');
+        char *sha = NULL;
+        if (sep) {
+            *sep = '\0';
+            sha = sep + 1;
+            while (*sha == ' ') sha++;
+        }
         cJSON *pl = cJSON_CreateObject();
-        cJSON_AddStringToObject(pl, "url", args);
+        cJSON_AddStringToObject(pl, "url", url);
+        if (sha && *sha) {
+            cJSON_AddStringToObject(pl, "sha256", sha);
+        }
         if (cmd_generic("ota.start", pl) == 0) {
             printf("OTA task started. Use 'ota status' to view progress.\r\n");
         }
@@ -374,6 +389,7 @@ static void cli_task(void *arg)
             printf("\r\n");
             buf[idx] = '\0';
             if (idx > 0) {
+                s_activity = true;  /* OTA 健康自检兜底判据 */
                 handle_command(buf);
                 idx = 0;
             }

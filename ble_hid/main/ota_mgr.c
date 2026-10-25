@@ -11,14 +11,22 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_app_format.h"
+#include "mbedtls/sha256.h"
+#include "sdkconfig.h"
 
 #include "app_config.h"
 #include "protocol.h"
+#include "serial_cli.h"
 #include "ws_client.h"
 
 static const char *TAG = "ota_mgr";
 
 #define OTA_BUFF_SIZE 2048
+
+/* 健康自检参数：OTA 首启后最长等待 90s；健康判据（WS 在线或串口有活动）
+ * 需连续保持 5s 才 mark valid，避免瞬间抖动误判。 */
+#define OTA_HEALTH_TIMEOUT_S   90
+#define OTA_HEALTH_STABLE_S    5
 
 typedef struct {
     char url[256];
@@ -183,6 +191,14 @@ static void ota_task(void *pvParameter)
     int binary_file_len = 0;
     int last_reported_pct = -1;
 
+    /* 期望 sha256 非空时对下载流做完整性校验（后端 upload 时计算的文件哈希） */
+    const bool want_sha = params->sha256[0] != '\0';
+    mbedtls_sha256_context sha_ctx;
+    if (want_sha) {
+        mbedtls_sha256_init(&sha_ctx);
+        mbedtls_sha256_starts(&sha_ctx, 0);
+    }
+
     while (1) {
         int data_read = esp_http_client_read(client, ota_write_data, OTA_BUFF_SIZE);
         if (data_read < 0) {
@@ -195,6 +211,9 @@ static void ota_task(void *pvParameter)
                 snprintf(s_info.err_msg, sizeof(s_info.err_msg), "esp_ota_write failed: 0x%x", err);
                 s_info.status = OTA_STATUS_FAILED;
                 break;
+            }
+            if (want_sha) {
+                mbedtls_sha256_update(&sha_ctx, (const unsigned char *)ota_write_data, data_read);
             }
             binary_file_len += data_read;
             s_info.bytes_read = binary_file_len;
@@ -249,6 +268,31 @@ static void ota_task(void *pvParameter)
         return;
     }
 
+    /* 下载流 sha256 与期望值比对：不匹配则不切换启动分区，当前固件继续运行 */
+    if (want_sha) {
+        uint8_t digest[32];
+        mbedtls_sha256_finish(&sha_ctx, digest);
+        mbedtls_sha256_free(&sha_ctx);
+        static const char hex[] = "0123456789abcdef";
+        char actual[65];
+        for (int i = 0; i < 32; i++) {
+            actual[2 * i]     = hex[digest[i] >> 4];
+            actual[2 * i + 1] = hex[digest[i] & 0xF];
+        }
+        actual[64] = '\0';
+        if (strcmp(actual, params->sha256) != 0) {
+            snprintf(s_info.err_msg, sizeof(s_info.err_msg),
+                     "sha256 mismatch (expected %.16s..., got %.16s...)", params->sha256, actual);
+            s_info.status = OTA_STATUS_FAILED;
+            ESP_LOGE(TAG, "%s", s_info.err_msg);
+            send_ws_progress("failed", 100, binary_file_len, content_length, s_info.err_msg);
+            s_ota_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
+        ESP_LOGI(TAG, "sha256 verified OK (%.16s...)", actual);
+    }
+
     err = esp_ota_set_boot_partition(update_partition);
     if (err != ESP_OK) {
         snprintf(s_info.err_msg, sizeof(s_info.err_msg), "esp_ota_set_boot_partition failed: 0x%x", err);
@@ -272,6 +316,51 @@ static void ota_task(void *pvParameter)
     vTaskDelete(NULL);
 }
 
+/* ---------- OTA 健康自检（新分区 PENDING_VERIFY 期间） ----------
+ * 背景：CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y 时，OTA 升级后的首次启动
+ * 分区处于 ESP_OTA_IMG_PENDING_VERIFY——必须显式 mark valid，否则下一次
+ * 复位（包括 crash / 看门狗）bootloader 会自动回滚旧分区。
+ * 策略：不再无条件取消回滚，改为等待"健康判据"成立后再确认：
+ *   健康 = WS 注册在线（Wi-Fi + TCP + WS + cJSON 全链路工作）
+ *          或 串口 CLI 有过命令（有人在场，设备可交互）
+ * 判据需连续保持 OTA_HEALTH_STABLE_S 秒；超过 OTA_HEALTH_TIMEOUT_S 仍不
+ * 健康则主动回滚旧分区重启。配置 APP_OTA_TEST_UNHEALTHY=y 可强制不健康
+ * （真机回滚链路验证用）。 */
+static bool health_ok(void)
+{
+#ifdef CONFIG_APP_OTA_TEST_UNHEALTHY
+    return false;
+#else
+    return ws_client_online() || serial_cli_activity();
+#endif
+}
+
+static void ota_health_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGW(TAG, "running partition is PENDING_VERIFY — health check started "
+                  "(stable %ds, timeout %ds)", OTA_HEALTH_STABLE_S, OTA_HEALTH_TIMEOUT_S);
+    int stable = 0;
+    for (int t = 0; t < OTA_HEALTH_TIMEOUT_S; t++) {
+        if (health_ok()) {
+            if (++stable >= OTA_HEALTH_STABLE_S) {
+                esp_ota_mark_app_valid_cancel_rollback();
+                s_info.health = OTA_HEALTH_PASSED;
+                ESP_LOGI(TAG, "health check PASSED (%ds) — app marked valid, rollback cancelled", t);
+                vTaskDelete(NULL);
+                return;
+            }
+        } else {
+            stable = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    s_info.health = OTA_HEALTH_ROLLBACK_TIMEOUT;
+    ESP_LOGE(TAG, "health check TIMEOUT after %ds — rolling back to previous partition",
+             OTA_HEALTH_TIMEOUT_S);
+    esp_ota_mark_app_invalid_rollback_and_reboot();  /* no return */
+}
+
 void ota_mgr_init(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -288,11 +377,20 @@ void ota_mgr_init(void)
         strlcpy(s_info.version, app_desc->version, sizeof(s_info.version));
     }
 
-    // Cancel rollback so this boot is marked successful
-    esp_ota_mark_app_valid_cancel_rollback();
+    /* OTA 首启检测：PENDING_VERIFY 才需要健康自检；其余（线刷 / 已确认）直接有效 */
+    esp_ota_img_states_t state = ESP_OTA_IMG_VALID;
+    esp_err_t st = running ? esp_ota_get_state_partition(running, &state) : ESP_ERR_INVALID_ARG;
+    if (st == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+        s_info.health = OTA_HEALTH_MONITORING;
+        xTaskCreate(ota_health_task, "ota_health", 3072, NULL, 4, NULL);
+    } else {
+        s_info.health = OTA_HEALTH_NOT_NEEDED;
+        /* 非 PENDING_VERIFY 的一次普通启动，取消回滚标记属幂等空操作 */
+        esp_ota_mark_app_valid_cancel_rollback();
+    }
 
-    ESP_LOGI(TAG, "OTA Initialized. Running partition: %s, Next update partition: %s, Version: %s",
-             s_info.running_partition, s_info.target_partition, s_info.version);
+    ESP_LOGI(TAG, "OTA Initialized. Running partition: %s, Next update partition: %s, Version: %s, img_state: %d",
+             s_info.running_partition, s_info.target_partition, s_info.version, (int)state);
 }
 
 esp_err_t ota_mgr_start(const char *url, const char *version, const char *sha256)
@@ -350,6 +448,29 @@ void ota_mgr_build_json(cJSON *dst)
     cJSON_AddStringToObject(dst, "running_partition", s_info.running_partition);
     cJSON_AddStringToObject(dst, "target_partition", s_info.target_partition);
     cJSON_AddStringToObject(dst, "current_version", s_info.version);
+
+    /* 回滚 / 健康自检状态（远程诊断与真机验证用） */
+    const char *health_str = "not_needed";
+    switch (s_info.health) {
+        case OTA_HEALTH_MONITORING:       health_str = "monitoring"; break;
+        case OTA_HEALTH_PASSED:           health_str = "passed"; break;
+        case OTA_HEALTH_ROLLBACK_TIMEOUT: health_str = "rollback_timeout"; break;
+        default:                          health_str = "not_needed"; break;
+    }
+    cJSON_AddStringToObject(dst, "health_check", health_str);
+    {
+        const esp_partition_t *running = esp_ota_get_running_partition();
+        esp_ota_img_states_t st2 = ESP_OTA_IMG_INVALID;
+        const char *rb = "unknown";
+        if (running && esp_ota_get_state_partition(running, &st2) == ESP_OK) {
+            switch (st2) {
+                case ESP_OTA_IMG_VALID:          rb = "valid"; break;
+                case ESP_OTA_IMG_PENDING_VERIFY: rb = "pending_verify"; break;
+                default:                         rb = "other"; break;
+            }
+        }
+        cJSON_AddStringToObject(dst, "rollback_state", rb);
+    }
     if (s_info.err_msg[0]) {
         cJSON_AddStringToObject(dst, "error", s_info.err_msg);
     }
