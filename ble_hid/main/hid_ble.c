@@ -55,6 +55,9 @@ static uint8_t s_kbd_held_mods = 0;
 /* 鼠标增量积压缓冲（连接间隔背压下零丢失，见 mouse_flush_locked） */
 static int16_t s_pending_dx, s_pending_dy, s_pending_wheel, s_pending_pan;
 static TimerHandle_t s_mouse_drain_timer;
+/* 实际连接间隔（1.25ms 单位），0=未知——移动流节拍按它自适应，
+ * 即"按每秒能传多少帧定采集频率"：1 个连接间隔最多发 1 个 notification */
+static uint16_t s_conn_itvl_125us;
 
 #define HID_REPORT_ID_KEYBOARD 1
 #define HID_REPORT_ID_MOUSE 2
@@ -291,6 +294,16 @@ void ble_store_config_init(void);
  * 订阅"的 HID 设备会拒绝建键并陷入重连循环，必须强制加密触发 SMP 配对 */
 void ble_gatts_set_clt_cfg_perm_flags(uint8_t flags);
 
+static void update_conn_itvl(uint16_t conn_handle)
+{
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(conn_handle, &desc) == 0) {
+        s_conn_itvl_125us = desc.conn_itvl;
+        ESP_LOGI(TAG, "conn itvl %.2fms -> mouse pacing %.2f fps",
+                 desc.conn_itvl * 1.25, 1000.0 / (desc.conn_itvl * 1.25));
+    }
+}
+
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
@@ -311,14 +324,22 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 .max_ce_len = 0,
             };
             ble_gap_update_params(s_conn_handle, &want);
+            update_conn_itvl(s_conn_handle);  /* 记录协商前初始间隔 */
         } else {
             s_advertising = false;
             schedule_advertising_retry(150);
         }
         break;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        /* 参数协商完成（我方请求被接受/对端主动更新）：刷新实际间隔与节拍 */
+        if (event->conn_update.status == 0) {
+            update_conn_itvl(event->conn_update.conn_handle);
+        }
+        break;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_conn_itvl_125us = 0;
         s_mouse_buttons = 0;
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         s_kbd_held_code = 0;
@@ -508,12 +529,22 @@ static int16_t clamp8i(int16_t v)
     return v > 127 ? 127 : (v < -127 ? -127 : v);
 }
 
-/* 移动流发送节拍：每 MOUSE_PACING_MS 最多 1 份报告（约等于 1 个连接间隔
- * 一份）。发完即清空 dx/dy 积压——超出单报告容量的部分直接丢弃（与真实
- * 鼠标一致：编码器不排队），否则积压随移动持续增长，表现为光标越用越滞后。
+/* 移动流发送节拍：1 个连接间隔最多 1 份报告——节拍自适应协商出的实际
+ * 连接间隔（即"按每秒能传多少帧定采集频率"，不盲猜）。发完即清空 dx/dy
+ * 积压——超出单报告容量的部分直接丢弃（与真实鼠标一致：编码器不排队），
+ * 否则积压随移动持续增长，表现为光标越用越滞后。
  * 滚轮是事件流（丢步会丢滚动），保留跨周期结转。 */
-#define MOUSE_PACING_MS 10
 static TickType_t s_last_mouse_tx_tick;
+
+static uint32_t mouse_pacing_ms(void)
+{
+    if (s_conn_itvl_125us == 0) return 10;               /* 未知间隔，保守默认 */
+    uint32_t ms = (uint32_t)s_conn_itvl_125us * 125 / 100; /* 1.25ms → ms */
+    if (ms > 8) ms -= 1;                                  /* 留 1ms 余量提高槽位利用率 */
+    if (ms < 7) ms = 7;
+    if (ms > 40) ms = 40;
+    return ms;
+}
 
 static void mouse_flush_locked(bool force)
 {
@@ -525,7 +556,7 @@ static void mouse_flush_locked(bool force)
 
     TickType_t now = xTaskGetTickCount();
     if (!force &&
-        (now - s_last_mouse_tx_tick) < pdMS_TO_TICKS(MOUSE_PACING_MS)) return;
+        (now - s_last_mouse_tx_tick) < pdMS_TO_TICKS(mouse_pacing_ms())) return;
 
     int16_t dx = clamp8i(s_pending_dx), dy = clamp8i(s_pending_dy);
     int16_t wv = clamp8i(s_pending_wheel), wh = clamp8i(s_pending_pan);
