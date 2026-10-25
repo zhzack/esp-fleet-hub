@@ -16,6 +16,12 @@ from app.services.queue import queue_backend
 
 _RETRY_DELAYS_MS = [100, 300, 900]
 
+# 高频流式动作类型：跳过 action_log 落库与 device 表查询。
+# mouse_move / mouse_scroll 以 ~100 包/秒到达，此前每包 2 次 SQLite commit
+# （默认 journal 下每次 fsync 1~15ms）同步阻塞事件循环，流式透传延迟抖动严重。
+# 这些动作是瞬态透传数据，无审计价值，不值得落库。
+_STREAMING_ACTION_TYPES = {"mouse_move", "mouse_scroll"}
+
 
 def _payload_needs_ack(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
@@ -111,21 +117,24 @@ async def deliver_to_device(
 ) -> dict:
     msg_id = str(uuid.uuid4())
     action_type = payload.get("type", "unknown")
-    dev_row = crud_device.get_by_uuid(db, device_uuid)
+    log_action = action_type not in _STREAMING_ACTION_TYPES
+    dev_row = crud_device.get_by_uuid(db, device_uuid) if log_action else None
     device_db_id = dev_row.id if dev_row else None
     wait_for_ack = _payload_needs_ack(payload) if need_ack is None else need_ack
 
-    crud_action_log.create_pending(
-        db,
-        msg_id=msg_id,
-        user_id=user_id,
-        device_id=device_db_id,
-        action_type=action_type,
-        payload=payload,
-    )
+    if log_action:
+        crud_action_log.create_pending(
+            db,
+            msg_id=msg_id,
+            user_id=user_id,
+            device_id=device_db_id,
+            action_type=action_type,
+            payload=payload,
+        )
 
     if not device_registry.is_online(device_uuid):
-        crud_action_log.mark_failed(db, msg_id, code="E002", message="device offline")
+        if log_action:
+            crud_action_log.mark_failed(db, msg_id, code="E002", message="device offline")
         return {
             "msg_id": msg_id,
             "device_id": device_uuid,
@@ -150,7 +159,8 @@ async def deliver_to_device(
             break
         try:
             await queue_backend.push(device_uuid, envelope)
-            crud_action_log.mark_sent(db, msg_id)
+            if log_action:
+                crud_action_log.mark_sent(db, msg_id)
         except Exception as e:
             logger.exception(f"[dispatcher] push failed: {e}")
             last_error = ("E003", "queue push error")
@@ -167,7 +177,8 @@ async def deliver_to_device(
             ack = await ack_tracker.expect(msg_id, timeout=timeout_ms / 1000)
             ack_ok, exec_ms, err_code, err_message = _parse_ack_payload(ack)
             if ack_ok:
-                crud_action_log.mark_acked(db, msg_id, exec_ms)
+                if log_action:
+                    crud_action_log.mark_acked(db, msg_id, exec_ms)
                 return {
                     "msg_id": msg_id,
                     "device_id": device_uuid,
@@ -183,7 +194,8 @@ async def deliver_to_device(
             await asyncio.sleep(_RETRY_DELAYS_MS[attempt] / 1000)
 
     code, message = last_error or ("E006", "retry exhausted")
-    crud_action_log.mark_failed(db, msg_id, code=code, message=message)
+    if log_action:
+        crud_action_log.mark_failed(db, msg_id, code=code, message=message)
     return {
         "msg_id": msg_id,
         "device_id": device_uuid,

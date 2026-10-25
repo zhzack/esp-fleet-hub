@@ -94,12 +94,15 @@ enum {
 static const uint8_t CFG_DESC[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
     /* 手写展开 TUD_HID_DESCRIPTOR(ITF_NUM_HID, 4, false, sizeof(REPORT_DESC), EPNUM_HID, 16, 10)，
-     * 唯一差异：HID 描述符 bCountryCode 0x00 → 0x21 (US)。
+     * 差异一：HID 描述符 bCountryCode 0x00 → 0x21 (US)。
      * macOS 对 country=0 的键盘无法确定布局，会弹"键盘设置助理"（Keyboard Setup
-     * Assistant）要求按键识别；声明为 US 布局后不再触发。字节数与 TUD_HID_DESC_LEN 一致。 */
+     * Assistant）要求按键识别；声明为 US 布局后不再触发。
+     * 差异二：中断端点 bInterval 10ms → 1ms（1000Hz 轮询）。真实鼠标是 1ms；
+     * 10ms 时报告率上限仅 100Hz（127 × 100 = 12,700 counts/s/轴），高 DPI 快速
+     * 甩动直接饱和，且加剧端点忙时的报告丢弃。字节数与 TUD_HID_DESC_LEN 一致。 */
     9, TUSB_DESC_INTERFACE, ITF_NUM_HID, 0, 1, TUSB_CLASS_HID, 0, 0, 4,
     9, HID_DESC_TYPE_HID, 0x11, 0x01, 0x21, 1, HID_DESC_TYPE_REPORT, U16_TO_U8S_LE(sizeof(REPORT_DESC)),
-    7, TUSB_DESC_ENDPOINT, EPNUM_HID, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(16), 10,
+    7, TUSB_DESC_ENDPOINT, EPNUM_HID, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(16), 1,
 #if CONFIG_TINYUSB_CDC_ENABLED
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 5, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_DATA, (0x80 | EPNUM_CDC_DATA), 64),
 #endif
@@ -108,6 +111,54 @@ static const uint8_t CFG_DESC[] = {
 static volatile bool s_mounted = false;
 static char          s_dev_name[32];
 static uint8_t       s_mouse_buttons = 0;
+
+/* ---------- 鼠标报告合并（端点背压下零丢失） ----------
+ * TinyUSB 的 tud_hid_n_report 在端点忙（上一报告尚未被主机轮询走）时
+ * usbd_edpt_claim 失败，新报告被静默丢弃。突发场景（前端 flush(0) 连发 /
+ * Wi-Fi 抖动后集中释放 / 快速甩动 ±127 溢出分片）在同一轮询间隔内到达的
+ * 多个 move 只有第 1 个能发出，其余全丢——表现为光标移动距离小于手的
+ * 实际移动。对策：dx/dy/wheel 增量累积进 pending 缓冲，端点空闲时取
+ * clamp(±127) 发送、余量保留；报告发送完成回调里立即补发剩余部分。
+ * 按键状态变化走 s_buttons_dirty 标记，同样并入下一份报告，杜绝丢点击。 */
+static portMUX_TYPE s_mouse_mux = portMUX_INITIALIZER_UNLOCKED;
+static int32_t      s_pending_dx, s_pending_dy;   /* 移动累积（counts） */
+static int32_t      s_pending_wv, s_pending_wh;   /* 滚轮累积（steps） */
+static bool         s_buttons_dirty;              /* 按键状态待下发 */
+
+static int32_t clamp_axis(int32_t v)
+{
+    return v > 127 ? 127 : (v < -127 ? -127 : v);
+}
+
+/* 尝试把 pending 状态作为一份报告发出（调用方须持有 s_mouse_mux）。
+ * 端点忙则原样保留，等下一次 mouse 动作或 report complete 回调再试。 */
+static void mouse_flush_locked(void)
+{
+    if (!s_mounted || !tud_hid_n_ready(0)) return;
+    int32_t dx = s_pending_dx, dy = s_pending_dy;
+    int32_t wv = s_pending_wv, wh = s_pending_wh;
+    if (!dx && !dy && !wv && !wh && !s_buttons_dirty) return;
+    int32_t cx = clamp_axis(dx), cy = clamp_axis(dy);
+    int32_t cv = clamp_axis(wv), ch = clamp_axis(wh);
+    if (tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons,
+                             (int8_t)cx, (int8_t)cy, (int8_t)cv, (int8_t)ch)) {
+        s_pending_dx = dx - cx;   s_pending_dy = dy - cy;
+        s_pending_wv = wv - cv;   s_pending_wh = wh - ch;
+        s_buttons_dirty = false;
+    }
+    /* 发送失败（claim 竞态）→ 全部留在 pending，不丢数据 */
+}
+
+/* 报告已送达主机 → 端点重新空闲，立即补发 pending（TinyUSB 推荐模式）。
+ * 运行在 TinyUSB 任务上下文，与 exec_task 的写入以 s_mouse_mux 互斥；
+ * 临界区仅覆盖 int32 累积与一次报告提交，微秒级。 */
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len)
+{
+    if (instance != 0 || len < 1 || report[0] != RID_MOUSE) return;
+    taskENTER_CRITICAL(&s_mouse_mux);
+    mouse_flush_locked();
+    taskEXIT_CRITICAL(&s_mouse_mux);
+}
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) { (void)instance; return REPORT_DESC; }
 
@@ -120,7 +171,15 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
 { (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)bufsize; }
 
 void tud_mount_cb  (void) { s_mounted = true;  ESP_LOGI(TAG, "USB mounted"); }
-void tud_umount_cb (void) { s_mounted = false; s_mouse_buttons = 0; ESP_LOGW(TAG, "USB unmounted"); }
+void tud_umount_cb (void) {
+    s_mounted = false;
+    taskENTER_CRITICAL(&s_mouse_mux);
+    s_mouse_buttons = 0;
+    s_pending_dx = s_pending_dy = s_pending_wv = s_pending_wh = 0;
+    s_buttons_dirty = false;
+    taskEXIT_CRITICAL(&s_mouse_mux);
+    ESP_LOGW(TAG, "USB unmounted");
+}
 void tud_suspend_cb(bool remote_wakeup_en) { (void)remote_wakeup_en; s_mounted = false; }
 void tud_resume_cb (void)                  { s_mounted = true; }
 
@@ -175,32 +234,49 @@ void hid_usb_up  (uint8_t code, uint8_t mods) { (void)code; (void)mods; send_kbd
 
 void hid_usb_mouse_move(int8_t dx, int8_t dy)
 {
-    if (!s_mounted) return;
-    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, dx, dy, 0, 0);
+    taskENTER_CRITICAL(&s_mouse_mux);
+    if (s_mounted) {
+        s_pending_dx += dx;
+        s_pending_dy += dy;
+        mouse_flush_locked();
+    }
+    taskEXIT_CRITICAL(&s_mouse_mux);
 }
 void hid_usb_mouse_down(uint8_t button)
 {
-    if (!s_mounted) return;
-    s_mouse_buttons |= (uint8_t)(button & 0x07);
-    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, 0, 0);
+    taskENTER_CRITICAL(&s_mouse_mux);
+    if (s_mounted) {
+        s_mouse_buttons |= (uint8_t)(button & 0x07);
+        s_buttons_dirty = true;
+        mouse_flush_locked();
+    }
+    taskEXIT_CRITICAL(&s_mouse_mux);
 }
 void hid_usb_mouse_up(uint8_t button)
 {
-    if (!s_mounted) return;
-    s_mouse_buttons &= (uint8_t)~(button & 0x07);
-    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, 0, 0);
+    taskENTER_CRITICAL(&s_mouse_mux);
+    if (s_mounted) {
+        s_mouse_buttons &= (uint8_t)~(button & 0x07);
+        s_buttons_dirty = true;
+        mouse_flush_locked();
+    }
+    taskEXIT_CRITICAL(&s_mouse_mux);
 }
 void hid_usb_mouse_click(uint8_t button)
 {
-    if (!s_mounted) return;
     hid_usb_mouse_down(button);
     vTaskDelay(pdMS_TO_TICKS(8));
     hid_usb_mouse_up(button);
 }
 void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal)
 {
-    if (!s_mounted) return;
-    tud_hid_mouse_report(RID_MOUSE, s_mouse_buttons, 0, 0, vertical, horizontal);
+    taskENTER_CRITICAL(&s_mouse_mux);
+    if (s_mounted) {
+        s_pending_wv += vertical;
+        s_pending_wh += horizontal;
+        mouse_flush_locked();
+    }
+    taskEXIT_CRITICAL(&s_mouse_mux);
 }
 
 esp_err_t hid_usb_init(const char *device_name)
