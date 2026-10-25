@@ -14,7 +14,10 @@ int main(int argc, char *argv[])
         long d0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseDown);
         long u0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseUp);
         long m0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventMouseMoved);
-        printf("BASE down=%ld up=%ld moves=%ld\n", d0, u0, m0); fflush(stdout);
+        long k0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown);
+        long ku0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyUp);
+        long f0 = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventFlagsChanged);
+        printf("BASE down=%ld up=%ld moves=%ld keydown=%ld keyup=%ld flags=%ld\n", d0, u0, m0, k0, ku0, f0); fflush(stdout);
 
         NSDate *start = [NSDate date];
         while (-[start timeIntervalSinceNow] < secs) {
@@ -22,13 +25,20 @@ int main(int argc, char *argv[])
             long d = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseDown);
             long u = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseUp);
             long m = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventMouseMoved);
-            printf("STAT +down=%ld +up=%ld +moves=%ld\n", d - d0, u - u0, m - m0);
+            long k = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown);
+            long ku = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyUp);
+            long f = CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventFlagsChanged);
+            printf("STAT +down=%ld +up=%ld +moves=%ld +keydown=%ld +keyup=%ld +flags=%ld\n",
+                   d - d0, u - u0, m - m0, k - k0, ku - ku0, f - f0);
             fflush(stdout);
         }
-        printf("FINAL +down=%ld +up=%ld +moves=%ld\n",
+        printf("FINAL +down=%ld +up=%ld +moves=%ld +keydown=%ld +keyup=%ld +flags=%ld\n",
                CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseDown) - d0,
                CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventLeftMouseUp) - u0,
-               CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventMouseMoved) - m0);
+               CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventMouseMoved) - m0,
+               CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown) - k0,
+               CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyUp) - ku0,
+               CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventFlagsChanged) - f0);
     }
     return 0;
 }

@@ -60,7 +60,61 @@ function modsFromEvent(e) {
 const armed = ref(false)
 const locked = ref(false)
 const sentCount = ref(0)
+const sendingCombo = ref(false)
 const surfaceRef = ref(null)
+
+/* 系统组合键按钮：物理 Win / Alt+Tab 会被控制端操作系统拦截（弹开始菜单/
+ * 切窗口），浏览器根本收不到，只能用按钮把序列直接下发。修饰键经固件
+ * 按住状态机携带：先 down 修饰键，再 down/up 主键，最后 up 修饰键。 */
+const COMBO_KEYS = [
+  {
+    label: 'Win / Cmd 键',
+    steps: [
+      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 80 },
+      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
+    ],
+  },
+  {
+    label: 'Cmd+Tab 切应用',
+    steps: [
+      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 50 },
+      { t: 'keyboard_down', key: 'KEY_TAB', d: 100 },
+      { t: 'keyboard_up', key: 'KEY_TAB', d: 50 },
+      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
+    ],
+  },
+  {
+    label: 'Alt+Tab 切窗口',
+    steps: [
+      { t: 'keyboard_down', key: 'KEY_LEFTALT', d: 50 },
+      { t: 'keyboard_down', key: 'KEY_TAB', d: 100 },
+      { t: 'keyboard_up', key: 'KEY_TAB', d: 50 },
+      { t: 'keyboard_up', key: 'KEY_LEFTALT', d: 40 },
+    ],
+  },
+  {
+    label: 'Cmd+Space',
+    steps: [
+      { t: 'keyboard_down', key: 'KEY_LEFTGUI', d: 50 },
+      { t: 'keyboard_down', key: 'KEY_SPACE', d: 80 },
+      { t: 'keyboard_up', key: 'KEY_SPACE', d: 50 },
+      { t: 'keyboard_up', key: 'KEY_LEFTGUI', d: 40 },
+    ],
+  },
+]
+
+async function sendCombo(combo) {
+  if (sendingCombo.value || !canControl.value) return
+  sendingCombo.value = true
+  try {
+    for (const step of combo.steps) {
+      sendStreamPayload({ type: step.t, key: step.key })
+      await new Promise((resolve) => setTimeout(resolve, step.d ?? 40))
+    }
+  } finally {
+    sendingCombo.value = false
+  }
+}
 
 const moveQueue = reactive({ x: 0, y: 0, timer: 0 })
 const scrollPixels = reactive({ x: 0, y: 0 })
@@ -392,6 +446,22 @@ onBeforeUnmount(() => {
       <span v-else class="takeover-ws offline">流通道连接中…</span>
     </div>
 
+    <div class="combo-row">
+      <span class="combo-label">系统组合键</span>
+      <div class="combo-btns">
+        <el-button
+          v-for="combo in COMBO_KEYS"
+          :key="combo.label"
+          size="small"
+          :disabled="!canControl || sendingCombo"
+          @click="sendCombo(combo)"
+        >
+          {{ combo.label }}
+        </el-button>
+      </div>
+      <span class="combo-hint">物理 Win / Alt+Tab 会被控制端系统截胡，组合键请用按钮直发</span>
+    </div>
+
     <div
       v-if="armed"
       ref="surfaceRef"
@@ -448,6 +518,33 @@ onBeforeUnmount(() => {
 .takeover-desc {
   margin: 0;
   font-size: 13px;
+}
+
+.combo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.combo-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+}
+
+.combo-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.combo-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #909399);
+}
+
+.takeover-desc {
   line-height: 1.6;
   color: var(--text-secondary, #909399);
 }
