@@ -5,6 +5,7 @@
 action 下发-ACK 闭环（E2E）与离线设备 E002 快速失败。
 """
 import threading
+import time
 import uuid
 
 import pytest
@@ -163,13 +164,20 @@ class TestStateReporting:
 
             ws.send_json(_env("heartbeat", {}))
             ws.send_json(_env("status", {"state": "busy"}))
-            # 再发一帧确保前两帧已被服务端处理（均为无回复类型）
+            # 第三帧 heartbeat 验证新语义：心跳不得把设备上报的 busy 踩回 online
             ws.send_json(_env("heartbeat", {}))
 
+            # 三帧均无回复，轮询等待服务端处理完成（消除帧未处理完就断言的竞态）
+            dev = None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                db.expire_all()
+                dev = crud_device.get_by_uuid(db, "esp32_hb_001")
+                if dev is not None and dev.status == "busy":
+                    break
+                time.sleep(0.05)
             # 连接存活期间断言（断开后 status 会被 mark_offline 覆盖）
-            db.expire_all()
-            dev = crud_device.get_by_uuid(db, "esp32_hb_001")
-            assert dev.status == "busy"
+            assert dev is not None and dev.status == "busy"
             assert dev.last_online_at is not None
 
 

@@ -178,12 +178,14 @@ async def device_ws(websocket: WebSocket):
                 )
 
             elif mtype == "heartbeat":
-                # 更新 last_online_at
+                # 心跳只证明存活：更新 last_online_at，仅在残留 offline 时归位；
+                # 不覆盖设备上报的 busy/error（恢复需设备显式上报 status 帧）
                 if device_uuid:
                     dev = crud_device.get_by_uuid(db, device_uuid)
                     if dev:
                         dev.last_online_at = datetime.now(timezone.utc)
-                        dev.status = "online"
+                        if dev.status == "offline":
+                            dev.status = "online"
                         db.commit()
                 # 不强制回复
 
