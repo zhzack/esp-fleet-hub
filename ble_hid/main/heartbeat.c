@@ -39,6 +39,7 @@ static void hb_task(void *arg)
         cJSON_AddNumberToObject(pl, "wifi_rssi", wifi_mgr_rssi());
         cJSON_AddNumberToObject(pl, "queue_len", executor_queue_len());
         cJSON_AddBoolToObject  (pl, "ble_connected", hid_ble_connected());
+        cJSON_AddNumberToObject(pl, "ble_peers",     hid_ble_conn_count());
         ws_client_send(env);
         ESP_LOGD(TAG, "sent");
     }

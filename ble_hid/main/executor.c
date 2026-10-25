@@ -330,6 +330,7 @@ static void exec_task(void *arg)
             cJSON_AddBoolToObject(pl, "debug_no_hid", root_opts.debug_no_hid);
             cJSON_AddBoolToObject(pl, "skip_link_check", root_opts.skip_link_check);
             if (hid_ble_connected()) {
+                cJSON_AddNumberToObject(pl, "peer_count", hid_ble_conn_count());
                 hid_ble_peer_t cur;
                 if (hid_ble_get_current_peer(&cur)) {
                     char a[20];

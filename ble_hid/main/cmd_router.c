@@ -117,7 +117,8 @@ static int h_get_status(const cJSON *p, cJSON *r, char *err, int errlen)
     cJSON_AddNumberToObject(w, "rssi",      wifi_mgr_rssi());
 
     cJSON *b = cJSON_AddObjectToObject(r, "ble");
-    cJSON_AddBoolToObject(b, "connected", hid_ble_connected());
+    cJSON_AddBoolToObject  (b, "connected", hid_ble_connected());
+    cJSON_AddNumberToObject(b, "peers",     hid_ble_conn_count());
 
     cJSON *u = cJSON_AddObjectToObject(r, "usb");
     cJSON_AddBoolToObject(u, "mounted", hid_usb_mounted());
@@ -213,13 +214,28 @@ static int h_wifi_connect(const cJSON *p, cJSON *r, char *err, int errlen)
 static int h_ble_info(const cJSON *p, cJSON *r, char *err, int errlen)
 {
     (void)p; (void)err; (void)errlen;
-    cJSON_AddBoolToObject  (r, "connected",   hid_ble_connected());
+    int count = hid_ble_conn_count();
+    cJSON_AddBoolToObject  (r, "connected",   count > 0);
+    cJSON_AddNumberToObject(r, "count",       count);
     cJSON_AddStringToObject(r, "device_name", s_device_id);
+    /* 兼容旧字段：首对端；多连接明细见 peers 数组 */
     hid_ble_peer_t cur;
     if (hid_ble_get_current_peer(&cur)) {
         char a[20];
         hex_addr(a, sizeof a, cur.addr);
         cJSON_AddStringToObject(r, "peer", a);
+    }
+    hid_ble_conn_t conns[3];
+    int n = hid_ble_get_peers(conns, 3);
+    cJSON *arr = cJSON_AddArrayToObject(r, "peers");
+    for (int i = 0; i < n; ++i) {
+        char a[20];
+        hex_addr(a, sizeof a, conns[i].addr);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "addr",      a);
+        cJSON_AddNumberToObject(o, "addr_type", conns[i].addr_type);
+        cJSON_AddNumberToObject(o, "itvl_ms",   conns[i].itvl_125us * 1.25);
+        cJSON_AddItemToArray(arr, o);
     }
     return 0;
 }
@@ -229,13 +245,24 @@ static int h_ble_list_bonds(const cJSON *p, cJSON *r, char *err, int errlen)
     (void)p; (void)err; (void)errlen;
     hid_ble_peer_t list[8];
     int n = hid_ble_list_bonds(list, 8);
+    hid_ble_conn_t conns[3];
+    int nc = hid_ble_get_peers(conns, 3);
     cJSON *arr = cJSON_AddArrayToObject(r, "bonds");
     for (int i = 0; i < n; ++i) {
         char a[20];
         hex_addr(a, sizeof a, list[i].addr);
+        bool online = false;
+        for (int j = 0; j < nc; ++j) {
+            if (conns[j].addr_type == list[i].addr_type &&
+                memcmp(conns[j].addr, list[i].addr, 6) == 0) {
+                online = true;
+                break;
+            }
+        }
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "addr",      a);
         cJSON_AddNumberToObject(o, "addr_type", list[i].addr_type);
+        cJSON_AddBoolToObject  (o, "connected", online);
         cJSON_AddItemToArray(arr, o);
     }
     return 0;

@@ -10,8 +10,11 @@ extern "C" {
 /** Initialise NimBLE host, advertise as a HID keyboard+mouse with name `device_name`. */
 esp_err_t hid_ble_init(const char *device_name);
 
-/** True after a host has connected and bonded. */
+/** True while at least one host is connected. */
 bool hid_ble_connected(void);
+
+/** Number of currently-connected hosts (multi-connection, mirror broadcast). */
+int  hid_ble_conn_count(void);
 
 /** Press + release a key (with optional modifier byte). */
 void hid_ble_tap(uint8_t keycode, uint8_t modifiers);
@@ -43,10 +46,20 @@ typedef struct {
     uint8_t addr[6];     /* peer device address, little-endian (NimBLE order) */
 } hid_ble_peer_t;
 
+typedef struct {
+    uint8_t  addr_type;
+    uint8_t  addr[6];
+    uint16_t conn_handle;
+    uint16_t itvl_125us;  /* negotiated connection interval, 1.25ms units */
+} hid_ble_conn_t;
+
 /** Fill out[] with up to max bonded peers. Returns count, or <0 on error. */
 int  hid_ble_list_bonds(hid_ble_peer_t *out, int max);
 
-/** Get the currently-connected peer's address. False when not connected. */
+/** Fill out[] with the currently-connected peers. Returns count (0 when none). */
+int  hid_ble_get_peers(hid_ble_conn_t *out, int max);
+
+/** Get the first connected peer's address. False when not connected. */
 bool hid_ble_get_current_peer(hid_ble_peer_t *out);
 
 /** Erase a single bonded peer from the keystore. Returns 0 ok, !=0 NimBLE rc. */
@@ -55,10 +68,10 @@ int  hid_ble_unpair(uint8_t addr_type, const uint8_t addr[6]);
 /** Erase all bonded peers + restart advertising. */
 int  hid_ble_unpair_all(void);
 
-/** Drop the current GAP link (host can reconnect). */
+/** Drop all GAP links (hosts can reconnect; advertising resumes). */
 int  hid_ble_disconnect(void);
 
-/** Disconnect (if connected) and start directed advertising to the given peer. */
+/** Disconnect all links (if any) and start directed advertising to the given peer. */
 int  hid_ble_switch_to(uint8_t addr_type, const uint8_t addr[6]);
 
 /* ---------- BLE scan (Observer role) ---------- */

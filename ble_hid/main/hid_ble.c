@@ -32,7 +32,17 @@
 
 static const char *TAG = "hid";
 
-static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+/* 多连接（镜像广播）：所有已连接主机同时收到同一份 HID 报告。
+ * 键鼠状态机（按住键/鼠标按键/积压增量）为广播状态，全体共享。 */
+#define HID_BLE_MAX_CONNS 3
+typedef struct {
+    uint16_t    conn_handle;
+    ble_addr_t  addr;
+    uint16_t    itvl_125us;   /* 该链路协商出的连接间隔，0=未知 */
+} hid_conn_slot_t;
+static hid_conn_slot_t s_conns[HID_BLE_MAX_CONNS];
+static int s_conn_count = 0;
+
 static uint16_t s_keyboard_input_report_handle;
 static uint16_t s_mouse_input_report_handle;
 static SemaphoreHandle_t s_lock;
@@ -57,9 +67,6 @@ static uint8_t s_kbd_held_mods = 0;
 
 /* 鼠标增量积压缓冲（连接间隔背压下零丢失，见 mouse_flush_locked） */
 static int16_t s_pending_dx, s_pending_dy, s_pending_wheel, s_pending_pan;
-/* 实际连接间隔（1.25ms 单位），0=未知——移动流节拍按它自适应，
- * 即"按每秒能传多少帧定采集频率"：1 个连接间隔最多发 1 个 notification */
-static uint16_t s_conn_itvl_125us;
 
 #define HID_REPORT_ID_KEYBOARD 1
 #define HID_REPORT_ID_MOUSE 2
@@ -296,14 +303,59 @@ void ble_store_config_init(void);
  * 订阅"的 HID 设备会拒绝建键并陷入重连循环，必须强制加密触发 SMP 配对 */
 void ble_gatts_set_clt_cfg_perm_flags(uint8_t flags);
 
+static int conn_find(uint16_t conn_handle)
+{
+    for (int i = 0; i < s_conn_count; i++) {
+        if (s_conns[i].conn_handle == conn_handle) return i;
+    }
+    return -1;
+}
+
+static void conn_add(uint16_t conn_handle)
+{
+    if (s_conn_count >= HID_BLE_MAX_CONNS) return;
+    struct ble_gap_conn_desc desc;
+    hid_conn_slot_t *slot = &s_conns[s_conn_count];
+    slot->conn_handle = conn_handle;
+    slot->itvl_125us = 0;
+    if (ble_gap_conn_find(conn_handle, &desc) == 0) {
+        slot->addr = desc.peer_id_addr;
+    }
+    s_conn_count++;
+    ESP_LOGI(TAG, "host #%d connected (%d/%d slots in use)", s_conn_count,
+             s_conn_count, HID_BLE_MAX_CONNS);
+}
+
+static void conn_remove(uint16_t conn_handle)
+{
+    int idx = conn_find(conn_handle);
+    if (idx < 0) return;
+    for (int i = idx; i < s_conn_count - 1; i++) s_conns[i] = s_conns[i + 1];
+    s_conn_count--;
+}
+
 static void update_conn_itvl(uint16_t conn_handle)
 {
+    int idx = conn_find(conn_handle);
     struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(conn_handle, &desc) == 0) {
-        s_conn_itvl_125us = desc.conn_itvl;
-        ESP_LOGI(TAG, "conn itvl %.2fms -> mouse pacing %.2f fps",
-                 desc.conn_itvl * 1.25, 1000.0 / (desc.conn_itvl * 1.25));
+    if (idx >= 0 && ble_gap_conn_find(conn_handle, &desc) == 0) {
+        s_conns[idx].itvl_125us = desc.conn_itvl;
+        ESP_LOGI(TAG, "conn itvl %.2fms -> mouse pacing %.2f fps (%d/%d hosts)",
+                 desc.conn_itvl * 1.25, 1000.0 / (desc.conn_itvl * 1.25),
+                 s_conn_count, HID_BLE_MAX_CONNS);
     }
+}
+
+/* 移动流节拍取所有在线链路的最小连接间隔（最慢链路决定整体节奏；
+ * 单连接时与原单句柄行为一致） */
+static uint16_t conn_min_itvl_125us(void)
+{
+    uint16_t min = 0;
+    for (int i = 0; i < s_conn_count; i++) {
+        uint16_t itvl = s_conns[i].itvl_125us;
+        if (itvl && (min == 0 || itvl < min)) min = itvl;
+    }
+    return min;
 }
 
 static int gap_event(struct ble_gap_event *event, void *arg)
@@ -311,10 +363,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
-            s_conn_handle = event->connect.conn_handle;
+            conn_add(event->connect.conn_handle);
             s_advertising = false;
             s_adv_retry_at = 0;
-            ESP_LOGI(TAG, "connected");
             /* 请求更快连接间隔（7.5~15ms, latency 0）降低 HID 输入延迟；
              * macOS 可按自身策略拒绝，拒绝则维持当前参数（无副作用） */
             struct ble_gap_upd_params want = {
@@ -325,8 +376,13 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 .min_ce_len = 0,
                 .max_ce_len = 0,
             };
-            ble_gap_update_params(s_conn_handle, &want);
-            update_conn_itvl(s_conn_handle);  /* 记录协商前初始间隔 */
+            ble_gap_update_params(event->connect.conn_handle, &want);
+            update_conn_itvl(event->connect.conn_handle);
+            /* 还有空槽：继续广播让下一台主机能连入 */
+            if (s_conn_count < HID_BLE_MAX_CONNS) {
+                s_advertising = false;
+                schedule_advertising_retry(150);
+            }
         } else {
             s_advertising = false;
             schedule_advertising_retry(150);
@@ -338,18 +394,21 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             update_conn_itvl(event->conn_update.conn_handle);
         }
         break;
-    case BLE_GAP_EVENT_DISCONNECT:
+    case BLE_GAP_EVENT_DISCONNECT: {
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
-        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-        s_conn_itvl_125us = 0;
-        s_mouse_buttons = 0;
-        s_buttons_dirty = false;
-        s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
-        s_kbd_held_code = 0;
-        s_kbd_held_mods = 0;
+        conn_remove(event->disconnect.conn.conn_handle);
+        if (s_conn_count == 0) {
+            /* 最后一个对端断开：清广播共享的 HID 状态防粘键 */
+            s_mouse_buttons = 0;
+            s_buttons_dirty = false;
+            s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
+            s_kbd_held_code = 0;
+            s_kbd_held_mods = 0;
+        }
         s_advertising = false;
         schedule_advertising_retry(150);
         break;
+    }
     case BLE_GAP_EVENT_ADV_COMPLETE:
         ESP_LOGI(TAG, "adv complete reason=0x%x", event->adv_complete.reason);
         s_advertising = false;
@@ -411,7 +470,7 @@ static int ensure_advertising_fields(void)
 static void start_advertising(void)
 {
     if (s_advertising) return;
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) return;
+    if (s_conn_count >= HID_BLE_MAX_CONNS) return;  /* 槽满才停广播 */
     if (s_scanning) return;
     if (s_adv_retry_at != 0) {
         TickType_t now = xTaskGetTickCount();
@@ -462,7 +521,7 @@ static void adv_watchdog_task(void *arg)
 {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE && !s_advertising && !s_scanning) {
+        if (s_conn_count < HID_BLE_MAX_CONNS && !s_advertising && !s_scanning) {
             start_advertising();
         }
     }
@@ -470,17 +529,31 @@ static void adv_watchdog_task(void *arg)
 
 bool hid_ble_connected(void)
 {
-    return s_conn_handle != BLE_HS_CONN_HANDLE_NONE;
+    return s_conn_count > 0;
+}
+
+int hid_ble_conn_count(void)
+{
+    return s_conn_count;
 }
 
 static int notify_input_report(uint16_t handle, const uint8_t *report, uint8_t len)
 {
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return BLE_HS_ENOTCONN;
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(report, len);
-    if (!om) return BLE_HS_ENOMEM;
-    int rc = ble_gatts_notify_custom(s_conn_handle, handle, om);
-    if (rc != 0) ESP_LOGW(TAG, "notify handle=%u rc=%d", handle, rc);
-    return rc;
+    if (s_conn_count == 0) return BLE_HS_ENOTCONN;
+    /* 镜像广播：每份报告为每个在线主机分配独立 mbuf 并逐一通知；
+     * 池耗尽（ENOMEM）时放弃本轮，其余对端不受影响 */
+    int ok = 0;
+    for (int i = 0; i < s_conn_count; i++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(report, len);
+        if (!om) break;
+        int rc = ble_gatts_notify_custom(s_conns[i].conn_handle, handle, om);
+        if (rc == 0) {
+            ok++;
+        } else {
+            ESP_LOGW(TAG, "notify host#%d handle=%u rc=%d", i, handle, rc);
+        }
+    }
+    return ok > 0 ? 0 : BLE_HS_ENOMEM;
 }
 
 static void set_key(uint8_t code, uint8_t mods)
@@ -542,8 +615,9 @@ static TickType_t s_last_mouse_tx_tick;
 
 static uint32_t mouse_pacing_ms(void)
 {
-    if (s_conn_itvl_125us == 0) return 10;               /* 未知间隔，保守默认 */
-    uint32_t ms = (uint32_t)s_conn_itvl_125us * 125 / 100; /* 1.25ms → ms */
+    uint16_t itvl = conn_min_itvl_125us();
+    if (itvl == 0) return 10;               /* 未知间隔，保守默认 */
+    uint32_t ms = (uint32_t)itvl * 125 / 100; /* 1.25ms → ms */
     if (ms > 8) ms -= 1;                                  /* 留 1ms 余量提高槽位利用率 */
     if (ms < 7) ms = 7;
     if (ms > 40) ms = 40;
@@ -552,7 +626,7 @@ static uint32_t mouse_pacing_ms(void)
 
 static void mouse_flush_locked(bool force)
 {
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+    if (s_conn_count == 0) {
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         return;
     }
@@ -693,14 +767,24 @@ int hid_ble_list_bonds(hid_ble_peer_t *out, int max)
     return n;
 }
 
+int hid_ble_get_peers(hid_ble_conn_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = s_conn_count < max ? s_conn_count : max;
+    for (int i = 0; i < n; i++) {
+        out[i].addr_type = s_conns[i].addr.type;
+        memcpy(out[i].addr, s_conns[i].addr.val, 6);
+        out[i].conn_handle = s_conns[i].conn_handle;
+        out[i].itvl_125us = s_conns[i].itvl_125us;
+    }
+    return n;
+}
+
 bool hid_ble_get_current_peer(hid_ble_peer_t *out)
 {
-    if (!out) return false;
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
-    struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(s_conn_handle, &desc) != 0) return false;
-    out->addr_type = desc.peer_id_addr.type;
-    memcpy(out->addr, desc.peer_id_addr.val, 6);
+    if (!out || s_conn_count == 0) return false;
+    out->addr_type = s_conns[0].addr.type;
+    memcpy(out->addr, s_conns[0].addr.val, 6);
     return true;
 }
 
@@ -727,14 +811,19 @@ int hid_ble_unpair_all(void)
 
 int hid_ble_disconnect(void)
 {
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return 0;
-    return ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    /* 断开全部在线主机（镜像语义下的整体下线） */
+    for (int i = 0; i < s_conn_count; i++) {
+        ble_gap_terminate(s_conns[i].conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    return 0;
 }
 
 int hid_ble_switch_to(uint8_t addr_type, const uint8_t addr[6])
 {
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (s_conn_count > 0) {
+        for (int i = 0; i < s_conn_count; i++) {
+            ble_gap_terminate(s_conns[i].conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     ble_gap_adv_stop();
@@ -830,7 +919,8 @@ int hid_ble_scan(int duration_ms, hid_ble_scan_entry_t *out, int max)
     s_scan_count = 0;
     memset(s_scan_buf, 0, sizeof(s_scan_buf));
 
-    bool adv_was_on = (s_conn_handle == BLE_HS_CONN_HANDLE_NONE);
+    /* 扫描独占广播实例：无论是否有连接，先停广播，扫完按原状态恢复 */
+    bool adv_was_on = s_advertising;
     if (adv_was_on) ble_gap_adv_stop();
     s_advertising = false;
     s_scanning = true;
