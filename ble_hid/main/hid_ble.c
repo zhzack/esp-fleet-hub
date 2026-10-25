@@ -46,6 +46,10 @@ static volatile bool s_adv_fields_ready = false;
 static uint8_t s_keyboard_report[8];
 static uint8_t s_mouse_report[5];
 static uint8_t s_mouse_buttons = 0;
+/* 按键状态待下发标记：按键报告若遇 mbuf 瞬时耗尽而失败，排空任务凭它
+ * 每 10ms 重试直到成功——否则手停（无位移增量）时失败的点击永不补发，
+ * 按下/抬起都赶不上成功发送，整次点击凭空消失（移动中点击高发） */
+static bool s_buttons_dirty;
 
 /* 键盘按住状态机（down 累积 / up 精确释放，见 kbd_report_held_locked） */
 static uint8_t s_kbd_held_code = 0;
@@ -339,6 +343,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_conn_itvl_125us = 0;
         s_mouse_buttons = 0;
+        s_buttons_dirty = false;
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         s_kbd_held_code = 0;
         s_kbd_held_mods = 0;
@@ -551,7 +556,8 @@ static void mouse_flush_locked(bool force)
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         return;
     }
-    if (!s_pending_dx && !s_pending_dy && !s_pending_wheel && !s_pending_pan) return;
+    if (!s_buttons_dirty &&
+        !s_pending_dx && !s_pending_dy && !s_pending_wheel && !s_pending_pan) return;
 
     TickType_t now = xTaskGetTickCount();
     if (!force &&
@@ -563,6 +569,7 @@ static void mouse_flush_locked(bool force)
     if (notify_input_report(s_mouse_input_report_handle, s_mouse_report,
                             sizeof(s_mouse_report)) == 0) {
         s_last_mouse_tx_tick = now;
+        s_buttons_dirty = false;
         /* 位移增量：发即弃余（有界延迟）；滚轮：结转剩余步数 */
         s_pending_dx = 0; s_pending_dy = 0;
         s_pending_wheel -= wv; s_pending_pan -= wh;
@@ -634,6 +641,7 @@ void hid_ble_mouse_down(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons |= button;
+    s_buttons_dirty = true;
     mouse_flush_locked(true);  /* 按键事件旁路节拍，立即发送（防点击丢失） */
     xSemaphoreGive(s_lock);
 }
@@ -645,6 +653,7 @@ void hid_ble_mouse_up(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons &= (uint8_t)~button;
+    s_buttons_dirty = true;
     mouse_flush_locked(true);
     xSemaphoreGive(s_lock);
 }
