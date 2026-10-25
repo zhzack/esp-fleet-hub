@@ -221,29 +221,30 @@ static struct ble_gatt_chr_def HID_CHARACTERISTICS[] = {
     {
         .uuid = BLE_UUID16_DECLARE(0x2A4A),
         .access_cb = chr_access_hid_info,
-        .flags = BLE_GATT_CHR_F_READ,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC,
     },
     {
         .uuid = BLE_UUID16_DECLARE(0x2A4B),
         .access_cb = chr_access_report_map,
-        .flags = BLE_GATT_CHR_F_READ,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC,
     },
     {
         .uuid = BLE_UUID16_DECLARE(0x2A4C),
         .access_cb = chr_access_control_point,
-        .flags = BLE_GATT_CHR_F_WRITE_NO_RSP,
+        .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
     },
     {
         .uuid = BLE_UUID16_DECLARE(0x2A4E),
         .access_cb = chr_access_proto_mode,
-        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC |
+                 BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
     },
     {
         .uuid = BLE_UUID16_DECLARE(0x2A4D),
         .access_cb = chr_access_input_report,
         .arg = &s_keyboard_report_view,
         .descriptors = KEYBOARD_REPORT_DESCRIPTORS,
-        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_keyboard_input_report_handle,
     },
     {
@@ -251,7 +252,7 @@ static struct ble_gatt_chr_def HID_CHARACTERISTICS[] = {
         .access_cb = chr_access_input_report,
         .arg = &s_mouse_report_view,
         .descriptors = MOUSE_REPORT_DESCRIPTORS,
-        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_mouse_input_report_handle,
     },
     { 0 }
@@ -273,6 +274,11 @@ static int ensure_advertising_fields(void);
 /* NimBLE config store 的入口函数（IDF 移植未纳入公共头文件，参照官方
  * bleprph 示例前置声明）：挂载 NVS 持久化 store 回调并装载历史配对密钥 */
 void ble_store_config_init(void);
+
+/* CCCD（通知订阅描述符）的全局 ATT 权限接口，NimBLE 私有 API：
+ * 默认只有 READ|WRITE（无加密要求），macOS 的 HOGP 实现遇到"无需配对即可
+ * 订阅"的 HID 设备会拒绝建键并陷入重连循环，必须强制加密触发 SMP 配对 */
+void ble_gatts_set_clt_cfg_perm_flags(uint8_t flags);
 
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
@@ -752,6 +758,13 @@ esp_err_t hid_ble_init(const char *device_name)
      * 不启用则密钥仅存 RAM，重启/OTA 后丢失，已配对主机重连加密失败
      * 陷入"连上→拒绝→断开→重连"死循环 */
     ble_store_config_init();
+
+    /* HID 全部特征与 CCCD 强制加密（HOGP 规范要求，macOS 强校验）：
+     * 加密不足的读/写/订阅会返回 Insufficient Authentication，
+     * 促使主机发起 SMP 配对；不可用 AUTHEN（Just Works 无 MITM，
+     * 若要求会直接配对失败） */
+    ble_gatts_set_clt_cfg_perm_flags(BLE_ATT_F_READ | BLE_ATT_F_WRITE |
+                                     BLE_ATT_F_WRITE_ENC);
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
