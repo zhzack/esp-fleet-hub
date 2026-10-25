@@ -24,6 +24,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
+#include "store/config/ble_store_config.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -269,6 +270,10 @@ static void start_advertising(void);
 static void schedule_advertising_retry(uint32_t delay_ms);
 static int ensure_advertising_fields(void);
 
+/* NimBLE config store 的入口函数（IDF 移植未纳入公共头文件，参照官方
+ * bleprph 示例前置声明）：挂载 NVS 持久化 store 回调并装载历史配对密钥 */
+void ble_store_config_init(void);
+
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
@@ -299,6 +304,18 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "subscribe handle=%u cur_notify=%d",
                  event->subscribe.attr_handle, event->subscribe.cur_notify);
         break;
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* 对端保留了旧配对密钥而本机密钥库已丢失（如重启/OTA 后）时，
+         * 对端重连加密会失败并反复重试；删除旧 bond 记录允许重新配对，
+         * 配对密钥现由 ble_store_config 持久化到 NVS，正常重启不再丢。 */
+        struct ble_gap_conn_desc desc;
+        int rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+        if (rc == 0) {
+            ESP_LOGW(TAG, "repeat pairing from peer — deleting stale bond");
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     default:
         break;
     }
@@ -730,6 +747,11 @@ esp_err_t hid_ble_init(const char *device_name)
     ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_our_key_dist = 3;
     ble_hs_cfg.sm_their_key_dist = 3;
+
+    /* NimBLE 配对密钥持久化到 NVS（nimble_bond 命名空间）：
+     * 不启用则密钥仅存 RAM，重启/OTA 后丢失，已配对主机重连加密失败
+     * 陷入"连上→拒绝→断开→重连"死循环 */
+    ble_store_config_init();
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
