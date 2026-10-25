@@ -4,8 +4,12 @@
 __pycache__/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 *.bin
 .pytest_cache/
 *.log
 clash-cross-platform/
 uploads/
+.env
+setup_mac_ssh.ps1

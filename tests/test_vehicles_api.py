@@ -1,6 +1,7 @@
 """tests/test_vehicles_api.py - 车辆列表与 chip_platform 过滤测试"""
 import pytest
 
+from app.database.crud import user as crud_user
 from app.database.models.vehicle import VehicleModel
 
 
@@ -31,8 +32,23 @@ def seed_vehicles(db):
     db.commit()
 
 
-def test_list_vehicles(client):
-    res = client.get("/api/v2/vehicles")
+@pytest.fixture
+def auth_headers(client, db):
+    crud_user.create(db, "vehicle_user", "password123", role="user")
+    res = client.post(
+        "/api/v1/auth/login",
+        data={"username": "vehicle_user", "password": "password123"},
+    )
+    return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+
+def test_list_vehicles_requires_auth(client):
+    # 安全回归：车辆列表不允许匿名访问
+    assert client.get("/api/v2/vehicles").status_code == 401
+
+
+def test_list_vehicles(client, auth_headers):
+    res = client.get("/api/v2/vehicles", headers=auth_headers)
     assert res.status_code == 200
     items = res.json()
     assert len(items) == 2
@@ -50,12 +66,13 @@ def test_list_vehicles(client):
     assert a["current_status"] == "空闲"
 
 
-def test_filter_vehicles_by_chip(client):
-    res = client.get("/api/v2/vehicles", params={"chip": "esp32s3"})
+def test_filter_vehicles_by_chip(client, auth_headers):
+    res = client.get("/api/v2/vehicles", params={"chip": "esp32s3"}, headers=auth_headers)
     assert res.status_code == 200
     items = res.json()
     assert len(items) == 1
     assert items[0]["vehicle_code"] == "VA001"
 
     # 无匹配返回空列表
-    assert client.get("/api/v2/vehicles", params={"chip": "nrf52"}).json() == []
+    empty = client.get("/api/v2/vehicles", params={"chip": "nrf52"}, headers=auth_headers)
+    assert empty.json() == []
