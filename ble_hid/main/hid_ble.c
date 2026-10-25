@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/timers.h"
 #include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -51,10 +52,9 @@ static uint8_t s_mouse_buttons = 0;
 static uint8_t s_kbd_held_code = 0;
 static uint8_t s_kbd_held_mods = 0;
 
-/* BLE 鼠标流节流标记：上一份报告 TX 完成前不再发送（见 mouse_flush_locked） */
-static volatile bool s_mouse_tx_busy = false;
 /* 鼠标增量积压缓冲（连接间隔背压下零丢失，见 mouse_flush_locked） */
 static int16_t s_pending_dx, s_pending_dy, s_pending_wheel, s_pending_pan;
+static TimerHandle_t s_mouse_drain_timer;
 
 #define HID_REPORT_ID_KEYBOARD 1
 #define HID_REPORT_ID_MOUSE 2
@@ -299,7 +299,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_conn_handle = event->connect.conn_handle;
             s_advertising = false;
             s_adv_retry_at = 0;
-            s_mouse_tx_busy = false;
             ESP_LOGI(TAG, "connected");
             /* 请求更快连接间隔（7.5~15ms, latency 0）降低 HID 输入延迟；
              * macOS 可按自身策略拒绝，拒绝则维持当前参数（无副作用） */
@@ -321,7 +320,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_mouse_buttons = 0;
-        s_mouse_tx_busy = false;
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         s_kbd_held_code = 0;
         s_kbd_held_mods = 0;
@@ -336,15 +334,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(TAG, "subscribe handle=%u cur_notify=%d",
                  event->subscribe.attr_handle, event->subscribe.cur_notify);
-        break;
-    case BLE_GAP_EVENT_NOTIFY_TX:
-        /* notification 发送完成（链路层已确认）：解除节流，补发积压增量 */
-        if (event->notify_tx.status == 0 && s_mouse_tx_busy) {
-            s_mouse_tx_busy = false;
-            xSemaphoreTake(s_lock, portMAX_DELAY);
-            mouse_flush_locked();
-            xSemaphoreGive(s_lock);
-        }
         break;
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
         /* 对端保留了旧配对密钥而本机密钥库已丢失（如重启/OTA 后）时，
@@ -505,9 +494,12 @@ static void set_mouse_report(uint8_t buttons, int8_t dx, int8_t dy,
  * 即 33~66 报告/s），前端 10ms 冲刷 ~100 包/s 灌入；此前 move/scroll
  * 直接 notify 无积累，NimBLE mbuf 池打满（ENOMEM）后新报告被丢弃——
  * 表现为移动量凭空丢失、光标跟不上手。对策：增量累积进 pending 缓冲，
- * 上一份报告 TX 完成（NOTIFY_TX）后取 clamp(±127) 发送、余量保留，
- * 与连接间隔自然匹配，零移动量丢失。 */
-/* s_pending_* / s_mouse_tx_busy 定义于文件头部全局区（gap_event 引用） */
+ * 每次调用与 10ms 排空定时器取 clamp(±127) 发送、余量保留；mbuf 满
+ * (ENOMEM) 时本份不发、下轮重试，与连接间隔自然匹配，零移动量丢失。
+ * 注意不能用 NOTIFY_TX 事件做发送完成节流——本 NimBLE 版本该事件在
+ * notify 入队时同步回调（非空口完成），置忙后事件已跑完，标记永久
+ * 卡死（真机表现为鼠标只动一帧即冻结，已踩坑验证）。
+ * s_mouse_drain_timer 定义于文件头部全局区。 */
 
 static int16_t clamp8i(int16_t v)
 {
@@ -520,7 +512,6 @@ static void mouse_flush_locked(void)
         s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
         return;
     }
-    if (s_mouse_tx_busy) return;
     if (!s_pending_dx && !s_pending_dy && !s_pending_wheel && !s_pending_pan) return;
 
     int16_t dx = clamp8i(s_pending_dx), dy = clamp8i(s_pending_dy);
@@ -530,8 +521,15 @@ static void mouse_flush_locked(void)
                             sizeof(s_mouse_report)) == 0) {
         s_pending_dx -= dx; s_pending_dy -= dy;
         s_pending_wheel -= wv; s_pending_pan -= wh;
-        s_mouse_tx_busy = true;
     }
+}
+
+static void mouse_drain_timer_cb(TimerHandle_t t)
+{
+    (void)t;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    mouse_flush_locked();
+    xSemaphoreGive(s_lock);
 }
 
 void hid_ble_tap(uint8_t code, uint8_t mods)
@@ -808,6 +806,11 @@ esp_err_t hid_ble_init(const char *device_name)
 {
     strlcpy(s_dev_name, device_name ? device_name : "esp32-hid", sizeof(s_dev_name));
     s_lock = xSemaphoreCreateMutex();
+
+    /* 10ms 周期排空鼠标积压增量（输入停止后余量也能发完） */
+    s_mouse_drain_timer = xTimerCreate("ble_m_drain", pdMS_TO_TICKS(10),
+                                       pdTRUE, NULL, mouse_drain_timer_cb);
+    if (s_mouse_drain_timer) xTimerStart(s_mouse_drain_timer, 0);
 
     esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {
