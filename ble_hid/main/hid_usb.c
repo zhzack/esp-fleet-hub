@@ -112,6 +112,12 @@ static volatile bool s_mounted = false;
 static char          s_dev_name[32];
 static uint8_t       s_mouse_buttons = 0;
 
+/* 键盘按住状态机：down 累积修饰键/按键，up 只释放指定项。
+ * 此前 up 无条件清空整份报告，组合键中先松开的键会连带
+ * 释放仍按住的修饰键（Ctrl+C 中 C 抬起即丢 Ctrl） */
+static uint8_t s_kbd_held_code = 0;
+static uint8_t s_kbd_held_mods = 0;
+
 /* ---------- 鼠标报告合并（端点背压下零丢失） ----------
  * TinyUSB 的 tud_hid_n_report 在端点忙（上一报告尚未被主机轮询走）时
  * usbd_edpt_claim 失败，新报告被静默丢弃。突发场景（前端 flush(0) 连发 /
@@ -178,6 +184,8 @@ void tud_umount_cb (void) {
     s_pending_dx = s_pending_dy = s_pending_wv = s_pending_wh = 0;
     s_buttons_dirty = false;
     taskEXIT_CRITICAL(&s_mouse_mux);
+    s_kbd_held_code = 0;
+    s_kbd_held_mods = 0;
     ESP_LOGW(TAG, "USB unmounted");
 }
 void tud_suspend_cb(bool remote_wakeup_en) { (void)remote_wakeup_en; s_mounted = false; }
@@ -221,16 +229,31 @@ static void send_kbd(uint8_t mods, uint8_t kc)
     tud_hid_keyboard_report(RID_KBD, mods, kc ? keys : NULL);
 }
 
+static void kbd_report_held(void) { send_kbd(s_kbd_held_mods, s_kbd_held_code); }
+
 bool hid_usb_mounted(void) { return s_mounted; }
 
 void hid_usb_tap(uint8_t code, uint8_t mods)
 {
     send_kbd(mods, code);
     vTaskDelay(pdMS_TO_TICKS(8));
-    send_kbd(0, 0);
+    kbd_report_held();  /* 恢复接管路径按住的键（无则归零） */
 }
-void hid_usb_down(uint8_t code, uint8_t mods) { send_kbd(mods, code); }
-void hid_usb_up  (uint8_t code, uint8_t mods) { (void)code; (void)mods; send_kbd(0, 0); }
+void hid_usb_down(uint8_t code, uint8_t mods)
+{
+    if (code) s_kbd_held_code = code;
+    s_kbd_held_mods |= mods;
+    kbd_report_held();
+}
+void hid_usb_up(uint8_t code, uint8_t mods)
+{
+    if (code) {
+        if (code == s_kbd_held_code) s_kbd_held_code = 0;
+    } else if (mods) {
+        s_kbd_held_mods &= (uint8_t)~mods;
+    }
+    kbd_report_held();
+}
 
 void hid_usb_mouse_move(int8_t dx, int8_t dy)
 {

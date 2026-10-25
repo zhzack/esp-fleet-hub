@@ -23,6 +23,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_gap.h"
 #include "host/ble_store.h"
 #include "store/config/ble_store_config.h"
 #include "host/util/util.h"
@@ -45,6 +46,15 @@ static volatile bool s_adv_fields_ready = false;
 static uint8_t s_keyboard_report[8];
 static uint8_t s_mouse_report[5];
 static uint8_t s_mouse_buttons = 0;
+
+/* 键盘按住状态机（down 累积 / up 精确释放，见 kbd_report_held_locked） */
+static uint8_t s_kbd_held_code = 0;
+static uint8_t s_kbd_held_mods = 0;
+
+/* BLE 鼠标流节流标记：上一份报告 TX 完成前不再发送（见 mouse_flush_locked） */
+static volatile bool s_mouse_tx_busy = false;
+/* 鼠标增量积压缓冲（连接间隔背压下零丢失，见 mouse_flush_locked） */
+static int16_t s_pending_dx, s_pending_dy, s_pending_wheel, s_pending_pan;
 
 #define HID_REPORT_ID_KEYBOARD 1
 #define HID_REPORT_ID_MOUSE 2
@@ -270,6 +280,7 @@ static const struct ble_gatt_svc_def GATT_SERVICES[] = {
 static void start_advertising(void);
 static void schedule_advertising_retry(uint32_t delay_ms);
 static int ensure_advertising_fields(void);
+static void mouse_flush_locked(void);
 
 /* NimBLE config store 的入口函数（IDF 移植未纳入公共头文件，参照官方
  * bleprph 示例前置声明）：挂载 NVS 持久化 store 回调并装载历史配对密钥 */
@@ -288,7 +299,19 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_conn_handle = event->connect.conn_handle;
             s_advertising = false;
             s_adv_retry_at = 0;
+            s_mouse_tx_busy = false;
             ESP_LOGI(TAG, "connected");
+            /* 请求更快连接间隔（7.5~15ms, latency 0）降低 HID 输入延迟；
+             * macOS 可按自身策略拒绝，拒绝则维持当前参数（无副作用） */
+            struct ble_gap_upd_params want = {
+                .itvl_min = 6,    /* 7.5ms */
+                .itvl_max = 12,   /* 15ms */
+                .latency = 0,
+                .supervision_timeout = 400, /* 4s */
+                .min_ce_len = 0,
+                .max_ce_len = 0,
+            };
+            ble_gap_update_params(s_conn_handle, &want);
         } else {
             s_advertising = false;
             schedule_advertising_retry(150);
@@ -298,6 +321,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGW(TAG, "disconnected (reason 0x%x)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_mouse_buttons = 0;
+        s_mouse_tx_busy = false;
+        s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
+        s_kbd_held_code = 0;
+        s_kbd_held_mods = 0;
         s_advertising = false;
         schedule_advertising_retry(150);
         break;
@@ -309,6 +336,15 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(TAG, "subscribe handle=%u cur_notify=%d",
                  event->subscribe.attr_handle, event->subscribe.cur_notify);
+        break;
+    case BLE_GAP_EVENT_NOTIFY_TX:
+        /* notification 发送完成（链路层已确认）：解除节流，补发积压增量 */
+        if (event->notify_tx.status == 0 && s_mouse_tx_busy) {
+            s_mouse_tx_busy = false;
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            mouse_flush_locked();
+            xSemaphoreGive(s_lock);
+        }
         break;
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
         /* 对端保留了旧配对密钥而本机密钥库已丢失（如重启/OTA 后）时，
@@ -424,13 +460,14 @@ bool hid_ble_connected(void)
     return s_conn_handle != BLE_HS_CONN_HANDLE_NONE;
 }
 
-static void notify_input_report(uint16_t handle, const uint8_t *report, uint8_t len)
+static int notify_input_report(uint16_t handle, const uint8_t *report, uint8_t len)
 {
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return BLE_HS_ENOTCONN;
     struct os_mbuf *om = ble_hs_mbuf_from_flat(report, len);
-    if (!om) return;
+    if (!om) return BLE_HS_ENOMEM;
     int rc = ble_gatts_notify_custom(s_conn_handle, handle, om);
     if (rc != 0) ESP_LOGW(TAG, "notify handle=%u rc=%d", handle, rc);
+    return rc;
 }
 
 static void set_key(uint8_t code, uint8_t mods)
@@ -441,9 +478,16 @@ static void set_key(uint8_t code, uint8_t mods)
     memset(&s_keyboard_report[3], 0, 5);
 }
 
-static void clear_keys(void)
+/* 键盘按住状态机：down 累积修饰键/按键，up 只释放指定项。
+ * 此前 up 无条件清空整份报告，组合键中先松开的键会连带
+ * 释放仍按住的修饰键（Ctrl+C 中 C 抬起即丢 Ctrl）。
+ * 状态变量 s_kbd_held_code/mods 定义在文件头部全局区。 */
+
+static void kbd_report_held_locked(void)
 {
-    memset(s_keyboard_report, 0, sizeof(s_keyboard_report));
+    set_key(s_kbd_held_code, s_kbd_held_mods);
+    notify_input_report(s_keyboard_input_report_handle, s_keyboard_report,
+                        sizeof(s_keyboard_report));
 }
 
 static void set_mouse_report(uint8_t buttons, int8_t dx, int8_t dy,
@@ -456,9 +500,38 @@ static void set_mouse_report(uint8_t buttons, int8_t dx, int8_t dy,
     s_mouse_report[4] = (uint8_t)pan;
 }
 
-static void clear_mouse_report(void)
+/* ---------- 鼠标报告合并（连接间隔背压下零丢失） ----------
+ * BLE 每 1 个连接间隔只能发 1 个 notification（macOS HID 通常 15~30ms，
+ * 即 33~66 报告/s），前端 10ms 冲刷 ~100 包/s 灌入；此前 move/scroll
+ * 直接 notify 无积累，NimBLE mbuf 池打满（ENOMEM）后新报告被丢弃——
+ * 表现为移动量凭空丢失、光标跟不上手。对策：增量累积进 pending 缓冲，
+ * 上一份报告 TX 完成（NOTIFY_TX）后取 clamp(±127) 发送、余量保留，
+ * 与连接间隔自然匹配，零移动量丢失。 */
+/* s_pending_* / s_mouse_tx_busy 定义于文件头部全局区（gap_event 引用） */
+
+static int16_t clamp8i(int16_t v)
 {
-    memset(s_mouse_report, 0, sizeof(s_mouse_report));
+    return v > 127 ? 127 : (v < -127 ? -127 : v);
+}
+
+static void mouse_flush_locked(void)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        s_pending_dx = s_pending_dy = s_pending_wheel = s_pending_pan = 0;
+        return;
+    }
+    if (s_mouse_tx_busy) return;
+    if (!s_pending_dx && !s_pending_dy && !s_pending_wheel && !s_pending_pan) return;
+
+    int16_t dx = clamp8i(s_pending_dx), dy = clamp8i(s_pending_dy);
+    int16_t wv = clamp8i(s_pending_wheel), wh = clamp8i(s_pending_pan);
+    set_mouse_report(s_mouse_buttons, (int8_t)dx, (int8_t)dy, (int8_t)wv, (int8_t)wh);
+    if (notify_input_report(s_mouse_input_report_handle, s_mouse_report,
+                            sizeof(s_mouse_report)) == 0) {
+        s_pending_dx -= dx; s_pending_dy -= dy;
+        s_pending_wheel -= wv; s_pending_pan -= wh;
+        s_mouse_tx_busy = true;
+    }
 }
 
 void hid_ble_tap(uint8_t code, uint8_t mods)
@@ -468,29 +541,28 @@ void hid_ble_tap(uint8_t code, uint8_t mods)
     notify_input_report(s_keyboard_input_report_handle, s_keyboard_report,
                         sizeof(s_keyboard_report));
     vTaskDelay(pdMS_TO_TICKS(8));
-    clear_keys();
-    notify_input_report(s_keyboard_input_report_handle, s_keyboard_report,
-                        sizeof(s_keyboard_report));
+    kbd_report_held_locked();  /* 恢复接管路径按住的键（无则归零） */
     xSemaphoreGive(s_lock);
 }
 
 void hid_ble_down(uint8_t code, uint8_t mods)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_key(code, mods);
-    notify_input_report(s_keyboard_input_report_handle, s_keyboard_report,
-                        sizeof(s_keyboard_report));
+    if (code) s_kbd_held_code = code;
+    s_kbd_held_mods |= mods;
+    kbd_report_held_locked();
     xSemaphoreGive(s_lock);
 }
 
 void hid_ble_up(uint8_t code, uint8_t mods)
 {
-    (void)code;
-    (void)mods;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    clear_keys();
-    notify_input_report(s_keyboard_input_report_handle, s_keyboard_report,
-                        sizeof(s_keyboard_report));
+    if (code) {
+        if (code == s_kbd_held_code) s_kbd_held_code = 0;
+    } else if (mods) {
+        s_kbd_held_mods &= (uint8_t)~mods;
+    }
+    kbd_report_held_locked();
     xSemaphoreGive(s_lock);
 }
 
@@ -499,10 +571,9 @@ void hid_ble_mouse_move(int8_t dx, int8_t dy)
     if (dx == 0 && dy == 0) return;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_mouse_report(s_mouse_buttons, dx, dy, 0, 0);
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
-    clear_mouse_report();
+    s_pending_dx += dx;
+    s_pending_dy += dy;
+    mouse_flush_locked();
     xSemaphoreGive(s_lock);
 }
 
@@ -513,9 +584,7 @@ void hid_ble_mouse_down(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons |= button;
-    set_mouse_report(s_mouse_buttons, 0, 0, 0, 0);
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
+    mouse_flush_locked();  /* 按键状态并入下一份报告（连同积压增量） */
     xSemaphoreGive(s_lock);
 }
 
@@ -526,9 +595,7 @@ void hid_ble_mouse_up(uint8_t button)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_mouse_buttons &= (uint8_t)~button;
-    set_mouse_report(s_mouse_buttons, 0, 0, 0, 0);
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
+    mouse_flush_locked();
     xSemaphoreGive(s_lock);
 }
 
@@ -546,10 +613,9 @@ void hid_ble_mouse_scroll(int8_t vertical, int8_t horizontal)
     if (vertical == 0 && horizontal == 0) return;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    set_mouse_report(s_mouse_buttons, 0, 0, vertical, horizontal);
-    notify_input_report(s_mouse_input_report_handle, s_mouse_report,
-                        sizeof(s_mouse_report));
-    clear_mouse_report();
+    s_pending_wheel += vertical;
+    s_pending_pan += horizontal;
+    mouse_flush_locked();
     xSemaphoreGive(s_lock);
 }
 

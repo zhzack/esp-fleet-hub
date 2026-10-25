@@ -201,8 +201,9 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
             strcpy(err_msg, "unknown key");
             return false;
         }
-        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
-        if (cJSON_IsNumber(jm)) mods |= (uint8_t)(jm->valueint & 0xFF);
+        /* 释放语义只取 keymap 自身：常规键 mods=0（保留仍按住的修饰键），
+         * 修饰键 code=0+mods=位 → 清该位。payload 的 modifiers 是修饰键
+         * 快照，OR 进来会误释放仍按住的修饰键（组合键失效根因） */
         if (!opts.debug_no_hid) hid_up(code, mods);
         return true;
     }

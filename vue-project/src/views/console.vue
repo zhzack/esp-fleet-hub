@@ -647,6 +647,13 @@ function openKioskTrackpadPage() {
           </div>
         </div>
 
+        <!-- Real mouse & keyboard takeover via Pointer Lock -->
+        <MouseTakeoverPanel
+          class="console-card glass-panel"
+          :device-uuid="soleSelected"
+          :device-online="isSoleOnline"
+        />
+
         <!-- Embedded Touchpad Surface -->
         <div class="embedded-trackpad-wrap">
           <TrackpadPanel
@@ -655,13 +662,6 @@ function openKioskTrackpadPage() {
             @result="onTrackpadResult"
           />
         </div>
-
-        <!-- Real mouse & keyboard takeover via Pointer Lock -->
-        <MouseTakeoverPanel
-          class="console-card glass-panel"
-          :device-uuid="soleSelected"
-          :device-online="isSoleOnline"
-        />
       </div>
     </div>
   </div>
