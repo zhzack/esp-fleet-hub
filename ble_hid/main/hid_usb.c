@@ -93,7 +93,13 @@ enum {
 
 static const uint8_t CFG_DESC[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
-    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 4, false, sizeof(REPORT_DESC), EPNUM_HID, 16, 10),
+    /* 手写展开 TUD_HID_DESCRIPTOR(ITF_NUM_HID, 4, false, sizeof(REPORT_DESC), EPNUM_HID, 16, 10)，
+     * 唯一差异：HID 描述符 bCountryCode 0x00 → 0x21 (US)。
+     * macOS 对 country=0 的键盘无法确定布局，会弹"键盘设置助理"（Keyboard Setup
+     * Assistant）要求按键识别；声明为 US 布局后不再触发。字节数与 TUD_HID_DESC_LEN 一致。 */
+    9, TUSB_DESC_INTERFACE, ITF_NUM_HID, 0, 1, TUSB_CLASS_HID, 0, 0, 4,
+    9, HID_DESC_TYPE_HID, 0x11, 0x01, 0x21, 1, HID_DESC_TYPE_REPORT, U16_TO_U8S_LE(sizeof(REPORT_DESC)),
+    7, TUSB_DESC_ENDPOINT, EPNUM_HID, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(16), 10,
 #if CONFIG_TINYUSB_CDC_ENABLED
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 5, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_DATA, (0x80 | EPNUM_CDC_DATA), 64),
 #endif
@@ -117,6 +123,37 @@ void tud_mount_cb  (void) { s_mounted = true;  ESP_LOGI(TAG, "USB mounted"); }
 void tud_umount_cb (void) { s_mounted = false; s_mouse_buttons = 0; ESP_LOGW(TAG, "USB unmounted"); }
 void tud_suspend_cb(bool remote_wakeup_en) { (void)remote_wakeup_en; s_mounted = false; }
 void tud_resume_cb (void)                  { s_mounted = true; }
+
+/* ---------- 运行中插线的重枚举（无 VBUS 感知时的兜底） ----------
+ * 硬件事实：ESP32-S3 DevKitC 的内部 PHY 未接 VBUS 检测，ESP-IDF 的 usb_phy
+ * 组件把 bvalid 信号硬接为常 1（GPIO_MATRIX_CONST_ONE_INPUT），因此软件无法
+ * 感知 USB 插拔（GOTGCTL.BSESVLD 恒真，tud_connected() 亦不可用作判据）。
+ * 现象：TinyUSB 启动时若主机不在线（先上电后插线 / 主机重启 / 主机端口
+ * 状态异常），D+ 上拉虽已断言，主机可能不再发起枚举 → 永远 unmounted。
+ * 对策：未挂载期间每 5s 做一次 disconnect/connect 脉冲，重新断言 D+ 上拉，
+ * 给主机一个全新的连接边沿，强制其重走枚举；每个掉线周期只打一条日志，
+ * 其余静默。已挂载时任务仅休眠，零总线动作。 */
+static void usb_reenum_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(4000)); /* 给正常冷启动枚举留时间 */
+    bool retry_logged = false;
+    for (;;) {
+        if (!s_mounted) {
+            tud_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(50));
+            tud_connect();
+            if (!retry_logged) {
+                ESP_LOGI(TAG, "not mounted — pulsing D+ every 5s until host enumerates");
+                retry_logged = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            if (s_mounted) retry_logged = false; /* 稳定挂载后重置，下次掉线再记一条 */
+        }
+    }
+}
 
 static void send_kbd(uint8_t mods, uint8_t kc)
 {
@@ -204,6 +241,7 @@ esp_err_t hid_usb_init(const char *device_name)
 #endif
 
     ESP_LOGI(TAG, "USB HID composite up (HID + CDC)");
+    xTaskCreate(usb_reenum_task, "usb_reenum", 3072, NULL, 3, NULL);
     return ESP_OK;
 }
 

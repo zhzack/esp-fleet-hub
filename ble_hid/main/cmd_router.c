@@ -125,6 +125,14 @@ static int h_get_status(const cJSON *p, cJSON *r, char *err, int errlen)
     const char *tr = "ble";
     if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) tr = "usb";
     cJSON_AddStringToObject(r, "transport", tr);
+    const char *tm = "auto";
+    switch (executor_get_transport()) {
+        case EXECUTOR_TRANSPORT_BLE: tm = "ble"; break;
+        case EXECUTOR_TRANSPORT_USB: tm = "usb"; break;
+        default: break;
+    }
+    cJSON_AddStringToObject(r, "transport_mode", tm);
+    cJSON_AddNumberToObject(r, "free_heap", (double)esp_get_free_heap_size());
     return 0;
 }
 
@@ -382,6 +390,33 @@ static int h_transport_set(const cJSON *p, cJSON *r, char *err, int errlen)
     return 0;
 }
 
+/* `server.set` — 持久化 WebSocket 服务器地址到 NVS。此前只有串口 CLI 的
+ * 私有实现能改 server_host/port，收编进内核后三前端共用同一入口。 */
+static int h_server_set(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    const cJSON *jh = cJSON_GetObjectItem(p, "host");
+    const cJSON *jp = cJSON_GetObjectItem(p, "port");
+    if (!cJSON_IsString(jh) || !jh->valuestring[0]) {
+        snprintf(err, errlen, "host missing"); return 400;
+    }
+    uint16_t port = 8000;
+    if (cJSON_IsNumber(jp) && jp->valueint > 0 && jp->valueint <= 65535) {
+        port = (uint16_t)jp->valueint;
+    }
+    app_config_t cfg;
+    if (app_config_load(&cfg) != ESP_OK) {
+        snprintf(err, errlen, "config load failed"); return 500;
+    }
+    strlcpy(cfg.server_host, jh->valuestring, sizeof cfg.server_host);
+    cfg.server_port = port;
+    if (app_config_save(&cfg) != ESP_OK) {
+        snprintf(err, errlen, "config save failed"); return 500;
+    }
+    cJSON_AddStringToObject(r, "server", cfg.server_host);
+    cJSON_AddNumberToObject(r, "port",   cfg.server_port);
+    return 0;
+}
+
 /* `action` — one router type that runs the executor-format payload synchronously.
  * Used by LAN /api/action. Cloud's `action` envelope still goes through the
  * executor queue (handled in protocol.c) and never reaches the router. */
@@ -460,6 +495,7 @@ void cmd_router_init(void)
     cmd_router_register("usb.info",       h_usb_info);
     cmd_router_register("transport.get",  h_transport_get);
     cmd_router_register("transport.set",  h_transport_set);
+    cmd_router_register("server.set",     h_server_set);
     cmd_router_register("reboot",         h_reboot);
     cmd_router_register("action",         h_action);
     cmd_router_register("ota.start",      h_ota_start);

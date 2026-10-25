@@ -26,7 +26,8 @@
                             │ 双向 WebSocket (/ws/device)
 ┌───────────────────────────▼────────────────────────────┐
 │         ESP32-S3 固件系统 (ble_hid/ - ESP-IDF v5.4)    │
-│  - 协议编解码 (protocol.c) & 命令路由器 (cmd_router.c) │
+│  - 协议编解码 (protocol.c) & 单内核命令路由 (cmd_router.c) │
+│  - 串口维护终端 (serial_cli.c 薄翻译层 → cmd_router) │
 │  - 动作执行流水线 (executor.c)                         │
 │  - USB HID 驱动 (TinyUSB 复合设备: 键盘 + 鼠标)        │
 │  - BLE HID 驱动 (NimBLE 协议栈: 键盘 + 鼠标广播)       │
@@ -57,7 +58,7 @@
 - **Wi-Fi 连接**：已连接至路由器（SSID: `1`），芯片分配 IP: `192.168.68.142`
 - **长连接链路**：已通过 WebSocket 连入 `ws://192.168.68.159:8000/ws/device`
 - **设备标识**：`esp32_001`（状态：`online`，声明能力：`["ble_keyboard", "ble_mouse"]`）
-- **当前传输模式**：`ble`（通过 `GET /api/v2/devices/esp32_001/transport` 可实时确认）
+- **当前传输模式**：`usb`（显式 `transport.set` 已持久化到 NVS，重启/OTA 后不丢；通过 `GET /api/v2/devices/esp32_001/transport` 可实时确认）
 
 ---
 
@@ -90,7 +91,7 @@
 - **固件层 (`ble_hid/`)**：
   - 分区表升级为双备份架构（[partitions.csv](file:///f:/py_web/ble_hid/partitions.csv)），划分 `otadata`（引导标记）以及 `ota_0` / `ota_1`（双 1800KB 应用程序槽）。
   - 新增独立 FreeRTOS 异步升级任务 [ota_mgr.c](file:///f:/py_web/ble_hid/main/ota_mgr.c) / [ota_mgr.h](file:///f:/py_web/ble_hid/main/ota_mgr.h)，支持分块流式写入、自动对齐哈希、进度向 WebSocket 实时回传，并在校验成功后调用 `esp_ota_set_boot_partition` 自动重启切换。
-  - 在 [cmd_router.c](file:///f:/py_web/ble_hid/main/cmd_router.c) 与 [serial_cli.c](file:///f:/py_web/ble_hid/main/serial_cli.c) 中分别注册了 `ota.start` 与 `ota.status` 调度命令。
+  - `ota.start` / `ota.status` 均注册于 [cmd_router.c](file:///f:/py_web/ble_hid/main/cmd_router.c) 命令内核（2026-10-25 起 serial_cli 不再单独实现命令，见第六节单内核重构）。
 - **服务端 (`app/`)**：
   - 新增 `firmwares` 数据表与 ORM 模型（[models/firmware.py](file:///f:/py_web/app/database/models/firmware.py)），支持安全记录版本、文件名、SHA-256、文件大小及描述。
   - 开放 REST 接口（[api/v2/firmwares.py](file:///f:/py_web/app/api/v2/firmwares.py)）：固件上传、版本列表、二进制直接下载（`FileResponse`）、一键推送升级及设备 live OTA 状态轮询。
@@ -112,6 +113,8 @@
 - **测试补齐（6 → 23 个用例）**：新增 `tests/test_schemas.py`（7 个迁移 schema 的 from_attributes 序列化 + `WsEnvelope` 协议信封解析）、`tests/test_devices_api.py`（设备 CRUD/归属过滤/认领 + BLE 槽位绑定校验）、`tests/test_device_groups_api.py`（分组 CRUD/成员管理/越权 403）、`tests/test_macros_api.py`（宏 CRUD/config 归一化/跨用户隔离）、`tests/test_vehicles_api.py`（车辆列表与 chip 过滤）、`tests/test_main_lifespan.py`（lifespan 建表与 health 可用性，通过 monkeypatch 测试引擎隔离真实 DB）。
 - **测试期间发现的预存问题（已修复）**：① `crud/device_group.py` 的 `add_devices_to_group` 在单次请求中传入重复 device_id 会触发 `IntegrityError`（autoflush=False 导致查重看不到未提交的行），已用 `dict.fromkeys` 保序去重输入修复，测试覆盖单请求与跨请求两种重复场景；② `VehicleModel.current_status` 列无默认值，ORM 层插入 NULL 而 `VehicleOut` 要求 str，已为该列增加 `default="空闲"`（与 `VehicleBase` schema 的默认值对齐），测试验证端到端生效。
 - **控制中枢升级：多设备并发 + 统一输出目标（2026-10-21）**：`vue-project/src/views/console.vue` 两项改造，后端零改动（协议早已支持）。① 设备选择器改多选（`target_devices` 数组下发，后端 `asyncio.gather` 并发派发），指令流终端逐设备展示 ack 结果（`× N 台设备` 摘要行 + 每设备一行 `device_id / status / 延迟 / 错误`）；② 左侧"BLE 目标主机"卡片升级为"输出目标主机"：下拉合并 `🔌 USB 主机（线缆直连）`（选中 = `transport.set → usb`）与 BLE 配对槽位（选中 = 必要时 `transport.set → ble` + `ble.switch`），当前输出通道由 `transport.get` + `ble.info` + `usb.info` + `ble.bonds` 四路并行拉取展示；注意固件 `usb.info` 仅返回 `{mounted: bool}`（无主机名），USB 连接状态取 `mounted ?? usb_mounted`（`transport.get` 亦含 `usb_mounted`）。语义约束：触控板与输出目标卡片仅在**恰好单选一台设备**时可用（`soleSelected` computed），多选时卡片禁用并提示。前端已重新构建（dist hash 更新），浏览器需 Ctrl+F5 强刷一次绕过缓存的旧 index.html。
+- **传输模式持久化 + AUTO 默认（2026-10-25）**：修复"OTA/重启后 USB 失联"问题——`transport.set` 此前只写 RAM，设备重启后退回编译期默认 BLE，而 BLE 无对端连接时所有 HID 动作被 E007 拒绝。两处修复：① [executor.h](file:///f:/py_web/ble_hid/main/executor.h) 编译期默认从 BLE 改为 AUTO（USB 挂载则走 USB，否则 BLE）；② `transport.set` 显式选择持久化到 NVS `app` 命名空间（键 `transport_mode`），`cmd_router_init` 开机恢复。已通过 OTA 真机验证：`set usb → 断电重启 → mode=usb` 保持。固件版本 `1.2.0-transport-persist`。
+- **单内核多前端：serial_cli 收编进 cmd_router（2026-10-25）**：串口 CLI 重构为薄翻译层（[serial_cli.c](file:///f:/py_web/ble_hid/main/serial_cli.c)），不再直接调用 `wifi_mgr` / `hid_*` / `executor` / `ota_mgr` / `keymap`，而是把 `cmd args` 语法翻译成 `(type, JSON payload)` 走 `cmd_router_dispatch()`，与云端 WS、LAN HTTP 前端共享同一份命令注册表、参数校验与错误码。命令映射：`status→get_status`、`wifi→wifi.connect`、`wifi_scan→wifi.scan`、`server→server.set`、`transport→transport.set`、`tap/text/move/click→action`、`ota→ota.status/ota.start`、`reboot→reboot`；`status` 与 `wifi_scan` 保留人类可读格式化，其余成功时回显紧凑 JSON。由此修复三处行为不一致：① 串口 `transport` 命令此前只写 RAM（重启丢失），现与云端一致持久化 NVS；② 串口 `tap/move/click/text` 此前在 USB 未挂载 / BLE 未连接时**静默丢弃**（直接调 hid_* 返回 void），现在统一被内核以 E007 拒绝并回显 `ERROR 500: no USB host`；③ `server <host> [port]` 从 CLI 私有实现收编为内核命令 `server.set`（写 NVS，云端/LAN 前端亦可用）。内核侧配套增强：`get_status` 新增 `transport_mode`（配置模式）与 `free_heap` 字段。CLI 接入方式不变：UART 口 115200（PuTTY 或 `python -m serial.tools.miniterm COM5 115200`），回车出 `esp32>` 提示符，`help` 列全部命令。
 - **运行验证与 ESP32 链路测试补齐（23 → 44 个用例）**：本地启动 uvicorn 验证 lifespan 迁移后启动正常；跑通 `tests/smoke_test.py` E2E 冒烟（register → WS 注册 → action 下发 → 设备 ack → logs）。期间修复三类问题：① smoke test 502——httpx 默认走 Windows 系统代理（Clash），已加 `trust_env=False` 本机直连；② 控制台日志每条重复两次——`LOG_PIPELINE` 的 default（INFO）与 debug（DEBUG）两个 handler 都挂 console，DEBUG 级 handler 放行所有 ≥DEBUG 记录，已为 debug 管道增加 `only_below: INFO` 过滤器（`app/core/logger/logger.py` 支持 `only_below` 配置项）；③ 13 处 `datetime.utcnow()` 弃用（`ws/device.py`、`ws/client.py`、`crud/device.py`、`crud/device_bond_slot.py`、`crud/device_wifi_known.py`）统一改为 `datetime.now(timezone.utc)`，同时消除了 naive `.timestamp()` 按本地时区解释的隐患。新增 `tests/test_ws_device.py`（8 用例：register ack 与持久化、缺 device_id 拒绝 E004/1008、V1 legacy 帧兼容、msg_id 幂等去重、heartbeat/status 状态上报、action 派发-ACK 全链路 E2E、离线设备 E002 快速失败、同设备重连踢旧连接 1012）与 `tests/test_device_services.py`（13 用例：`_parse_ack_payload` 各分支、AckTracker resolve/timeout、OtaTracker 进度管理、幂等去重语义）。WS 测试要点：`device_ws` 不走依赖注入（内部自建 `SessionLocal`），测试需 monkeypatch `app.api.ws.device.SessionLocal` 为 `TestingSessionLocal`；WS 会话与 HTTP 请求必须共享同一 TestClient portal（`with TestClient(app)`），否则 `ack_tracker` 的 Future 会跨事件循环。
 - **真实键鼠接管：Pointer Lock 透传（2026-10-21）**：新增 `vue-project/src/components/MouseTakeoverPanel.vue` 挂载于控制中枢（触控板下方，同样仅单选在线设备时可用）。通过浏览器 Pointer Lock API 捕获控制端电脑的**真实鼠标**原始增量（优先 `unadjustedMovement: true` 绕过 OS 鼠标加速度，不支持的浏览器自动回退普通锁定），1:1 直通流式管线（10ms 合并冲刷 + 超 ±127 余量自动分片续发 + WS 直发优先 + HTTP 限流回退），与触控板共用 `/ws/client` 信封协议（`source: 'web-takeover'`）。事件映射：`mousemove.movementX/Y → mouse_move`（无加速度曲线直通）、`mousedown/up → mouse_down/mouse_up`（DOM button 0/1/2 → HID 位掩码 1/4/2，支持拖拽）、`wheel → mouse_scroll`（兼容 deltaMode=line，像素/22 换算步数）、`keydown/up → keyboard_down/keyboard_up`（`KeyboardEvent.code → KEY_*`：字母/数字/F1-F12 正则生成 + 特例表；修饰键状态打包为 `modifiers` 位掩码 1/2/4/8）。Esc 退出（浏览器内置语义）或 HUD 按钮退出；退出/失焦时清空流式队列并尽力补发仍按住键鼠的 up 动作防止目标机粘键。键盘事件绑 document（Pointer Lock 不转移键盘焦点），鼠标事件绑锁定遮罩元素。
 - **配套固件增强（需重新编译烧录后生效）**：① `hid_usb.c` / `hid_ble.c` 新增 `mouse_down` / `mouse_up` 原语（维护 `s_mouse_buttons` 位掩码状态），并修正 `mouse_move` / `mouse_scroll` 报告此前硬编码 buttons=0 的隐患——拖拽场景下移动报告会把按住的键清掉；USB unmount 与 BLE GAP disconnect 时重置该状态防粘键。② `executor.c` 新增 `mouse_down` / `mouse_up` 动作分支，`keyboard_down` / `keyboard_up` 增加可选 `modifiers` 字段（与 keymap 解析出的 mods 按位 OR），任意组合键透传不再受预置组合键名表限制。③ `keymap.c` 扩充 24 条目：US 布局标点 9 键（`KEY_LBRACKET` / `KEY_SEMICOLON` / `KEY_COMMA` 等）、编辑键 7 键（`KEY_CAPSLOCK` / `KEY_DELETE` / `KEY_HOME` / `KEY_PAGEDOWN` 等）、修饰键 8 键（`KEY_LEFTCTRL` 等，code=0 + modifier 位形式，右修饰键映射到左位）。后端零改动（`ActionRequest.payload` 为纯透传 `Dict[str, Any]`）。**已知限制**：固件 HID 键盘报告是"单键 + 修饰键"模式（`hid_*_up` 清空整个报告），不支持多键同按（N-key rollover）；打字与组合键场景无碍，游戏类多键并发场景暂不支持。
