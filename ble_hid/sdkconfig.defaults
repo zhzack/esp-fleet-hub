@@ -39,6 +39,9 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# 配对密钥（bond）持久化到 NVS——不开则 store 只有 RAM 队列，重启即丢，
+# 配对过的主机会陷入"重连→加密失败→断开"循环（对 macOS 表现为转圈连不上）
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
 
 # ---- TinyUSB (composite HID keyboard + mouse + CDC console) ----
 CONFIG_TINYUSB_HID_COUNT=1
