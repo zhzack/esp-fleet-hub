@@ -14,3 +14,4 @@ from app.database.models.action_log import ActionLog  # noqa: F401
 from app.database.models.macro import Macro  # noqa: F401
 from app.database.models.device_group import DeviceGroup, DeviceGroupMember  # noqa: F401
 from app.database.models.firmware import Firmware  # noqa: F401
+from app.database.models.device_host_meta import DeviceHostMeta  # noqa: F401

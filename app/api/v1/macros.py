@@ -45,6 +45,7 @@ def create_macro(
         payload.name,
         payload.steps,
         payload.config,
+        variants=payload.variants,
     )
 
 
@@ -62,6 +63,7 @@ def update_macro(
         name=payload.name,
         steps=payload.steps,
         config=payload.config,
+        variants=payload.variants,
     )
     if not m:
         raise HTTPException(404, "macro not found")

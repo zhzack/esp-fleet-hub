@@ -31,16 +31,23 @@ class MacroConfig(BaseModel):
         return self
 
 
+MacroVariantPlatform = Literal["win", "mac", "linux"]
+
+
 class MacroCreate(BaseModel):
     name: str = Field(..., max_length=128)
     steps: List[Dict[str, Any]]
     config: MacroConfig = Field(default_factory=MacroConfig)
+    # 平台变体：{win: [steps], mac: [steps], linux: [steps]}，键为平台名。
+    # 运行时按目标主机的平台标记选取，无匹配变体或变体为空则回退通用 steps。
+    variants: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 
 class MacroUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=128)
     steps: Optional[List[Dict[str, Any]]] = None
     config: Optional[MacroConfig] = None
+    variants: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 
 class MacroOut(BaseModel):
