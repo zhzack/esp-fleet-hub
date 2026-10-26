@@ -9,7 +9,7 @@
 
 ## 启动方式
 
-完整 Docker 用法、运维命令与故障排查见 **[docker_usage.md](docker_usage.md)**。这里只列最简启动：
+完整 Docker 用法、运维命令与故障排查见 **[deployment_guide.md](../05-operations/deployment_guide.md)**。这里只列最简启动：
 
 ### 开发（前后端分离 + 热更新）
 
@@ -37,15 +37,17 @@ docker compose -f compose.prod.yml up -d --build
 - [四、设备命令（V2 云路径）](#四设备命令v2-云路径)
 - [五、槽位（slots）与多目标 send](#五槽位slots-与多目标-send)
 - [六、WiFi 已知凭据](#六wifi-已知凭据)
-- [七、宏（macros）](#七宏macros)
+- [七、宏（macros）与平台变体](#七宏macros与平台变体)
 - [八、动作日志](#八动作日志)
-- [九、WebSocket envelope 协议（Server ⇄ ESP32）](#九websocket-envelope-协议server--esp32)
-- [十、LAN HTTP 协议（设备本机暴露）](#十lan-http-协议设备本机暴露)
-- [十一、固件命令清单（cmd_router）](#十一固件命令清单cmd_router)
-- [十二、Action payload](#十二action-payload)
-- [十三、数据库模型](#十三数据库模型)
-- [十四、错误码](#十四错误码)
-- [十五、附录](#十五附录)
+- [九、主机平台标记（host-meta）](#九主机平台标记host-meta)
+- [十、固件版本管理与 OTA 推送（firmwares）](#十固件版本管理与-ota-推送firmwares)
+- [十一、WebSocket envelope 协议（Server ⇄ ESP32）](#十一websocket-envelope-协议server--esp32)
+- [十二、LAN HTTP 协议（设备本机暴露）](#十二lan-http-协议设备本机暴露)
+- [十三、固件命令清单（cmd_router）](#十三固件命令清单cmd_router)
+- [十四、Action payload](#十四action-payload)
+- [十五、数据库模型](#十五数据库模型)
+- [十六、错误码](#十六错误码)
+- [十七、附录](#十七附录)
 
 ---
 
@@ -392,12 +394,136 @@ action 走 executor 队列；`payload` 见 §十二。
  
  `status`: `pending` | `sent` | `acked` | `failed`。
 
+---
+
+## 九、主机平台标记（host-meta）
+
+支持用户标记受控电脑的操作系统平台（Win / Mac / Linux），以便前端快捷键自适应及宏流水线分选平台变体。
+
+### `GET /api/v2/devices/{device_uuid}/host-meta`
+
+获取指定设备绑定的所有主机平台元数据列表。
+- **响应**：`200 OK`
+```jsonc
+[
+  {
+    "device_uuid": "esp32_001",
+    "host_addr": "32:F4:7F:E5:11:D0",
+    "platform": "mac",          // "win" | "mac" | "linux" | null
+    "name": "Grey-2 Mac",
+    "updated_at": "2026-10-26T01:00:00"
+  }
+]
+```
+
+### `PUT /api/v2/devices/{device_uuid}/host-meta/{host_addr}`
+
+设置或更新指定主机的操作系统平台。
+- **请求体**：
+```jsonc
+{
+  "platform": "mac",          // "win" | "mac" | "linux"
+  "name": "Grey-2 Mac"        // 可选友好名称
+}
+```
+- **响应**：`200 OK` 返回更新后的 `DeviceHostMetaOut`。
+
+### `DELETE /api/v2/devices/{device_uuid}/host-meta/{host_addr}`
+
+删除指定主机的平台标记信息。
+- **响应**：`200 OK` `{"status": "deleted"}`。
 
 ---
 
-## 九、WebSocket envelope 协议（Server ⇄ ESP32）
+## 十、固件版本管理与 OTA 推送（firmwares）
 
-### 9.1 入口
+提供固件安全上传、多版本管理、二进制直接下载、向在线设备批量推送 OTA 升级以及实时进度追踪。
+
+### `GET /api/v2/firmwares/`
+
+获取所有固件版本列表（按创建时间倒序）。
+- **响应**：`200 OK`
+```jsonc
+[
+  {
+    "id": 1,
+    "version": "1.2.0-transport-persist",
+    "filename": "firmware-v1.2.0.bin",
+    "file_size": 1284512,
+    "sha256": "8a3f9e5...",
+    "description": "Fix USB persist and auto mode",
+    "created_at": "2026-10-25T15:00:00"
+  }
+]
+```
+
+### `POST /api/v2/firmwares/`
+
+上传固件文件（仅限管理员 `admin`）。后端自动计算并记录 SHA-256 哈希值。
+- **请求类型**：`multipart/form-data`
+- **参数**：
+  - `file`: 二进制文件 (`.bin`)
+  - `version`: 版本号字符串 (如 `1.2.0`)
+  - `description`: 版本更新说明 (可选)
+- **响应**：`200 OK` 返回保存成功的固件信息。
+
+### `GET /api/v2/firmwares/{firmware_id}`
+
+获取单条固件详细元数据。
+
+### `GET /api/v2/firmwares/{firmware_id}/download`
+
+直接下载固件二进制流。
+- **响应**：`200 OK` (`application/octet-stream`，FileResponse)。
+
+### `POST /api/v2/firmwares/{firmware_id}/push`
+
+向一组在线设备下发 OTA 升级指令（仅限管理员 `admin`）。
+- **请求体**：
+```jsonc
+{
+  "device_uuids": ["esp32_001"]
+}
+```
+- **响应**：`200 OK`
+```jsonc
+{
+  "status": "pushed",
+  "firmware_id": 1,
+  "version": "1.2.0",
+  "results": [
+    { "device_uuid": "esp32_001", "status": "sent" }
+  ]
+}
+```
+- **信封协议下发**：网关向设备 WebSocket 推送 `ota.start` 指令，携带 `url`, `version`, `sha256` 三元组。
+
+### `GET /api/v2/firmwares/ota-status/{device_uuid}`
+
+实时获取设备的 OTA 升级进度与状态（由内存 `ota_tracker` 维护）。
+- **响应**：`200 OK`
+```jsonc
+{
+  "device_uuid": "esp32_001",
+  "status": "upgrading",       // "idle" | "upgrading" | "verifying" | "rebooting" | "success" | "failed"
+  "progress": 75,              // 0 ~ 100
+  "bytes_written": 963384,
+  "total_bytes": 1284512,
+  "error": null,
+  "updated_at": "2026-10-26T10:00:00"
+}
+```
+
+### `DELETE /api/v2/firmwares/{firmware_id}`
+
+删除固件版本及磁盘文件（仅限管理员 `admin`）。
+- **响应**：`200 OK` `{"status": "deleted"}`。
+
+---
+
+## 十一、WebSocket envelope 协议（Server ⇄ ESP32）
+
+### 11.1 入口
 
 设备：连 `ws://<server>:<port>/ws/device`，无路径参数（token 可选 `?token=`，目前未强制校验）。
 
@@ -474,7 +600,7 @@ server 立即回 `ack`，payload `{status:"ok", server_session:"..."}`。
 
 ---
 
-## 十、LAN HTTP 协议（设备本机暴露）
+## 十二、LAN HTTP 协议（设备本机暴露）
 
 设备连上 WiFi 后启动 `:80` HTTP server + UDP `:42424` 广播应答。同一组 cmd_router 处理器，路径如下：
 
@@ -529,7 +655,7 @@ NVS 没存 SSID 时，启动 SoftAP `ESP32-HID-XXXX`（无密码），HTTP `:80`
 
 ---
 
-## 十一、固件命令清单（cmd_router）
+## 十三、固件命令清单（cmd_router）
 
 每条 type 对应 `cmd_router_register` 注册的 handler。云路径（envelope）和 LAN 路径（HTTP）共用。
 
@@ -555,7 +681,7 @@ NVS 没存 SSID 时，启动 SoftAP `ESP32-HID-XXXX`（无密码），HTTP `:80`
 
 ---
 
-## 十二、Action payload
+## 十四、Action payload
 
 ```jsonc
 {
@@ -604,7 +730,7 @@ NVS 没存 SSID 时，启动 SoftAP `ESP32-HID-XXXX`（无密码），HTTP `:80`
 
 ---
 
-## 十三、数据库模型
+## 十五、数据库模型
 
 ```sql
 -- 用户
@@ -692,7 +818,7 @@ device_wifi_known (
 
 ---
 
-## 十四、错误码
+## 十六、错误码
 
 | 码 | 出处 | 含义 |
 |---|---|---|
@@ -718,7 +844,7 @@ HTTP 状态码：
 
 ---
 
-## 十五、附录
+## 十七、附录
 
 ### 15.1 设备 capabilities 枚举
 

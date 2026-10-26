@@ -40,9 +40,8 @@ py_web/
 ├── app/                  # FastAPI backend application
 │   ├── api/              # REST (v1, v2) & WebSocket routers
 │   ├── core/             # Configuration, logging, security
-│   ├── database/         # SQLAlchemy models and database sessions
-│   ├── modules/          # Business logic modules (auth, device, macro, queue)
-│   ├── services/         # Device manager, queue worker, protocol handlers
+│   ├── database/         # SQLAlchemy models, schemas, and sessions
+│   ├── services/         # Dispatcher, ACK tracker, multi-target, routing
 │   └── main.py           # FastAPI entrypoint and static mount
 ├── vue-project/          # Vue 3 SPA frontend
 │   ├── src/              # Components, views, stores, router, API client
@@ -153,11 +152,26 @@ docker run --rm -v "%cd%/ble_hid:/project" -w /project espressif/idf:release-v5.
 
 ## 📖 Documentation Reference
 
-Detailed architectural and design specifications are available in the [docs/](docs/) directory:
+Detailed specifications and architectural guides are organized in the **[docs/](docs/README.md)** directory:
 
-- [API Reference](docs/api_reference.md)
-- [System Architecture (V1.1)](docs/hid_gateway_detailed_architecture_v_1.md)
-- [Protocol V2 Design](docs/hid_gateway_protocol_v_2_design.md)
-- [Backend Design](docs/hid_gateway_backend_design_v_1.md)
-- [ESP32 Firmware Design](docs/hid_gateway_esp_32_firmware_design_v_1.md)
-- [Docker Usage Guide](docs/docker_usage.md)
+- 📑 **[Documentation Center Index](docs/README.md)**: Full navigation map and architecture blueprint.
+- 📋 **Requirements & Scenarios**:
+  - [Product Requirements Document (PRD)](docs/01-requirements/product_requirements.md)
+  - [Core User Scenarios & Sequence Flows](docs/01-requirements/user_scenarios.md)
+- 🏗️ **System Architecture**:
+  - [System Architecture (V2.1 Industrial)](docs/02-architecture/system_architecture.md)
+  - [Security & Authorization Architecture](docs/02-architecture/security_architecture.md)
+- 🔌 **Protocols & APIs**:
+  - [Protocol V2 Specification](docs/03-protocols/protocol_v2_spec.md)
+  - [API & WebSocket Reference](docs/03-protocols/api_reference.md)
+- 🧩 **Subsystem Designs**:
+  - [Backend Gateway Subsystem](docs/04-subsystems/backend_gateway.md)
+  - [ESP32-S3 Firmware Subsystem](docs/04-subsystems/esp32_firmware.md)
+  - [Frontend Web Subsystem](docs/04-subsystems/frontend_web.md)
+- 🚀 **Operations & Deployment**:
+  - [Deployment & Operations Guide](docs/05-operations/deployment_guide.md)
+  - [Hardware & Network Devices List](docs/05-operations/devices.md)
+  - [Firmware Build, Flashing & OTA Guide](docs/05-operations/firmware_flashing.md)
+- 📜 **Handover & History**:
+  - [Project Handover & Troubleshooting](docs/06-history-and-handover/project_handover.md)
+  - [Changelog & Milestones](docs/06-history-and-handover/changelog.md)

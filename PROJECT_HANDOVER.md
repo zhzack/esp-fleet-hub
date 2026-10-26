@@ -49,7 +49,7 @@
   - 服务端局域网 IP：`192.168.68.159`
 - **前端托管**：由 FastAPI 直接接管 `vue-project/dist`，访问 `http://192.168.68.159:8000/` 即是最新编译的前端（注意用局域网 IP，勿用 127.0.0.1，见上方端口陷阱）。
 - **数据库**：`app.db`（SQLite，WAL 模式），已全部拉齐模型结构（含 `device_host_meta` 主机平台标记表）。
-- **受控目标机**：Mac（macOS 27，`192.168.68.97`，SSH `greyblue/zzzz`，设备清单见 [docs/devices.md](docs/devices.md)）——已配对并标记平台 `mac`；局域网另有 fnOS NAS 与阿里云 ECS（连通性实测记录见同文件）。
+- **受控目标机**：Mac（macOS 27，`192.168.68.97`，SSH `greyblue/zzzz`，设备清单见 [docs/05-operations/devices.md](docs/05-operations/devices.md)）——已配对并标记平台 `mac`；局域网另有 fnOS NAS 与阿里云 ECS（连通性实测记录见同文件）。
 - **内置测试账号**：
   - 管理员：`admin` / `admin123` (角色：`admin`)
   - 普通控制员：`alice` / `secret123` (角色：`user`)
