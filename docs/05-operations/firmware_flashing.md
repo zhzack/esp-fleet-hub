@@ -128,3 +128,4 @@ curl -X POST http://127.0.0.1:8000/api/v2/firmwares/1/push \
 3. 观察设备重启进入新分区，串口打出 `PENDING_VERIFY — health check started`。
 4. 90 秒后观察到日志输出 `health check TIMEOUT — rolling back and rebooting`。
 5. 设备自动重启并重新引导旧分区（例如 `ota_0`），设备再次正常上线，验证回滚闭环。
+

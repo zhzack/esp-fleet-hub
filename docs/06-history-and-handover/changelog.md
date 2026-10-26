@@ -76,3 +76,4 @@
 - 修复负向业务确认（如 E007）被重试机制判定为虚假成功 ACK 的深层 Bug。
 - 自动化测试用例由 6 个扩展至 23 个，全面覆盖 schemas、devices、macros 与 lifespan。
 - Pydantic 模型配置由废弃的 `class Config` 迁移为 `model_config = ConfigDict(from_attributes=True)`。
+

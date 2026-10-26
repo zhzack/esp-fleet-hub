@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
@@ -39,7 +42,7 @@ def get_params(script: str, config: str, _user: User = Depends(get_current_user)
 def run_script(
     script: str,
     config_name: str,
-    args: list[str] | None = None,
+    args: Optional[list[str]] = None,
     _user: User = Depends(get_current_user),
 ):
     _ = config_name

@@ -117,3 +117,4 @@ graph TD
 - 查阅现有设备网络与账号清单：阅读 [05-operations/devices.md](05-operations/devices.md)。
 - 本地与 Docker 环境一键启动部署：阅读 [05-operations/deployment_guide.md](05-operations/deployment_guide.md)。
 - 全量自动化测试与冒烟测试验证：查阅 [06-history-and-handover/project_handover.md](06-history-and-handover/project_handover.md) 中的测试说明。
+

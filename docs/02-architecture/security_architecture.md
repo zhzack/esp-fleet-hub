@@ -159,3 +159,4 @@ ESP32 NimBLE 协议栈配置为 **Security Mode 1, Level 2**（带加密的未�
      ```
 3. **WiFi 密码存储加密**：
    - 写入 `device_wifi_known` 表的 WiFi 密码由 [`app/core/wifi_crypto.py`](file:///data/code/blue/py_web/app/core/wifi_crypto.py) 使用主密钥进行 AES-CBC 加密存储，数据库中严禁出现明文 WiFi 凭据。
+
