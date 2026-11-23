@@ -5,6 +5,7 @@
 #include "macro_mgr.h"
 #include "ws_hid.h"
 #include "app_config.h"
+#include "hid_usb.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -362,6 +363,44 @@ static esp_err_t h_macros_exec(httpd_req_t *req)
     }
 }
 
+/* ---------------- System Reset / Bootloader Endpoints ---------------- */
+
+static void deferred_bootloader_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(300));
+    hid_usb_reboot_bootloader();
+    vTaskDelete(NULL);
+}
+
+static void deferred_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(300));
+    hid_usb_reboot_system();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t h_system_bootloader(httpd_req_t *req)
+{
+    if (!auth_check(req)) return ESP_OK;
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddBoolToObject(res, "reboot_to_bootloader", true);
+    send_json_resp(req, 0, NULL, res);
+    xTaskCreate(deferred_bootloader_task, "def_boot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t h_system_reboot(httpd_req_t *req)
+{
+    if (!auth_check(req)) return ESP_OK;
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddBoolToObject(res, "reboot", true);
+    send_json_resp(req, 0, NULL, res);
+    xTaskCreate(deferred_reboot_task, "def_reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 /* ---------------- Direct Stream OTA Upload ---------------- */
 
 static void delayed_reboot_task(void *arg)
@@ -698,7 +737,17 @@ esp_err_t lan_mode_start(const char *device_id)
     };
     httpd_register_uri_handler(s_httpd, &u_ws_hid);
 
-    /* 8. Generic router routes */
+    /* 8. System Reboot & Bootloader routes */
+    httpd_uri_t u_sys_boot = { .uri="/api/system/bootloader", .method=HTTP_POST, .handler=h_system_bootloader };
+    httpd_register_uri_handler(s_httpd, &u_sys_boot);
+    httpd_uri_t u_sys_boot_g = { .uri="/api/system/bootloader", .method=HTTP_GET, .handler=h_system_bootloader };
+    httpd_register_uri_handler(s_httpd, &u_sys_boot_g);
+    httpd_uri_t u_sys_reb = { .uri="/api/system/reboot", .method=HTTP_POST, .handler=h_system_reboot };
+    httpd_register_uri_handler(s_httpd, &u_sys_reb);
+    httpd_uri_t u_sys_reb_g = { .uri="/api/system/reboot", .method=HTTP_GET, .handler=h_system_reboot };
+    httpd_register_uri_handler(s_httpd, &u_sys_reb_g);
+
+    /* 9. Generic router routes */
     for (size_t i = 0; i < N_ROUTES; i++) {
         httpd_uri_t u = {
             .uri = ROUTES[i].path,

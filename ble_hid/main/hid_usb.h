@@ -33,6 +33,12 @@ void hid_usb_mouse_up   (uint8_t button);
 /* Consumer Control (multimedia / audio) */
 void hid_usb_consumer_tap(uint16_t key);
 
+/** Reboot immediately into ROM download bootloader mode (simulates BOOT key held). */
+void hid_usb_reboot_bootloader(void);
+
+/** Reboot system normally. */
+void hid_usb_reboot_system(void);
+
 #ifdef __cplusplus
 }
 #endif

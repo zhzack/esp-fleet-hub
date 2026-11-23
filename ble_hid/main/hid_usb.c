@@ -9,9 +9,14 @@
 
 #include <string.h>
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+
+#if CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
+#include "soc/rtc_cntl_reg.h"
+#endif
 
 #if CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 #define HID_USB_HW 1
@@ -314,6 +319,37 @@ void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal)
     taskEXIT_CRITICAL(&s_mouse_mux);
 }
 
+void hid_usb_reboot_bootloader(void)
+{
+    ESP_LOGW(TAG, "Rebooting into ROM download bootloader mode...");
+    vTaskDelay(pdMS_TO_TICKS(100));
+#if CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+#endif
+    esp_restart();
+}
+
+void hid_usb_reboot_system(void)
+{
+    ESP_LOGI(TAG, "Rebooting system...");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+}
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+static void cdc_line_coding_changed_cb(int itf, cdcacm_event_t *event)
+{
+    (void)itf;
+    if (event && event->type == CDC_EVENT_LINE_CODING_CHANGED) {
+        if (event->line_coding_changed_data.p_line_coding &&
+            event->line_coding_changed_data.p_line_coding->bit_rate == 1200) {
+            ESP_LOGW(TAG, "CDC 1200bps touch detected! Entering download bootloader...");
+            hid_usb_reboot_bootloader();
+        }
+    }
+}
+#endif
+
 esp_err_t hid_usb_init(const char *device_name)
 {
     strlcpy(s_dev_name, device_name ? device_name : "esp32-hid", sizeof s_dev_name);
@@ -340,7 +376,7 @@ esp_err_t hid_usb_init(const char *device_name)
         .callback_rx = NULL,
         .callback_rx_wanted_char = NULL,
         .callback_line_state_changed = NULL,
-        .callback_line_coding_changed = NULL,
+        .callback_line_coding_changed = cdc_line_coding_changed_cb,
     };
     esp_err_t cdc_err = tusb_cdc_acm_init(&acm_cfg);
     if (cdc_err == ESP_OK) {
@@ -358,6 +394,8 @@ esp_err_t hid_usb_init(const char *device_name)
 
 #else  /* !HID_USB_HW */
 
+void hid_usb_reboot_bootloader(void)          { esp_restart(); }
+void hid_usb_reboot_system(void)              { esp_restart(); }
 esp_err_t hid_usb_init(const char *device_name) { (void)device_name; return ESP_ERR_NOT_SUPPORTED; }
 bool      hid_usb_mounted(void)                 { return false; }
 void      hid_usb_tap (uint8_t c, uint8_t m)    { (void)c; (void)m; }

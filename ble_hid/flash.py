@@ -70,10 +70,31 @@ def print_ports() -> None:
         print(f"  {port.device:10} VID:PID={vid}:{pid}  {port.description}")
 
 
+def touch_1200bps(port_name: str) -> None:
+    require_module("serial", "pyserial")
+    import time
+    import serial
+
+    print(f"[*] Detected running CDC ({port_name}). Triggering 1200bps touch to enter ROM bootloader...")
+    try:
+        s = serial.Serial(port_name, 1200)
+        s.close()
+    except Exception:
+        pass
+    time.sleep(1.8)
+
+
 def find_port() -> str | None:
     ports = get_ports()
     if not ports:
         return None
+
+    # Auto 1200bps touch if ESP32 TinyUSB composite CDC (303A:400C) is active
+    for port in ports:
+        if (port.vid or 0) == 0x303A and (port.pid or 0) == 0x400C:
+            touch_1200bps(port.device)
+            ports = get_ports()
+            break
 
     matched = [port for port in ports if (port.vid or 0) in ESP_VIDS]
     pool = matched or ports
