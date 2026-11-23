@@ -12,6 +12,7 @@
 #include "hid_ble.h"
 #include "hid_usb.h"
 #include "keymap.h"
+#include "power_sw.h"
 #include "ws_client.h"
 
 static const char *TAG = "exec";
@@ -292,6 +293,25 @@ static bool exec_step(const cJSON *step, const exec_options_t *parent,
         cJSON_ArrayForEach(sub, steps) {
             if (!exec_step(sub, &opts, err_code, err_msg)) return false;
         }
+        return true;
+    }
+
+    if (!strcmp(type, "consumer") && key) {
+        uint16_t code = 0;
+        if (!keymap_consumer_lookup(key, &code)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "unknown consumer key");
+            return false;
+        }
+        if (!opts.debug_no_hid) hid_usb_consumer_tap(code);
+        return true;
+    }
+
+    if (!strcmp(type, "power_pulse")) {
+        const cJSON *jd = cJSON_GetObjectItem(step, "duration_ms");
+        if (!cJSON_IsNumber(jd)) jd = cJSON_GetObjectItem(step, "ms");
+        int ms = cJSON_IsNumber(jd) ? jd->valueint : 500;
+        power_sw_pulse(ms);
         return true;
     }
 

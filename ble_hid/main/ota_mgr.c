@@ -15,8 +15,10 @@
 #include "sdkconfig.h"
 
 #include "app_config.h"
+#include "hid_usb.h"
 #include "protocol.h"
 #include "serial_cli.h"
+#include "wifi_mgr.h"
 #include "ws_client.h"
 
 static const char *TAG = "ota_mgr";
@@ -331,7 +333,7 @@ static bool health_ok(void)
 #ifdef CONFIG_APP_OTA_TEST_UNHEALTHY
     return false;
 #else
-    return ws_client_online() || serial_cli_activity();
+    return wifi_mgr_connected() || hid_usb_mounted() || ws_client_online() || serial_cli_activity();
 #endif
 }
 
