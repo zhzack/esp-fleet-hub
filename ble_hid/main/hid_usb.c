@@ -30,12 +30,14 @@ static const char *TAG = "hid_usb";
 
 #if HID_USB_HW
 
-#define RID_KBD   1
-#define RID_MOUSE 2
+#define RID_KBD      1
+#define RID_MOUSE    2
+#define RID_CONSUMER 3
 
 static const uint8_t REPORT_DESC[] = {
     TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(RID_KBD)),
     TUD_HID_REPORT_DESC_MOUSE   (HID_REPORT_ID(RID_MOUSE)),
+    TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(RID_CONSUMER)),
 };
 
 static const tusb_desc_device_t DEV_DESC = {
@@ -255,6 +257,16 @@ void hid_usb_up(uint8_t code, uint8_t mods)
     kbd_report_held();
 }
 
+void hid_usb_consumer_tap(uint16_t key)
+{
+    if (!s_mounted) return;
+    uint16_t code = key;
+    tud_hid_report(RID_CONSUMER, &code, sizeof(code));
+    vTaskDelay(pdMS_TO_TICKS(15));
+    code = 0;
+    tud_hid_report(RID_CONSUMER, &code, sizeof(code));
+}
+
 void hid_usb_mouse_move(int8_t dx, int8_t dy)
 {
     taskENTER_CRITICAL(&s_mouse_mux);
@@ -356,5 +368,6 @@ void hid_usb_mouse_click(uint8_t b)          { (void)b; }
 void hid_usb_mouse_scroll(int8_t v, int8_t h) { (void)v; (void)h; }
 void hid_usb_mouse_down (uint8_t b)          { (void)b; }
 void hid_usb_mouse_up   (uint8_t b)          { (void)b; }
+void hid_usb_consumer_tap(uint16_t k)        { (void)k; }
 
 #endif

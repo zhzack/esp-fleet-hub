@@ -27,9 +27,10 @@
 #include "hid_usb.h"
 #include "wifi_mgr.h"
 #include "ota_mgr.h"
+#include "power_sw.h"
 
 static const char *TAG = "cmdr";
-#define MAX_HANDLERS 32
+#define MAX_HANDLERS 48
 
 typedef struct {
     const char    *type;
@@ -122,6 +123,10 @@ static int h_get_status(const cJSON *p, cJSON *r, char *err, int errlen)
 
     cJSON *u = cJSON_AddObjectToObject(r, "usb");
     cJSON_AddBoolToObject(u, "mounted", hid_usb_mounted());
+
+    /* Top-level fields for easy dashboard access */
+    cJSON_AddBoolToObject  (r, "usb_mounted",   hid_usb_mounted());
+    cJSON_AddStringToObject(r, "ip",            ip);
 
     const char *tr = "ble";
     if (executor_active_transport() == EXECUTOR_TRANSPORT_USB) tr = "usb";
@@ -531,6 +536,113 @@ static int h_ota_status(const cJSON *p, cJSON *r, char *err, int errlen)
     return 0;
 }
 
+/* ---------- Semantic convenience commands & IoT config ---------- */
+
+static int h_cmd_shutdown(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    static const char SHUTDOWN_MACRO[] = 
+    "{\"type\":\"macro\",\"steps\":["
+    "{\"type\":\"keyboard_down\",\"key\":\"KEY_LEFTGUI\"},"
+    "{\"type\":\"keyboard_tap\",\"key\":\"KEY_X\"},"
+    "{\"type\":\"keyboard_up\",\"key\":\"KEY_LEFTGUI\"},"
+    "{\"type\":\"delay\",\"delay_ms\":300},"
+    "{\"type\":\"keyboard_tap\",\"key\":\"KEY_U\"},"
+    "{\"type\":\"delay\",\"delay_ms\":200},"
+    "{\"type\":\"keyboard_tap\",\"key\":\"KEY_U\"}"
+    "]}";
+    cJSON *act = cJSON_Parse(SHUTDOWN_MACRO);
+    char ec[8] = {0};
+    int ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_lock(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"keyboard_tap\",\"key\":\"KEY_GUI_L\"}");
+    char ec[8] = {0};
+    int ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_desktop(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"keyboard_tap\",\"key\":\"KEY_GUI_D\"}");
+    char ec[8] = {0};
+    int ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_mute(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"consumer\",\"key\":\"KEY_MUTE\"}");
+    char ec[8] = {0};
+    int ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_volup(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"consumer\",\"key\":\"KEY_VOL_UP\"}");
+    char ec[8] = {0};
+    int ret = 0;
+    for (int i = 0; i < 5; i++) {
+        ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_voldown(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"consumer\",\"key\":\"KEY_VOL_DOWN\"}");
+    char ec[8] = {0};
+    int ret = 0;
+    for (int i = 0; i < 5; i++) {
+        ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_cmd_playpause(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    cJSON *act = cJSON_Parse("{\"type\":\"consumer\",\"key\":\"KEY_PLAY_PAUSE\"}");
+    char ec[8] = {0};
+    int ret = executor_run_payload_sync(act, ec, sizeof(ec), err, errlen);
+    cJSON_Delete(act);
+    return ret;
+}
+
+static int h_power_pulse(const cJSON *p, cJSON *r, char *err, int errlen)
+{
+    (void)p; (void)r;
+    int ms = 500;
+    if (p) {
+        const cJSON *jm = cJSON_GetObjectItem(p, "duration_ms");
+        if (cJSON_IsNumber(jm)) ms = jm->valueint;
+    }
+    esp_err_t ret = power_sw_pulse(ms);
+    if (ret != ESP_OK) {
+        snprintf(err, errlen, "power switch pulse failed: %d", ret);
+        return 500;
+    }
+    return 0;
+}
+
+
 void cmd_router_init(void)
 {
     restore_transport();
@@ -554,4 +666,14 @@ void cmd_router_init(void)
     cmd_router_register("action",         h_action);
     cmd_router_register("ota.start",      h_ota_start);
     cmd_router_register("ota.status",     h_ota_status);
+
+    /* 新增语义化指令与小爱配置 */
+    cmd_router_register("cmd.shutdown",   h_cmd_shutdown);
+    cmd_router_register("cmd.lock",       h_cmd_lock);
+    cmd_router_register("cmd.desktop",    h_cmd_desktop);
+    cmd_router_register("cmd.mute",       h_cmd_mute);
+    cmd_router_register("cmd.volup",      h_cmd_volup);
+    cmd_router_register("cmd.voldown",    h_cmd_voldown);
+    cmd_router_register("cmd.playpause",  h_cmd_playpause);
+    cmd_router_register("power.pulse",    h_power_pulse);
 }

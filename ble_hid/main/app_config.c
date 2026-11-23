@@ -32,7 +32,7 @@ static app_config_t s_cfg;
 #ifdef CONFIG_APP_DEFAULT_SERVER_HOST
 #define DEFAULT_SERVER_HOST CONFIG_APP_DEFAULT_SERVER_HOST
 #else
-#define DEFAULT_SERVER_HOST "192.168.68.159"
+#define DEFAULT_SERVER_HOST ""
 #endif
 
 #ifdef CONFIG_APP_DEFAULT_SERVER_PORT
@@ -59,6 +59,9 @@ static void apply_defaults(app_config_t *cfg)
     cfg->strict_seq   = false;
     cfg->queue_size   = 128;
     cfg->queue_policy = 0;
+
+    cfg->api_password[0] = '\0';
+    cfg->power_pin = 4; /* DEFAULT_POWER_SW_GPIO */
 }
 
 static void nvs_read_str(nvs_handle_t h, const char *key, char *dst, size_t cap)
@@ -99,12 +102,15 @@ esp_err_t app_config_load(app_config_t *cfg)
     nvs_get_u16(h, "queue_size", &cfg->queue_size);
     nvs_get_u8(h, "queue_policy", &cfg->queue_policy);
 
+    nvs_read_str(h, "api_pwd",     cfg->api_password, sizeof cfg->api_password);
+    nvs_get_u8(h, "power_pin", &cfg->power_pin);
+
     nvs_close(h);
     memcpy(&s_cfg, cfg, sizeof s_cfg);
 
-    ESP_LOGI(TAG, "loaded: ssid=%s host=%s:%u device_id=%s queue=%u policy=%u strict_seq=%d",
+    ESP_LOGI(TAG, "loaded: ssid=%s host=%s:%u device_id=%s has_pwd=%s power_pin=%u",
              cfg->wifi_ssid, cfg->server_host, cfg->server_port,
-             cfg->device_id, cfg->queue_size, cfg->queue_policy, cfg->strict_seq);
+             cfg->device_id, cfg->api_password[0] ? "yes" : "no", cfg->power_pin);
     return ESP_OK;
 }
 
@@ -122,6 +128,8 @@ esp_err_t app_config_save(const app_config_t *cfg)
     nvs_set_u8 (h, "strict_seq",   cfg->strict_seq ? 1 : 0);
     nvs_set_u16(h, "queue_size",   cfg->queue_size);
     nvs_set_u8 (h, "queue_policy", cfg->queue_policy);
+    nvs_set_str(h, "api_pwd",      cfg->api_password);
+    nvs_set_u8 (h, "power_pin",    cfg->power_pin);
     esp_err_t err = nvs_commit(h);
     nvs_close(h);
     memcpy(&s_cfg, cfg, sizeof s_cfg);

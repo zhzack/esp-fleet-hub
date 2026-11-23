@@ -14,6 +14,7 @@ extern "C" {
 #define APP_SSID_LEN        33
 #define APP_PASS_LEN        65
 #define APP_SECRET_LEN      65
+#define APP_PASSWORD_LEN    33
 
 typedef struct {
     char     wifi_ssid[APP_SSID_LEN];
@@ -26,6 +27,12 @@ typedef struct {
     bool     strict_seq;
     uint16_t queue_size;
     uint8_t  queue_policy;   /* 0 = drop_oldest, 1 = reject_new */
+
+    /* Web 控制台 / REST API 访问口令 (留空表示免密) */
+    char     api_password[APP_PASSWORD_LEN];
+
+    /* 硬件预留跳线配置 */
+    uint8_t  power_pin;                          /* 预留电源开关 GPIO，默认 4 */
 } app_config_t;
 
 /** Read config from NVS namespace "app". Missing keys fall back to compile-time defaults. */

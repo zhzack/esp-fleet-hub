@@ -30,6 +30,9 @@ void hid_usb_mouse_scroll(int8_t vertical, int8_t horizontal);
 void hid_usb_mouse_down (uint8_t button);
 void hid_usb_mouse_up   (uint8_t button);
 
+/* Consumer Control (multimedia / audio) */
+void hid_usb_consumer_tap(uint16_t key);
+
 #ifdef __cplusplus
 }
 #endif

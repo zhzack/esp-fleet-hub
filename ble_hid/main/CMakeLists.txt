@@ -15,8 +15,13 @@ idf_component_register(
         "lan_mode.c"
         "serial_cli.c"
         "ota_mgr.c"
+        "power_sw.c"
+        "log_capture.c"
+        "macro_mgr.c"
+        "ws_hid.c"
     INCLUDE_DIRS "."
     REQUIRES
+        mdns
         nvs_flash
         esp_wifi
         esp_event
@@ -33,4 +38,5 @@ idf_component_register(
         esp_http_client
         esp_partition
         mbedtls
+        driver
 )

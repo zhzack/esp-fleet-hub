@@ -1,14 +1,19 @@
 /*
- * ble_hid firmware entry point.
+ * ble_hid firmware entry point (Headless LAN Direct Controller).
  *
  * Boot order:
- *   1. NVS init  → load config
- *   2. Start BLE HID (advertising) — host PC can pair while we configure WiFi
- *   3. If wifi_ssid is empty → run SoftAP provisioning portal, then reboot
- *   4. WiFi STA → block until got IP
- *   5. cmd_router init + LAN mode (HTTP server + UDP discovery)
- *   6. WebSocket client → register with backend
- *   7. Executor + heartbeat tasks
+ *   1. Log capture buffer init (32KB RAM ring buffer)
+ *   2. NVS init  → load config
+ *   3. Start BLE HID (advertising) — host PC can pair while we configure WiFi
+ *   4. Start TinyUSB HID (composite mouse + keyboard + consumer + CDC)
+ *   5. Serial CLI start
+ *   6. Hardware power pulse switch pin init
+ *   7. If wifi_ssid is empty → run SoftAP provisioning portal, then reboot
+ *   8. WiFi STA → connect to local AP
+ *   9. Executor task start
+ *  10. cmd_router init + OTA manager init
+ *  11. LAN mode (REST API + WebSocket Streamer + mDNS announcement)
+ *  12. Optional WebSocket client (if central gateway server is configured)
  */
 #include <stdio.h>
 #include "esp_log.h"
@@ -27,13 +32,18 @@
 #include "lan_mode.h"
 #include "serial_cli.h"
 #include "ota_mgr.h"
+#include "power_sw.h"
+#include "log_capture.h"
 
-#define FW_VERSION "esp32-hid-1.2"
+#define FW_VERSION "esp32-headless-2.3"
 
 static const char *TAG = "main";
 
 void app_main(void)
 {
+    /* 立即启用内存环形日志缓冲，以便通过局域网 HTTP 查看实时运行日志 */
+    log_capture_init(32768);
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -55,8 +65,11 @@ void app_main(void)
         ESP_LOGW(TAG, "USB HID init failed: %s — BLE only", esp_err_to_name(uerr));
     }
 
-    /* 启动交互式串口命令行（USB CDC 虚拟串口 / UART 终端） */
+    /* 启动交互式命令行（USB CDC 虚拟串口 / UART 终端） */
     serial_cli_start();
+
+    /* 初始化预留硬件开关跳线 */
+    power_sw_init(cfg.power_pin);
 
     if (cfg.wifi_ssid[0] == '\0') {
         ESP_LOGW(TAG, "no wifi configured — entering SoftAP provisioning");
@@ -82,9 +95,12 @@ void app_main(void)
         ESP_LOGW(TAG, "lan_mode_start failed (non-fatal)");
     }
 
-    ESP_ERROR_CHECK(ws_client_start(cfg.server_host, cfg.server_port,
-                                    cfg.device_id, cfg.device_token));
-    ESP_ERROR_CHECK(heartbeat_start(10));
+    if (cfg.server_host[0] != '\0' && cfg.device_token[0] != '\0') {
+        ws_client_start(cfg.server_host, cfg.server_port, cfg.device_id, cfg.device_token);
+        heartbeat_start(10);
+    } else {
+        ESP_LOGI(TAG, "standalone headless mode active: LAN REST + Direct WebSocket HID Stream");
+    }
 
     ESP_LOGI(TAG, "app_main done — tasks running");
 }

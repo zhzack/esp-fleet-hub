@@ -128,3 +128,32 @@ bool keymap_ascii(char c, uint8_t *out_code, uint8_t *out_mods)
     }
     return false;
 }
+
+static const struct {
+    const char *name;
+    uint16_t    code;
+} CONSUMER_TABLE[] = {
+    {"KEY_MUTE",        0x00E2},
+    {"KEY_MEDIA_MUTE",  0x00E2},
+    {"KEY_VOL_UP",      0x00E9},
+    {"KEY_VOLUME_UP",   0x00E9},
+    {"KEY_VOL_DOWN",    0x00EA},
+    {"KEY_VOLUME_DOWN", 0x00EA},
+    {"KEY_PLAY_PAUSE",  0x00CD},
+    {"KEY_NEXT_TRACK",  0x00B5},
+    {"KEY_PREV_TRACK",  0x00B6},
+    {"KEY_POWER",       0x0030},
+    {"KEY_SLEEP",       0x0032},
+};
+
+bool keymap_consumer_lookup(const char *name, uint16_t *out_code)
+{
+    if (!name || !out_code) return false;
+    for (size_t i = 0; i < sizeof(CONSUMER_TABLE)/sizeof(CONSUMER_TABLE[0]); ++i) {
+        if (strcmp(name, CONSUMER_TABLE[i].name) == 0) {
+            *out_code = CONSUMER_TABLE[i].code;
+            return true;
+        }
+    }
+    return false;
+}

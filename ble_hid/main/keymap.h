@@ -12,6 +12,9 @@ bool keymap_lookup(const char *name, uint8_t *out_code, uint8_t *out_mods);
 /** Translate a single ASCII character to HID usage + modifiers. */
 bool keymap_ascii(char c, uint8_t *out_code, uint8_t *out_mods);
 
+/** Translate a multimedia/consumer key name (e.g. "KEY_MUTE", "KEY_VOL_UP") to 16-bit Consumer usage code. */
+bool keymap_consumer_lookup(const char *name, uint16_t *out_code);
+
 #ifdef __cplusplus
 }
 #endif
