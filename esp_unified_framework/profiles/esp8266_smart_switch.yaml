@@ -1,0 +1,22 @@
+name: esp8266_smart_switch
+target: esp8266
+description: "ESP8266 极简单核智能开关节点 (GPIO + Web UI + REST API + Dual OTA)"
+hardware:
+  cpu_freq_mhz: 80
+  flash_size: "4MB"
+  spiram: false
+features:
+  http_server: true
+  web_ui: true
+  rest_api: true
+  ota: true
+  camera: false
+  gpio_ctrl: true
+  storage: false
+  display: false
+  usb_otg: false
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp8266_switch"
+  mdns_host: "esp8266-node"

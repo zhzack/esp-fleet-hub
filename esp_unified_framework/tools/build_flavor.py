@@ -11,6 +11,14 @@ DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
 PROFILES_DIR = os.path.join(PROJECT_ROOT, "profiles")
 
 SOC_CAPABILITIES = {
+    "esp8266": {
+        "unsupported": {
+            "camera": "ESP8266 芯片无 8-bit 并行 DVP 摄像头控制器硬件接口",
+            "usb_otg": "ESP8266 芯片无片上原生 USB-OTG 控制器 (仅支持外部串口)",
+            "spiram": "ESP8266 芯片无片外 PSRAM 内存总线接口",
+            "display": "ESP8266 内部内存受限 (仅约 80KB RAM)，不适宜挂载大型彩色液晶屏"
+        }
+    },
     "esp32": {
         "unsupported": {
             "usb_otg": "经典 ESP32 芯片无片上原生 USB-OTG 控制器 (仅支持外部串口芯片)"

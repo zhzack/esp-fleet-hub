@@ -120,6 +120,10 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
         <div class="chip-name">ESP32-C2 (超轻量)</div>
         <div class="chip-sub">成本优化型小内存 / 仅基础 GPIO 与 API</div>
       </div>
+      <div class="chip-opt" onclick="selectChip('esp8266', this)">
+        <div class="chip-name">ESP8266 (经典 WiFi)</div>
+        <div class="chip-sub">80/160MHz Xtensa 单核 / 极简开关继电器 / 低成本</div>
+      </div>
     </div>
   </div>
 
@@ -131,6 +135,7 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp32_cam')">ESP32-CAM 预设</button>
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('c3_relay')">C3 继电器预设</button>
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('s3_dock')">S3 控制坞预设</button>
+        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp8266_switch')">ESP8266 开关预设</button>
       </div>
     </div>
     <div class="feat-grid">
@@ -299,6 +304,16 @@ const SOC_SPECS = {
       usb_otg: "C2 芯片无原生 USB-OTG 控制器"
     },
     default_freq: 120
+  },
+  esp8266: {
+    name: "ESP8266 (经典 WiFi SoC)",
+    unsupported: {
+      camera: "ESP8266 芯片无 8-bit 并行 DVP 摄像头控制器",
+      spiram: "ESP8266 芯片无片外 PSRAM 内存总线接口",
+      usb_otg: "ESP8266 芯片无原生 USB-OTG 控制器 (仅支持外部串口)",
+      display: "ESP8266 内存受限 (~80KB RAM)，不适宜驱动大型液晶图形屏"
+    },
+    default_freq: 80
   }
 };
 
@@ -409,6 +424,18 @@ function loadPreset(type) {
     document.getElementById("f_spiram").checked = true;
     document.getElementById("device_id").value = "esp32s3_dock";
     document.getElementById("mdns_host").value = "s3-dock";
+  } else if (type === "esp8266_switch") {
+    selectChip("esp8266", document.querySelectorAll(".chip-opt")[4]);
+    document.getElementById("f_web_ui").checked = true;
+    document.getElementById("f_rest_api").checked = true;
+    document.getElementById("f_ota").checked = true;
+    document.getElementById("f_gpio_ctrl").checked = true;
+    document.getElementById("f_storage").checked = false;
+    document.getElementById("f_display").checked = false;
+    document.getElementById("f_spiram").checked = false;
+    document.getElementById("f_camera").checked = false;
+    document.getElementById("device_id").value = "esp8266_switch";
+    document.getElementById("mdns_host").value = "esp8266-node";
   }
   updateEndpointsPreview();
 }
