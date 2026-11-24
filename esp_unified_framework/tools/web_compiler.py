@@ -71,6 +71,15 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
 .status-pill.building{background:#1e3a8a;color:#93c5fd}
 .status-pill.failed{background:#7f1d1d;color:#fca5a5}
 .preset-bar{display:flex;gap:8px;flex-wrap:wrap}
+.endpoint-item{background:#0f172a99;border:1px solid var(--border);border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:12px;transition:all .15s}
+.endpoint-item.disabled{opacity:0.35;background:#060a12;border-style:dashed}
+.method-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;font-family:monospace}
+.method-get{background:#0369a1;color:#bae6fd}
+.method-post{background:#15803d;color:#bbf7d0}
+.ep-path{font-family:monospace;font-size:12px;color:#f1f5f9}
+.ep-status{font-size:10px;padding:2px 8px;border-radius:10px}
+.ep-status.active{background:#065f46;color:#6ee7b7}
+.ep-status.inactive{background:#334155;color:#94a3b8}
 </style>
 </head>
 <body>
@@ -199,10 +208,19 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
     </div>
   </div>
 
-  <!-- Step 3: Default Network Identity -->
+  <!-- Step 3: Dynamic REST API Endpoints Preview -->
   <div class="card">
     <div class="card-title">
-      <span>3. 预设网络与设备身份 (固化在 Flash 中，亦可在运行时在线配置修改)</span>
+      <span>3. 生成固件的 HTTP REST 接口清单 (随芯片与功能选择动态增减)</span>
+      <span style="font-size:12px;color:var(--text-dim)">未开启的功能不会注册对应 URI 路由，客户端访问直接返回 404，不占用任何 Flash/RAM</span>
+    </div>
+    <div id="endpoint-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:8px"></div>
+  </div>
+
+  <!-- Step 4: Default Network Identity -->
+  <div class="card">
+    <div class="card-title">
+      <span>4. 预设网络与设备身份 (固化在 Flash 中，亦可在运行时在线配置修改)</span>
     </div>
     <div class="input-grid">
       <label>默认 WiFi SSID:
@@ -220,10 +238,10 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
     </div>
   </div>
 
-  <!-- Step 4: Build & Deployment -->
+  <!-- Step 5: Build & Deployment -->
   <div class="card">
     <div class="card-title">
-      <span>4. 执行构建与部署 (飞牛 NAS 多核极速编译器)</span>
+      <span>5. 执行构建与部署 (飞牛 NAS 多核极速编译器)</span>
       <div style="display:flex;gap:8px">
         <button id="btn-build" onclick="triggerBuild()">⚡ 立即生成定制固件</button>
       </div>
@@ -312,6 +330,49 @@ function selectChip(chip, el) {
       badge.className = "feat-badge supported";
     }
   });
+  updateEndpointsPreview();
+}
+
+const API_ENDPOINTS = [
+  { method: "GET",  path: "/",                     feat: "web_ui",    desc: "Web 控制台响应式首页仪表盘" },
+  { method: "GET",  path: "/index.html",            feat: "web_ui",    desc: "Web 控制台首页别名" },
+  { method: "GET",  path: "/api/system/capabilities", feat: "rest_api", desc: "芯片能力与可用接口动态发现 (JSON)" },
+  { method: "GET",  path: "/api/system/status",       feat: "rest_api", desc: "心跳、系统运行时间与内存/WiFi 监控" },
+  { method: "GET",  path: "/api/system/config",       feat: "rest_api", desc: "读取当前 Flash NVS 固化配置" },
+  { method: "POST", path: "/api/system/config",       feat: "rest_api", desc: "热更新配置并写入 Flash NVS" },
+  { method: "GET",  path: "/api/system/logs",         feat: "rest_api", desc: "实时抓取环形日志缓冲区 (RAM Log)" },
+  { method: "POST", path: "/api/system/reboot",       feat: "rest_api", desc: "触发芯片安全延迟软重启" },
+  { method: "POST", path: "/api/ota/upload",          feat: "ota",      desc: "双分区无线 OTA 固件流式刷写与提交" },
+  { method: "GET",  path: "/api/gpio/pins",           feat: "gpio_ctrl",desc: "枚举全部可用 GPIO 模式与当前电平" },
+  { method: "POST", path: "/api/gpio/set",            feat: "gpio_ctrl",desc: "设置 GPIO 高低电平或 PWM 调光" },
+  { method: "GET",  path: "/stream",                  feat: "camera",   desc: "25fps MJPEG 实时摄像头视频流" },
+  { method: "GET",  path: "/capture",                 feat: "camera",   desc: "单张高清 JPEG 静态快照抓取" },
+  { method: "POST", path: "/api/camera/flash",        feat: "camera",   desc: "板载大功率补光灯 PWM 渐变调光" }
+];
+
+function updateEndpointsPreview() {
+  const container = document.getElementById("endpoint-grid");
+  if (!container) return;
+  container.innerHTML = "";
+
+  API_ENDPOINTS.forEach(ep => {
+    const featEl = document.getElementById("f_" + ep.feat);
+    const isEnabled = featEl && featEl.checked && !featEl.disabled;
+
+    const div = document.createElement("div");
+    div.className = "endpoint-item" + (isEnabled ? "" : " disabled");
+    div.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="method-badge method-${ep.method.toLowerCase()}">${ep.method}</span>
+        <span class="ep-path" style="${isEnabled ? '' : 'text-decoration:line-through;color:var(--text-dim)'}">${ep.path}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:11px;color:var(--text-dim)">${ep.desc}</span>
+        <span class="ep-status ${isEnabled ? 'active' : 'inactive'}">${isEnabled ? '● 200 OK (已编译)' : '○ 404 (未编译)'}</span>
+      </div>
+    `;
+    container.appendChild(div);
+  });
 }
 
 function loadPreset(type) {
@@ -349,6 +410,7 @@ function loadPreset(type) {
     document.getElementById("device_id").value = "esp32s3_dock";
     document.getElementById("mdns_host").value = "s3-dock";
   }
+  updateEndpointsPreview();
 }
 
 async function triggerBuild() {
@@ -461,6 +523,10 @@ async function promptOtaPush() {
 // 页面加载默认初始化
 window.onload = function() {
   selectChip("esp32", document.querySelectorAll(".chip-opt")[0]);
+  document.querySelectorAll(".feat-box input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", updateEndpointsPreview);
+  });
+  updateEndpointsPreview();
 };
 </script>
 </body>
