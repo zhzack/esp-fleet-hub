@@ -269,15 +269,66 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
       </div>
     </div>
     <pre class="console" id="log-box">[System Ready] 等待配置构建请求...</pre>
-    <div id="result-box" style="display:none;background:#0f172a;padding:12px;border-radius:8px;border:1px solid #10b981;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-      <div>
-        <strong style="color:#10b981">🎉 固件构建完成: </strong>
-        <span id="res-filename" style="color:#fff;font-family:monospace">firmware.bin</span>
-        <span id="res-filesize" style="font-size:12px;color:var(--text-dim)">(0 KB)</span>
+    
+    <!-- 固件烧录与部署控制台 (串口/OTA 双模式) -->
+    <div id="result-box" style="display:none;background:#0d1527;padding:16px;border-radius:8px;border:1px solid #10b981;flex-direction:column;gap:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;border-bottom:1px solid #1e293b;padding-bottom:12px">
+        <div>
+          <strong style="color:#10b981;font-size:15px">🎉 固件定制编译成功: </strong>
+          <span id="res-filename" style="color:#fff;font-family:monospace;font-size:14px">firmware.bin</span>
+          <span id="res-filesize" style="font-size:12px;color:var(--text-dim)">(0 KB)</span>
+        </div>
+        <button class="secondary" style="font-size:12px;padding:6px 14px" onclick="downloadFirmware()">⬇️ 下载固件文件 (.bin)</button>
       </div>
-      <div style="display:flex;gap:8px">
-        <button class="secondary" onclick="downloadFirmware()">⬇️ 下载固件文件</button>
-        <button style="background:#059669" onclick="promptOtaPush()">📡 无线 OTA 推送</button>
+
+      <!-- 选择串口烧录或无线 OTA -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:14px">
+        
+        <!-- 方式 A: 串口线直接烧录 -->
+        <div style="background:#131e33;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <strong style="color:#38bdf8;font-size:13px;display:flex;align-items:center;gap:6px">
+              🔌 方式 A：USB 串口线直接烧录 (Serial Flash)
+            </strong>
+            <button class="secondary" style="font-size:11px;padding:2px 8px" onclick="refreshComPorts()">🔄 刷新串口</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 110px;gap:8px">
+            <label style="font-size:11px">目标串口:
+              <select id="flash-port-select" style="background:#0b1120;color:#fff;border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:12px;outline:none"></select>
+            </label>
+            <label style="font-size:11px">波特率:
+              <select id="flash-baud-select" style="background:#0b1120;color:#fff;border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:12px;outline:none">
+                <option value="921600" selected>921600 (极速)</option>
+                <option value="460800">460800 (稳定)</option>
+                <option value="115200">115200 (标准)</option>
+              </select>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+            <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="flash-full-image" checked style="accent-color:var(--primary)"/>
+              <span>全量完整刷写 (含 Bootloader 与双分区表)</span>
+            </label>
+            <button id="btn-flash-serial" style="background:#0284c7;font-size:12px;padding:6px 14px" onclick="triggerSerialFlash()">⚡ 一键串口烧录</button>
+          </div>
+        </div>
+
+        <!-- 方式 B: 局域网无线 OTA 推送 -->
+        <div style="background:#131e33;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
+          <strong style="color:#34d399;font-size:13px;display:flex;align-items:center;gap:6px">
+            📡 方式 B：局域网无线 OTA 极速推送 (Wireless OTA)
+          </strong>
+          <div>
+            <label style="font-size:11px">设备局域网 IP 地址:
+              <input type="text" id="ota-target-ip" value="192.168.68.178" placeholder="例如 192.168.68.178" style="margin-top:4px"/>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto">
+            <span style="font-size:11px;color:var(--text-dim)">设备需已在局域网内运行且开启 OTA</span>
+            <button id="btn-push-ota" style="background:#059669;font-size:12px;padding:6px 14px" onclick="triggerOtaPush()">🚀 推送无线升级</button>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -543,16 +594,28 @@ function pollStatus() {
       if (st.status === "success") {
         clearInterval(pollTimer);
         document.getElementById("btn-build").disabled = false;
+        const btnFlash = document.getElementById("btn-flash-serial");
+        if (btnFlash) btnFlash.disabled = false;
+        const btnOta = document.getElementById("btn-push-ota");
+        if (btnOta) btnOta.disabled = false;
         document.getElementById("compile-status").textContent = "构建成功";
         document.getElementById("compile-status").className = "status-pill success";
         currentArtifact = st.artifact_name;
         document.getElementById("res-filename").textContent = st.artifact_name;
         document.getElementById("res-filesize").textContent = "(" + (st.artifact_size/1024).toFixed(1) + " KB)";
         document.getElementById("result-box").style.display = "flex";
+        refreshComPorts();
+      } else if (st.status === "flashing") {
+        document.getElementById("compile-status").textContent = "正在串口烧录...";
+        document.getElementById("compile-status").className = "status-pill building";
       } else if (st.status === "failed") {
         clearInterval(pollTimer);
         document.getElementById("btn-build").disabled = false;
-        document.getElementById("compile-status").textContent = "构建失败";
+        const btnFlash = document.getElementById("btn-flash-serial");
+        if (btnFlash) btnFlash.disabled = false;
+        const btnOta = document.getElementById("btn-push-ota");
+        if (btnOta) btnOta.disabled = false;
+        document.getElementById("compile-status").textContent = "任务失败";
         document.getElementById("compile-status").className = "status-pill failed";
       }
     } catch(e) {}
@@ -565,21 +628,99 @@ function downloadFirmware() {
   }
 }
 
-async function promptOtaPush() {
-  const ip = prompt("请输入局域网中已运行设备的 IP 地址进行无线升级 (例如 192.168.68.178):", "192.168.68.178");
-  if (!ip) return;
-  alert("正在推送固件至 http://" + ip + "/api/ota/upload，请稍候...");
+async function refreshComPorts() {
+  try {
+    const res = await fetch("/api/ports");
+    const data = await res.json();
+    const sel = document.getElementById("flash-port-select");
+    if (!sel) return;
+    sel.innerHTML = "";
+    if (!data.ports || data.ports.length === 0) {
+      sel.innerHTML = "<option value=''>未检测到在线串口</option>";
+      return;
+    }
+    data.ports.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.port;
+      opt.textContent = `${p.port} (${p.desc})`;
+      if (p.port === "COM11") opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+async function triggerSerialFlash() {
+  const port = document.getElementById("flash-port-select").value;
+  if (!port) {
+    alert("请先选择要烧录的目标串口！");
+    return;
+  }
+  const baud = document.getElementById("flash-baud-select").value;
+  const full = document.getElementById("flash-full-image").checked;
+  const btn = document.getElementById("btn-flash-serial");
+  btn.disabled = true;
+
+  document.getElementById("compile-status").textContent = "正在串口烧录...";
+  document.getElementById("compile-status").className = "status-pill building";
+
+  try {
+    const res = await fetch("/api/flash_serial", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        port: port,
+        baud: baud,
+        file: currentArtifact,
+        target: selectedChip,
+        full: full
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert("启动烧录失败: " + data.error);
+      btn.disabled = false;
+      return;
+    }
+    pollStatus();
+  } catch(e) {
+    alert("请求异常: " + e);
+    btn.disabled = false;
+  }
+}
+
+async function triggerOtaPush() {
+  const ip = document.getElementById("ota-target-ip").value.trim();
+  if (!ip) {
+    alert("请输入目标设备 IP 地址！");
+    return;
+  }
+  const btn = document.getElementById("btn-push-ota");
+  btn.disabled = true;
+
+  document.getElementById("compile-status").textContent = "正在推送 OTA...";
+  document.getElementById("compile-status").className = "status-pill building";
+
+  const box = document.getElementById("log-box");
+  box.textContent += `\n>>> 正在向 http://${ip}/api/ota/upload 推送固件 [${currentArtifact}]...\n`;
+  box.scrollTop = box.scrollHeight;
+
   try {
     const res = await fetch("/api/push_ota?ip=" + encodeURIComponent(ip) + "&file=" + encodeURIComponent(currentArtifact));
     const data = await res.json();
     if (data.ok) {
-      alert("🎉 无线 OTA 推送成功！设备正在重启加载定制固件！");
+      box.textContent += `🎉 [OTA 成功] 固件上传完成！设备正在重启切换新固件！\n`;
+      document.getElementById("compile-status").textContent = "OTA 成功";
+      document.getElementById("compile-status").className = "status-pill success";
     } else {
-      alert("❌ OTA 推送失败: " + data.error);
+      box.textContent += `❌ [OTA 失败] ${data.error}\n`;
+      document.getElementById("compile-status").textContent = "OTA 失败";
+      document.getElementById("compile-status").className = "status-pill failed";
     }
+    box.scrollTop = box.scrollHeight;
   } catch(e) {
-    alert("请求异常: " + e);
+    box.textContent += `❌ 请求异常: ${e}\n`;
   }
+  btn.disabled = false;
 }
 
 // 页面加载默认初始化
@@ -589,6 +730,7 @@ window.onload = function() {
     cb.addEventListener("change", updateEndpointsPreview);
   });
   updateEndpointsPreview();
+  refreshComPorts();
 };
 </script>
 </body>
@@ -671,6 +813,85 @@ def run_build_task(payload):
             s_current_task["status"] = "failed"
             s_current_task["log"] += f"\n❌ Exception: {e}\n"
 
+def run_serial_flash_task(port, baud, file_name, target, full_flash=True):
+    global s_current_task
+    with s_lock:
+        s_current_task["status"] = "flashing"
+        s_current_task["log"] += f"\n===========================================================================\n"
+        s_current_task["log"] += f"⚡ [串口烧录] 目标端口: {port} | 波特率: {baud} | 固件: {file_name}\n"
+        s_current_task["log"] += f"===========================================================================\n"
+
+    dist_bin = os.path.join(DIST_DIR, file_name)
+    if not os.path.isfile(dist_bin):
+        with s_lock:
+            s_current_task["status"] = "failed"
+            s_current_task["log"] += f"❌ 固件文件不存在: {dist_bin}\n"
+        return
+
+    cmd = [sys.executable, "-m", "esptool", "--port", port, "--baud", str(baud)]
+    if target and target != "generic":
+        cmd += ["--chip", target.lower().replace("-", "")]
+
+    if target == "esp8266":
+        cmd += ["write-flash", "0x0", dist_bin]
+        with s_lock:
+            s_current_task["log"] += f"芯片类型: ESP8266 (烧录地址 @ 0x0)\n"
+    else:
+        build_dir = os.path.join(PROJECT_ROOT, "build")
+        bootloader_bin = os.path.join(build_dir, "bootloader", "bootloader.bin")
+        if not os.path.isfile(bootloader_bin):
+            bootloader_bin = os.path.join(build_dir, "bootloader.bin")
+        pt_bin = os.path.join(build_dir, "partition_table", "partition-table.bin")
+        if not os.path.isfile(pt_bin):
+            pt_bin = os.path.join(build_dir, "partition-table.bin")
+        ota_data = os.path.join(build_dir, "ota_data_initial.bin")
+
+        bl_offset = "0x0" if target in ["esp32c3", "esp32s3", "esp32c2"] else "0x1000"
+
+        if full_flash and os.path.isfile(bootloader_bin) and os.path.isfile(pt_bin):
+            flash_items = [
+                bl_offset, bootloader_bin,
+                "0x8000", pt_bin,
+                "0x10000", dist_bin
+            ]
+            if os.path.isfile(ota_data):
+                flash_items.extend(["0xd000", ota_data])
+            cmd += ["write-flash"] + flash_items
+            with s_lock:
+                s_current_task["log"] += f"模式: 全量完整刷写 (Bootloader@{bl_offset} + 双分区表@0x8000 + 固件@0x10000)\n"
+        else:
+            cmd += ["write-flash", "0x10000", dist_bin]
+            with s_lock:
+                s_current_task["log"] += f"模式: 仅更新应用固件 (固件@0x10000)\n"
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace"
+        )
+        for line in iter(proc.stdout.readline, ''):
+            with s_lock:
+                s_current_task["log"] += line
+
+        proc.wait()
+        if proc.returncode == 0:
+            with s_lock:
+                s_current_task["status"] = "success"
+                s_current_task["log"] += f"\n🎉 [烧录成功] 芯片已通过 RTS/DTR 自动硬复位！固件启动运行中！\n"
+        else:
+            with s_lock:
+                s_current_task["status"] = "failed"
+                s_current_task["log"] += f"\n❌ [烧录失败] 退出代码: {proc.returncode}\n提示：若转接板无自动下载电路（如 ESP32-CAM），请长按 IO0 键并点按 RST 键进入下载模式！\n"
+    except Exception as e:
+        with s_lock:
+            s_current_task["status"] = "failed"
+            s_current_task["log"] += f"\n❌ 烧录进程异常: {e}\n"
+
 class CompilerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
@@ -685,9 +906,22 @@ class CompilerHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             with s_lock:
                 self.wfile.write(json.dumps(s_current_task).encode("utf-8"))
+        elif parsed.path == "/api/ports":
+            import serial.tools.list_ports
+            ports = []
+            for p in serial.tools.list_ports.comports():
+                if "BTHENUM" in p.hwid or "PNP0501" in p.hwid:
+                    continue
+                ports.append({"port": p.device, "desc": p.description})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ports": ports}).encode("utf-8"))
         elif parsed.path == "/api/download":
             qs = urllib.parse.parse_qs(parsed.query)
             fn = qs.get("file", ["custom.bin"])[0]
@@ -759,8 +993,27 @@ class CompilerHandler(BaseHTTPRequestHandler):
             t.start()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"ok":true,"message":"Build task launched"}')
+        elif self.path == "/api/flash_serial":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len).decode("utf-8")
+            payload = json.loads(body)
+            port = payload.get("port", "COM11")
+            baud = int(payload.get("baud", 921600))
+            file_name = payload.get("file", "")
+            target = payload.get("target", "esp32")
+            full_flash = payload.get("full", True)
+
+            t = threading.Thread(target=run_serial_flash_task, args=(port, baud, file_name, target, full_flash))
+            t.daemon = True
+            t.start()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true,"message":"Serial flash started"}')
 
 def start_server(port=8088):
     server = HTTPServer(("0.0.0.0", port), CompilerHandler)
