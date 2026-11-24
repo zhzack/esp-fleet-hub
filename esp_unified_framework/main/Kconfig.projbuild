@@ -1,0 +1,61 @@
+menu "ESP Unified Framework Configuration"
+
+    menu "Feature Matrix (Conditional Compilation)"
+        config FEATURE_GPIO_CTRL
+            bool "Enable GPIO Control Matrix (Digital In/Out & PWM)"
+            default y
+            help
+                Exposes dynamic GPIO pin toggling, state reading, and PWM sliders via REST and Web UI.
+
+        config FEATURE_CAMERA
+            bool "Enable Camera Module (OV2640 / OV5640 with PSRAM)"
+            default y
+            help
+                Enables Camera HAL, dual PSRAM framebuffers, MJPEG streaming (/stream), and snapshot capture.
+
+        config FEATURE_STORAGE
+            bool "Enable Storage Explorer (SPIFFS / SD Card)"
+            default n
+            help
+                Mounts on-board flash storage or SD card and provides web-based file browsing.
+
+        config FEATURE_DISPLAY
+            bool "Enable Display Engine (ST7789 / E-Paper SSD1680)"
+            default n
+            help
+                Enables LCD / E-Paper graphics driver and display dashboard.
+
+        config FEATURE_USB_OTG
+            bool "Enable Native USB OTG (HID Keyboard/Mouse/UVC) [ESP32-S2/S3 Only]"
+            default n
+            help
+                Enables TinyUSB hardware driver for virtual input injection and computer control.
+    endmenu
+
+    menu "Default Network & Device Identity"
+        config APP_DEFAULT_WIFI_SSID
+            string "Default WiFi SSID"
+            default "1"
+            help
+                Fallback WiFi network name when no NVS config is provisioned.
+
+        config APP_DEFAULT_WIFI_PASS
+            string "Default WiFi Password"
+            default "11111111"
+            help
+                Fallback WiFi network password.
+
+        config APP_DEFAULT_DEVICE_ID
+            string "Default Device ID"
+            default "esp_unified_node"
+            help
+                Human-readable identity reported over mDNS and Web portal.
+
+        config APP_MDNS_HOST
+            string "Default mDNS Hostname"
+            default "esp-node"
+            help
+                Enables local access via http://<hostname>.local without knowing IP address.
+    endmenu
+
+endmenu

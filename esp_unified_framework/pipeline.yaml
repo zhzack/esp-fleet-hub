@@ -1,0 +1,6 @@
+name: esp_unified_framework
+target: esp32
+flash:
+  port: COM11
+  baud: 921600
+  auto_flash: false

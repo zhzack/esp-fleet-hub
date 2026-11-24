@@ -1,0 +1,38 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "core/system_caps.c"
+        "core/app_config.c"
+        "core/log_capture.c"
+        "net/wifi_mgr.c"
+        "net/ota_mgr.c"
+        "net/web_server.c"
+        "hal/hal_gpio.c"
+        "hal/hal_camera.c"
+        "modules/mod_gpio.c"
+        "modules/mod_camera.c"
+    INCLUDE_DIRS
+        "."
+        "core"
+        "net"
+        "hal"
+        "modules"
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        app_update
+        driver
+        esp_driver_gpio
+        esp_driver_ledc
+        mdns
+        esp32-camera
+        spi_flash
+        esp_timer
+        esp_psram
+        esp_hw_support
+        heap
+)
+
