@@ -54,7 +54,9 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_mgr_start());
 
     // 6. Initialize Dual-Partition OTA Manager
+#if CONFIG_FEATURE_OTA
     ESP_ERROR_CHECK(ota_mgr_init());
+#endif
 
     // 7. Initialize Conditional Feature Modules (Configured at Compile-Time)
 #if CONFIG_FEATURE_GPIO_CTRL

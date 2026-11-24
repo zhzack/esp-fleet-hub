@@ -1,0 +1,22 @@
+name: esp32c3_relay_web
+target: esp32c3
+description: "ESP32-C3 智能继电器与IO管理节点 (带独立 Web 控制台，极简低功耗)"
+features:
+  http_server: true
+  web_ui: true
+  rest_api: true
+  camera: false
+  gpio_ctrl: true
+  ota: true
+  storage: false
+  display: false
+  usb_otg: false
+hardware:
+  cpu_freq_mhz: 160
+  spiram: false
+  flash_size: "4MB"
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp32c3_relay_box"
+  mdns_host: "c3-relay"

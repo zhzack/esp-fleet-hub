@@ -1,0 +1,22 @@
+name: esp32s3_display_hid
+target: esp32s3
+description: "ESP32-S3 全功能控制坞 (带 USB-OTG 虚拟键鼠注入、ST7789 显示驱动与 OTA)"
+features:
+  http_server: true
+  web_ui: true
+  rest_api: true
+  camera: false
+  gpio_ctrl: true
+  ota: true
+  storage: true
+  display: true
+  usb_otg: true
+hardware:
+  cpu_freq_mhz: 240
+  spiram: true
+  flash_size: "8MB"
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp32s3_dock"
+  mdns_host: "s3-dock"

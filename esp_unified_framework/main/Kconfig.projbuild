@@ -1,11 +1,41 @@
-menu "ESP Unified Framework Configuration"
+menu "ESP Unified Framework - LuatOS-Style Component Matrix"
 
-    menu "Feature Matrix (Conditional Compilation)"
+    menu "Network & Interface Services"
+        config FEATURE_HTTP_SERVER
+            bool "Enable HTTP Server Engine"
+            default y
+            help
+                Starts background HTTP server task on configured port (e.g. 80).
+                If disabled, completely strips HTTP networking stack, saving RAM and Flash.
+
+        config FEATURE_WEB_UI
+            bool "Enable Web Management Dashboard Portal"
+            depends on FEATURE_HTTP_SERVER
+            default y
+            help
+                Embeds HTML5/CSS/JS responsive dashboard in Flash.
+                Disable this to produce ultra-lightweight Headless API firmwares.
+
+        config FEATURE_REST_API
+            bool "Enable HTTP REST Configuration API"
+            depends on FEATURE_HTTP_SERVER
+            default y
+            help
+                Exposes /api/system/*, /api/gpio/*, /api/config for programmatic control.
+
+        config FEATURE_OTA
+            bool "Enable Wireless Dual-Partition OTA Updates"
+            default y
+            help
+                Provides /api/ota/upload endpoint and dual-partition A/B rollback safety.
+    endmenu
+
+    menu "Hardware Peripheral Drivers"
         config FEATURE_GPIO_CTRL
             bool "Enable GPIO Control Matrix (Digital In/Out & PWM)"
             default y
             help
-                Exposes dynamic GPIO pin toggling, state reading, and PWM sliders via REST and Web UI.
+                Exposes dynamic GPIO pin toggling, state reading, and PWM sliders.
 
         config FEATURE_CAMERA
             bool "Enable Camera Module (OV2640 / OV5640 with PSRAM)"
@@ -17,45 +47,37 @@ menu "ESP Unified Framework Configuration"
             bool "Enable Storage Explorer (SPIFFS / SD Card)"
             default n
             help
-                Mounts on-board flash storage or SD card and provides web-based file browsing.
+                Mounts on-board flash storage or SD card.
 
         config FEATURE_DISPLAY
             bool "Enable Display Engine (ST7789 / E-Paper SSD1680)"
             default n
             help
-                Enables LCD / E-Paper graphics driver and display dashboard.
+                Enables LCD / E-Paper graphics driver.
 
         config FEATURE_USB_OTG
             bool "Enable Native USB OTG (HID Keyboard/Mouse/UVC) [ESP32-S2/S3 Only]"
             default n
             help
-                Enables TinyUSB hardware driver for virtual input injection and computer control.
+                Enables TinyUSB hardware driver for virtual input injection.
     endmenu
 
     menu "Default Network & Device Identity"
         config APP_DEFAULT_WIFI_SSID
             string "Default WiFi SSID"
             default "1"
-            help
-                Fallback WiFi network name when no NVS config is provisioned.
 
         config APP_DEFAULT_WIFI_PASS
             string "Default WiFi Password"
             default "11111111"
-            help
-                Fallback WiFi network password.
 
         config APP_DEFAULT_DEVICE_ID
             string "Default Device ID"
             default "esp_unified_node"
-            help
-                Human-readable identity reported over mDNS and Web portal.
 
         config APP_MDNS_HOST
             string "Default mDNS Hostname"
             default "esp-node"
-            help
-                Enables local access via http://<hostname>.local without knowing IP address.
     endmenu
 
 endmenu

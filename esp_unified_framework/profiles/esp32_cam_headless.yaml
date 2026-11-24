@@ -1,0 +1,22 @@
+name: esp32_cam_headless
+target: esp32
+description: "ESP32-CAM 无头极速串流版 (无前端网页，纯 HTTP REST API + MJPEG，极大节省 Flash 和 RAM)"
+features:
+  http_server: true
+  web_ui: false
+  rest_api: true
+  camera: true
+  gpio_ctrl: true
+  ota: true
+  storage: false
+  display: false
+  usb_otg: false
+hardware:
+  cpu_freq_mhz: 160
+  spiram: true
+  flash_size: "4MB"
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp32_cam_headless"
+  mdns_host: "esp32-cam-api"

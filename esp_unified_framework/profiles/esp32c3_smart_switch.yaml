@@ -1,0 +1,21 @@
+defaults:
+  device_id: esp32c3_switch
+  mdns_host: c3-switch
+  wifi_pass: '11111111'
+  wifi_ssid: '1'
+features:
+  camera: false
+  display: false
+  gpio_ctrl: true
+  http_server: true
+  ota: true
+  rest_api: true
+  storage: false
+  usb_otg: false
+  web_ui: true
+hardware:
+  cpu_freq_mhz: 160
+  flash_size: 4MB
+  spiram: false
+name: esp32c3_smart_switch
+target: esp32c3

@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -20,6 +21,9 @@ esp_err_t app_config_init(void);
 esp_err_t app_config_load(app_config_t *out_cfg);
 esp_err_t app_config_save(const app_config_t *in_cfg);
 void app_config_get(app_config_t *out_cfg);
+
+size_t app_config_to_json(char *dst, size_t max_len);
+esp_err_t app_config_update_from_json(const char *json_str);
 
 #ifdef __cplusplus
 }

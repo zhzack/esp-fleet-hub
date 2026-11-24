@@ -83,6 +83,7 @@ esp_err_t ota_upload_post_handler(httpd_req_t *req)
     int received = 0;
     int remaining = content_len;
     bool is_first_chunk = true;
+    int timeout_retries = 0;
     esp_err_t err = ESP_OK;
 
     while (remaining > 0) {
@@ -91,14 +92,18 @@ esp_err_t ota_upload_post_handler(httpd_req_t *req)
 
         if (read_bytes <= 0) {
             if (read_bytes == HTTPD_SOCK_ERR_TIMEOUT) {
-                continue;
+                timeout_retries++;
+                if (timeout_retries < 5) {
+                    continue;
+                }
             }
-            ESP_LOGE(TAG, "Socket receive error: %d", read_bytes);
+            ESP_LOGE(TAG, "Socket receive error or timeout exceeded: %d", read_bytes);
             free(buf);
             if (ota_handle) esp_ota_abort(ota_handle);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Stream recv failed");
             return ESP_FAIL;
         }
+        timeout_retries = 0;
 
         if (is_first_chunk) {
             is_first_chunk = false;

@@ -24,6 +24,9 @@ typedef struct {
     char mac_addr[18];
 
     // Capabilities
+    bool feat_http_server;
+    bool feat_web_ui;
+    bool feat_rest_api;
     bool feat_gpio;
     bool feat_camera;
     bool feat_storage;

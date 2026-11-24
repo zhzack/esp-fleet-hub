@@ -1,0 +1,22 @@
+name: esp32_cam_full
+target: esp32
+description: "AI-Thinker ESP32-CAM 全功能版 (含高清 Web 管理门户、实时视频流、GPIO矩阵与空中OTA)"
+features:
+  http_server: true
+  web_ui: true
+  rest_api: true
+  camera: true
+  gpio_ctrl: true
+  ota: true
+  storage: false
+  display: false
+  usb_otg: false
+hardware:
+  cpu_freq_mhz: 160
+  spiram: true
+  flash_size: "4MB"
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp32_cam_full"
+  mdns_host: "esp32-cam"

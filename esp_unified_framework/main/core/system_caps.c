@@ -71,6 +71,15 @@ void system_caps_get(system_caps_t *c)
     c->wifi_rssi = wifi_mgr_rssi();
 
     // Feature Flags (evaluated at compile-time via Kconfig)
+#if CONFIG_FEATURE_HTTP_SERVER
+    c->feat_http_server = true;
+#endif
+#if CONFIG_FEATURE_WEB_UI
+    c->feat_web_ui = true;
+#endif
+#if CONFIG_FEATURE_REST_API
+    c->feat_rest_api = true;
+#endif
 #if CONFIG_FEATURE_GPIO_CTRL
     c->feat_gpio = true;
 #endif
@@ -86,7 +95,9 @@ void system_caps_get(system_caps_t *c)
 #if CONFIG_FEATURE_USB_OTG
     c->feat_usb_otg = true;
 #endif
-    c->feat_ota = true; // Always enabled for safe remote maintenance
+#if CONFIG_FEATURE_OTA
+    c->feat_ota = true;
+#endif
 }
 
 size_t system_caps_to_json(char *dst, size_t max_len)
@@ -112,22 +123,29 @@ size_t system_caps_to_json(char *dst, size_t max_len)
             "\"free_psram\":%lu"
           "},"
           "\"capabilities\":{"
+            "\"http_server\":{\"enabled\":%s},"
+            "\"web_ui\":{\"enabled\":%s},"
+            "\"rest_api\":{\"enabled\":%s},"
             "\"gpio\":{\"enabled\":%s},"
             "\"camera\":{\"enabled\":%s,\"stream_url\":\"/stream\",\"capture_url\":\"/capture\"},"
             "\"storage\":{\"enabled\":%s},"
             "\"display\":{\"enabled\":%s},"
             "\"usb_otg\":{\"enabled\":%s},"
-            "\"ota\":{\"enabled\":true,\"endpoint\":\"/api/ota/upload\"}"
+            "\"ota\":{\"enabled\":%s,\"endpoint\":\"/api/ota/upload\"}"
           "}"
         "}",
         cfg.device_id, c.chip_name, c.flash_size_mb, c.mac_addr, c.ip_addr,
         c.wifi_ssid, c.wifi_rssi, wifi_mgr_connected() ? "true" : "false",
         (unsigned long)c.free_heap, (unsigned long)c.total_psram, (unsigned long)c.free_psram,
+        c.feat_http_server ? "true" : "false",
+        c.feat_web_ui ? "true" : "false",
+        c.feat_rest_api ? "true" : "false",
         c.feat_gpio ? "true" : "false",
         c.feat_camera ? "true" : "false",
         c.feat_storage ? "true" : "false",
         c.feat_display ? "true" : "false",
-        c.feat_usb_otg ? "true" : "false"
+        c.feat_usb_otg ? "true" : "false",
+        c.feat_ota ? "true" : "false"
     );
 }
 

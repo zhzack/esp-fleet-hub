@@ -1,0 +1,22 @@
+name: esp32c3_headless_api
+target: esp32c3
+description: "ESP32-C3 极简无头 API 节点 (纯 HTTP REST API，供智能家居网关调用，超小固件)"
+features:
+  http_server: true
+  web_ui: false
+  rest_api: true
+  camera: false
+  gpio_ctrl: true
+  ota: true
+  storage: false
+  display: false
+  usb_otg: false
+hardware:
+  cpu_freq_mhz: 160
+  spiram: false
+  flash_size: "4MB"
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "esp32c3_api_node"
+  mdns_host: "c3-node"

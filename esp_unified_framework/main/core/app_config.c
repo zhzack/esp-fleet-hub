@@ -1,6 +1,8 @@
 #include "app_config.h"
 
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -107,7 +109,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
     nvs_close(h);
 
     memcpy(&s_cfg, cfg, sizeof(s_cfg));
-    ESP_LOGI(TAG, "Config saved to NVS!");
+    ESP_LOGI(TAG, "Config saved to Flash NVS storage!");
     return err;
 }
 
@@ -116,4 +118,56 @@ void app_config_get(app_config_t *out_cfg)
     if (out_cfg) {
         memcpy(out_cfg, &s_cfg, sizeof(s_cfg));
     }
+}
+
+size_t app_config_to_json(char *dst, size_t max_len)
+{
+    if (!dst || max_len < 32) return 0;
+    return snprintf(dst, max_len,
+        "{"
+          "\"ok\":true,"
+          "\"wifi_ssid\":\"%s\","
+          "\"device_id\":\"%s\","
+          "\"mdns_host\":\"%s\","
+          "\"web_port\":%u"
+        "}",
+        s_cfg.wifi_ssid, s_cfg.device_id, s_cfg.mdns_host, s_cfg.web_port);
+}
+
+static void extract_json_str(const char *json, const char *key, char *dst, size_t max_len)
+{
+    char pattern[48];
+    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
+    char *p = strstr(json, pattern);
+    if (p) {
+        p += strlen(pattern);
+        char *end = strchr(p, '\"');
+        if (end) {
+            size_t len = end - p;
+            if (len >= max_len) len = max_len - 1;
+            strncpy(dst, p, len);
+            dst[len] = '\0';
+        }
+    }
+}
+
+esp_err_t app_config_update_from_json(const char *json_str)
+{
+    if (!json_str) return ESP_ERR_INVALID_ARG;
+
+    app_config_t updated;
+    memcpy(&updated, &s_cfg, sizeof(updated));
+
+    extract_json_str(json_str, "wifi_ssid", updated.wifi_ssid, sizeof(updated.wifi_ssid));
+    extract_json_str(json_str, "wifi_pass", updated.wifi_pass, sizeof(updated.wifi_pass));
+    extract_json_str(json_str, "device_id", updated.device_id, sizeof(updated.device_id));
+    extract_json_str(json_str, "mdns_host", updated.mdns_host, sizeof(updated.mdns_host));
+
+    char *p_port = strstr(json_str, "\"web_port\":");
+    if (p_port) {
+        int port = atoi(p_port + 11);
+        if (port > 0 && port < 65536) updated.web_port = (uint16_t)port;
+    }
+
+    return app_config_save(&updated);
 }
