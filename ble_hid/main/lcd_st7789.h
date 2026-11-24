@@ -9,12 +9,14 @@ extern "C" {
 #endif
 
 /* Standard pin layout on ESP32-S3 right header (avoids camera & PSRAM) */
-#define LCD_PIN_SCLK  47  // SPI Clock
-#define LCD_PIN_MOSI  21  // SPI MOSI (SDI / DIN)
-#define LCD_PIN_DC    48  // Data/Command (RS)
-#define LCD_PIN_RST   45  // Hardware Reset (RES)
-#define LCD_PIN_CS    42  // Chip Select (or tie to GND)
-#define LCD_PIN_BL    -1  // Backlight (-1 = tied to 3V3)
+/* Contiguous 5-pin block on ESP32-S3 right header (GPIO 42, 41, 40, 39, 38) */
+/* Exactly matches Screen top-to-bottom: CS, DC, RES, SDA, SCL */
+#define LCD_PIN_CS    42  // Header Pin '42' (GPIO 42) -> Screen CS
+#define LCD_PIN_DC    41  // Header Pin '41' (GPIO 41) -> Screen DC
+#define LCD_PIN_RST   40  // Header Pin '40' (GPIO 40) -> Screen RES
+#define LCD_PIN_MOSI  39  // Header Pin '39' (GPIO 39) -> Screen SDA
+#define LCD_PIN_SCLK  38  // Header Pin '38' (GPIO 38) -> Screen SCL
+#define LCD_PIN_BL    -1  // Backlight (tied to 3V3)
 
 #define LCD_WIDTH     240
 #define LCD_HEIGHT    240
