@@ -34,6 +34,7 @@
 #include "ota_mgr.h"
 #include "power_sw.h"
 #include "log_capture.h"
+#include "lcd_st7789.h"
 
 #define FW_VERSION "esp32-headless-2.3"
 
@@ -94,6 +95,9 @@ void app_main(void)
     if (lan_mode_start(cfg.device_id) != ESP_OK) {
         ESP_LOGW(TAG, "lan_mode_start failed (non-fatal)");
     }
+
+    /* 初始化 ST7789 240x240 LCD 屏幕并显示开机状态仪表盘 */
+    lcd_st7789_init();
 
     if (cfg.server_host[0] != '\0' && cfg.device_token[0] != '\0') {
         ws_client_start(cfg.server_host, cfg.server_port, cfg.device_id, cfg.device_token);

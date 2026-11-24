@@ -19,6 +19,7 @@ idf_component_register(
         "log_capture.c"
         "macro_mgr.c"
         "ws_hid.c"
+        "lcd_st7789.c"
     INCLUDE_DIRS "."
     REQUIRES
         mdns
@@ -39,4 +40,5 @@ idf_component_register(
         esp_partition
         mbedtls
         driver
+        esp_lcd
 )

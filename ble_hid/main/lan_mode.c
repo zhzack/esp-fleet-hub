@@ -6,6 +6,7 @@
 #include "ws_hid.h"
 #include "app_config.h"
 #include "hid_usb.h"
+#include "lcd_st7789.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -401,6 +402,15 @@ static esp_err_t h_system_reboot(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t h_lcd_test(httpd_req_t *req)
+{
+    if (!auth_check(req)) return ESP_OK;
+    lcd_st7789_test_pattern();
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddBoolToObject(res, "lcd_test_pattern", true);
+    return send_json_resp(req, 0, NULL, res);
+}
+
 /* ---------------- Direct Stream OTA Upload ---------------- */
 
 static void delayed_reboot_task(void *arg)
@@ -747,7 +757,13 @@ esp_err_t lan_mode_start(const char *device_id)
     httpd_uri_t u_sys_reb_g = { .uri="/api/system/reboot", .method=HTTP_GET, .handler=h_system_reboot };
     httpd_register_uri_handler(s_httpd, &u_sys_reb_g);
 
-    /* 9. Generic router routes */
+    /* 9. LCD Test routes */
+    httpd_uri_t u_lcd_test = { .uri="/api/lcd/test", .method=HTTP_POST, .handler=h_lcd_test };
+    httpd_register_uri_handler(s_httpd, &u_lcd_test);
+    httpd_uri_t u_lcd_test_g = { .uri="/api/lcd/test", .method=HTTP_GET, .handler=h_lcd_test };
+    httpd_register_uri_handler(s_httpd, &u_lcd_test_g);
+
+    /* 10. Generic router routes */
     for (size_t i = 0; i < N_ROUTES; i++) {
         httpd_uri_t u = {
             .uri = ROUTES[i].path,
