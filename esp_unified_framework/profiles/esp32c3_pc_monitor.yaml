@@ -1,0 +1,24 @@
+name: esp32c3_pc_monitor
+target: esp32c3
+description: "ESP32-C3 Air101-LCD 电脑硬件监控与媒体副屏 (ST7735 80x160 竖屏 + 5向摇杆 + REST API)"
+hardware:
+  cpu_freq_mhz: 160
+  flash_size: "4MB"
+  spiram: false
+features:
+  http_server: true
+  web_ui: true
+  rest_api: true
+  ota: true
+  camera: false
+  gpio_ctrl: true
+  storage: false
+  display: false
+  usb_otg: false
+  pc_monitor: true
+  joystick: true
+defaults:
+  wifi_ssid: "1"
+  wifi_pass: "11111111"
+  device_id: "c3_pc_monitor"
+  mdns_host: "c3-monitor"

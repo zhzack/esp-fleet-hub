@@ -134,6 +134,7 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
       <div class="preset-bar">
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp32_cam')">ESP32-CAM 预设</button>
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('c3_relay')">C3 继电器预设</button>
+        <button class="secondary" style="font-size:11px;padding:4px 8px;background:#1e3a8a;color:#93c5fd" onclick="loadPreset('c3_pc_monitor')">💻 C3 副屏监控预设</button>
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('s3_dock')">S3 控制坞预设</button>
         <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp8266_switch')">ESP8266 开关预设</button>
       </div>
@@ -208,6 +209,22 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
         <div class="feat-info">
           <strong>文件系统 (SPIFFS / SD Card) <span class="feat-badge supported" id="badge_storage">支持</span></strong>
           <p>片上 Flash 存储挂载或 MicroSD 卡文件读写</p>
+        </div>
+      </label>
+
+      <label class="feat-box" id="box_pc_monitor">
+        <input type="checkbox" id="f_pc_monitor"/>
+        <div class="feat-info">
+          <strong>Air101 ST7735 竖屏硬件监控 <span class="feat-badge supported" id="badge_pc_monitor">ESP32-C3 特色</span></strong>
+          <p>80×160 竖屏实时 CPU/RAM/网速监控看板与 /api/monitor/push REST 推流</p>
+        </div>
+      </label>
+
+      <label class="feat-box" id="box_joystick">
+        <input type="checkbox" id="f_joystick"/>
+        <div class="feat-info">
+          <strong>5 向导航摇杆矩阵 (Joystick) <span class="feat-badge supported" id="badge_joystick">ESP32-C3 特色</span></strong>
+          <p>Air101 板载 5 向微动开关 (GPIO 4/5/8/9/13)，支持多媒体控制与事件上报</p>
         </div>
       </label>
     </div>
@@ -311,7 +328,9 @@ const SOC_SPECS = {
       camera: "ESP8266 芯片无 8-bit 并行 DVP 摄像头控制器",
       spiram: "ESP8266 芯片无片外 PSRAM 内存总线接口",
       usb_otg: "ESP8266 芯片无原生 USB-OTG 控制器 (仅支持外部串口)",
-      display: "ESP8266 内存受限 (~80KB RAM)，不适宜驱动大型液晶图形屏"
+      display: "ESP8266 内存受限 (~80KB RAM)，不适宜驱动大型液晶图形屏",
+      pc_monitor: "ESP8266 引脚不足且内存有限，不支持 Air101 监控屏方案",
+      joystick: "ESP8266 仅少数 GPIO，不支持 5向摇杆矩阵"
     },
     default_freq: 80
   }
@@ -323,7 +342,7 @@ function selectChip(chip, el) {
   el.classList.add("active");
 
   const spec = SOC_SPECS[chip] || SOC_SPECS.esp32;
-  const allFeats = ["web_ui", "rest_api", "ota", "camera", "gpio_ctrl", "spiram", "storage", "display", "usb_otg"];
+  const allFeats = ["web_ui", "rest_api", "ota", "camera", "gpio_ctrl", "spiram", "storage", "display", "usb_otg", "pc_monitor", "joystick"];
 
   allFeats.forEach(f => {
     const box = document.getElementById("box_" + f);
@@ -362,7 +381,9 @@ const API_ENDPOINTS = [
   { method: "POST", path: "/api/gpio/set",            feat: "gpio_ctrl",desc: "设置 GPIO 高低电平或 PWM 调光" },
   { method: "GET",  path: "/stream",                  feat: "camera",   desc: "25fps MJPEG 实时摄像头视频流" },
   { method: "GET",  path: "/capture",                 feat: "camera",   desc: "单张高清 JPEG 静态快照抓取" },
-  { method: "POST", path: "/api/camera/flash",        feat: "camera",   desc: "板载大功率补光灯 PWM 渐变调光" }
+  { method: "POST", path: "/api/camera/flash",        feat: "camera",   desc: "板载大功率补光灯 PWM 渐变调光" },
+  { method: "POST", path: "/api/monitor/push",        feat: "pc_monitor",desc: "推送电脑 CPU/RAM/网速指标刷新副屏 (HTTP推流)" },
+  { method: "GET",  path: "/api/joystick/state",      feat: "joystick",  desc: "读取5向导航微动按键最新状态 (媒体控制)" }
 ];
 
 function updateEndpointsPreview() {
@@ -413,6 +434,18 @@ function loadPreset(type) {
     document.getElementById("f_display").checked = false;
     document.getElementById("device_id").value = "esp32c3_relay";
     document.getElementById("mdns_host").value = "c3-relay";
+  } else if (type === "c3_pc_monitor") {
+    selectChip("esp32c3", document.querySelectorAll(".chip-opt")[2]);
+    document.getElementById("f_web_ui").checked = true;
+    document.getElementById("f_rest_api").checked = true;
+    document.getElementById("f_ota").checked = true;
+    document.getElementById("f_pc_monitor").checked = true;
+    document.getElementById("f_joystick").checked = true;
+    document.getElementById("f_gpio_ctrl").checked = true;
+    document.getElementById("f_storage").checked = false;
+    document.getElementById("f_display").checked = false;
+    document.getElementById("device_id").value = "esp32c3_monitor";
+    document.getElementById("mdns_host").value = "c3-monitor";
   } else if (type === "s3_dock") {
     selectChip("esp32s3", document.querySelectorAll(".chip-opt")[1]);
     document.getElementById("f_web_ui").checked = true;
@@ -459,7 +492,9 @@ async function triggerBuild() {
       gpio_ctrl: document.getElementById("f_gpio_ctrl").checked,
       storage: document.getElementById("f_storage").checked,
       display: document.getElementById("f_display").checked,
-      usb_otg: document.getElementById("f_usb_otg").checked
+      usb_otg: document.getElementById("f_usb_otg").checked,
+      pc_monitor: document.getElementById("f_pc_monitor") ? document.getElementById("f_pc_monitor").checked : false,
+      joystick: document.getElementById("f_joystick") ? document.getElementById("f_joystick").checked : false
     },
     hardware: {
       cpu_freq_mhz: (selectedChip === "esp32s3") ? 240 : 160,

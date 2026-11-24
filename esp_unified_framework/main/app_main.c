@@ -23,6 +23,10 @@
 #include "mod_camera.h"
 #endif
 
+#if CONFIG_FEATURE_PC_MONITOR
+#include "mod_pc_monitor.h"
+#endif
+
 static const char *TAG = "unified_main";
 
 void app_main(void)
@@ -67,6 +71,11 @@ void app_main(void)
 #if CONFIG_FEATURE_CAMERA
     ESP_LOGI(TAG, "[Feature] Initializing Camera OV2640 Module...");
     mod_camera_init();
+#endif
+
+#if CONFIG_FEATURE_PC_MONITOR
+    ESP_LOGI(TAG, "[Feature] Initializing Air101 ST7735 PC Monitor & Joystick...");
+    mod_pc_monitor_init();
 #endif
 
     // 8. Start Unified Web Platform Server

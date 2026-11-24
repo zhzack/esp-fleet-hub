@@ -11,6 +11,10 @@ idf_component_register(
         "hal/hal_camera.c"
         "modules/mod_gpio.c"
         "modules/mod_camera.c"
+        "hal/font8x16.c"
+        "hal/hal_st7735.c"
+        "hal/hal_joystick.c"
+        "modules/mod_pc_monitor.c"
     INCLUDE_DIRS
         "."
         "core"

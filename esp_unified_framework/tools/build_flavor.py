@@ -128,6 +128,8 @@ def generate_sdkconfig_defaults(profile_data):
         "storage": "CONFIG_FEATURE_STORAGE",
         "display": "CONFIG_FEATURE_DISPLAY",
         "usb_otg": "CONFIG_FEATURE_USB_OTG",
+        "pc_monitor": "CONFIG_FEATURE_PC_MONITOR",
+        "joystick": "CONFIG_FEATURE_JOYSTICK",
     }
     for feat_key, config_macro in feat_map.items():
         val = features.get(feat_key, False)

@@ -60,6 +60,19 @@ menu "ESP Unified Framework - LuatOS-Style Component Matrix"
             default n
             help
                 Enables TinyUSB hardware driver for virtual input injection.
+
+        config FEATURE_PC_MONITOR
+            bool "Enable PC Monitor Hub (Air101 ST7735 80x160 Portrait LCD & Push API) [ESP32-C3]"
+            default n
+            help
+                Enables ST7735 0.96-inch 80x160 portrait LCD driver, live PC telemetry rendering,
+                and REST API /api/monitor/push.
+
+        config FEATURE_JOYSTICK
+            bool "Enable 5-Way Joystick Navigation Keypad (GPIO 4/5/8/9/13) [ESP32-C3]"
+            default n
+            help
+                Enables 5-way joystick driver for media/volume and UI control.
     endmenu
 
     menu "Default Network & Device Identity"

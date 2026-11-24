@@ -28,6 +28,10 @@
 #include "mod_camera.h"
 #endif
 
+#if CONFIG_FEATURE_PC_MONITOR
+#include "mod_pc_monitor.h"
+#endif
+
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
 
@@ -191,6 +195,10 @@ esp_err_t web_server_start(void)
 
 #if CONFIG_FEATURE_CAMERA
     mod_camera_register_routes(s_server);
+#endif
+
+#if CONFIG_FEATURE_PC_MONITOR
+    mod_pc_monitor_register_routes(s_server);
 #endif
 
     return ESP_OK;
