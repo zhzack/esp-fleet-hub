@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 LuatOS-Style Visual Web Compiler for ESP Unified Framework
-Provides a browser-based UI to customize features, select chips, and trigger remote NAS builds.
+Provides a browser-based UI to customize features, select chips, and trigger remote NAS builds
+with full hardware capability interlocking and compatibility validation.
 """
 
 import sys, os, json, time, subprocess, threading
@@ -39,18 +40,22 @@ header{display:flex;justify-content:space-between;align-items:center;background:
 .logo-badge{width:36px;height:36px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;display:flex;flex-direction:column;gap:16px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.2)}
 .card-title{font-size:16px;font-weight:600;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:12px}
-.chip-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-.chip-opt{border:2px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;transition:all .15s;background:#0f172a66;text-align:center}
+.chip-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.chip-opt{border:2px solid var(--border);border-radius:8px;padding:14px;cursor:pointer;transition:all .15s;background:#0f172a66;text-align:center}
 .chip-opt:hover{border-color:var(--primary)}
-.chip-opt.active{border-color:var(--primary);background:#1e3a8a44}
+.chip-opt.active{border-color:var(--primary);background:#1e3a8a44;box-shadow:0 0 0 1px var(--primary)}
 .chip-name{font-weight:bold;font-size:15px;color:#fff}
 .chip-sub{font-size:11px;color:var(--text-dim);margin-top:4px}
-.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
-.feat-box{background:#0f172a80;border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:12px;cursor:pointer;transition:border-color .15s}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+.feat-box{background:#0f172a80;border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:12px;cursor:pointer;transition:all .15s;position:relative}
 .feat-box:hover{border-color:#475569}
+.feat-box.disabled{opacity:0.42;cursor:not-allowed;background:#090d16;border-style:dashed;border-color:#33415566}
 .feat-box input[type=checkbox]{margin-top:3px;transform:scale(1.2);accent-color:var(--primary)}
-.feat-info strong{display:block;color:#fff;font-size:13px}
+.feat-info strong{display:flex;align-items:center;gap:6px;color:#fff;font-size:13px}
 .feat-info p{font-size:11px;color:var(--text-dim);margin-top:2px}
+.feat-badge{font-size:10px;padding:1px 6px;border-radius:4px;font-weight:600}
+.feat-badge.supported{background:#065f4688;color:#6ee7b7}
+.feat-badge.unsupported{background:#7f1d1d88;color:#fca5a5}
 .input-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 label{font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px}
 input[type=text]{background:#0f172a;border:1px solid var(--border);color:#fff;padding:8px 12px;border-radius:6px;font-size:13px}
@@ -65,6 +70,7 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
 .status-pill.success{background:#065f46;color:#6ee7b7}
 .status-pill.building{background:#1e3a8a;color:#93c5fd}
 .status-pill.failed{background:#7f1d1d;color:#fca5a5}
+.preset-bar{display:flex;gap:8px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -86,24 +92,24 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
   <div class="card">
     <div class="card-title">
       <span>1. 选择目标芯片架构 (Target SoC)</span>
-      <span style="font-size:12px;color:var(--text-dim)">自动匹配编译器与驱动指令集</span>
+      <span style="font-size:12px;color:var(--text-dim)">选择芯片后，下方功能组件将根据芯片物理硅片能力自动互锁！</span>
     </div>
     <div class="chip-grid">
       <div class="chip-opt active" onclick="selectChip('esp32', this)">
         <div class="chip-name">ESP32 (经典双核)</div>
-        <div class="chip-sub">ESP32-CAM / WROOM / NodeMCU</div>
+        <div class="chip-sub">支持 DVP 摄像头 / 外部 PSRAM</div>
       </div>
       <div class="chip-opt" onclick="selectChip('esp32s3', this)">
-        <div class="chip-name">ESP32-S3 (AI与矢量)</div>
-        <div class="chip-sub">原生 USB-OTG / LCD / 双核矢量扩展</div>
+        <div class="chip-name">ESP32-S3 (AI与多媒体)</div>
+        <div class="chip-sub">支持 原生 USB-OTG / 摄像头 / LCD</div>
       </div>
       <div class="chip-opt" onclick="selectChip('esp32c3', this)">
         <div class="chip-name">ESP32-C3 (RISC-V)</div>
-        <div class="chip-sub">极简单核 / 低功耗继电器与传感器</div>
+        <div class="chip-sub">极简单核 / 低功耗开关 / 无摄像头与OTG</div>
       </div>
       <div class="chip-opt" onclick="selectChip('esp32c2', this)">
         <div class="chip-name">ESP32-C2 (超轻量)</div>
-        <div class="chip-sub">超小 Flash / 成本敏感型开关</div>
+        <div class="chip-sub">成本优化型小内存 / 仅基础 GPIO 与 API</div>
       </div>
     </div>
   </div>
@@ -111,71 +117,83 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
   <!-- Step 2: Component Customization -->
   <div class="card">
     <div class="card-title">
-      <span>2. 定制功能组件矩阵 (未勾选的组件彻底从固件剔除，零冗余)</span>
-      <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('cam')">加载 ESP32-CAM 预设</button>
+      <span>2. 定制功能组件矩阵 (自动根据芯片物理硬件动态适配)</span>
+      <div class="preset-bar">
+        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp32_cam')">ESP32-CAM 预设</button>
+        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('c3_relay')">C3 继电器预设</button>
+        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('s3_dock')">S3 控制坞预设</button>
+      </div>
     </div>
     <div class="feat-grid">
-      <label class="feat-box">
+      <label class="feat-box" id="box_web_ui">
         <input type="checkbox" id="f_web_ui" checked/>
         <div class="feat-info">
-          <strong>Web 桌面控制台 (Web UI)</strong>
+          <strong>Web 桌面控制台 (Web UI) <span class="feat-badge supported" id="badge_web_ui">全芯片支持</span></strong>
           <p>嵌入自适应 HTML5 控制面板（取消勾选则为无头纯 API 固件，省 Flash）</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_rest_api">
         <input type="checkbox" id="f_rest_api" checked/>
         <div class="feat-info">
-          <strong>HTTP REST 配置接口 (REST API)</strong>
+          <strong>HTTP REST 配置接口 (REST API) <span class="feat-badge supported" id="badge_rest_api">全芯片支持</span></strong>
           <p>提供 /api/system/*、/api/gpio/*、/api/config 供网络调用</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_ota">
         <input type="checkbox" id="f_ota" checked/>
         <div class="feat-info">
-          <strong>双分区无线 OTA (Wireless OTA)</strong>
+          <strong>双分区无线 OTA (Wireless OTA) <span class="feat-badge supported" id="badge_ota">全芯片支持</span></strong>
           <p>双 1.75MB A/B 分区空中升级，支持坏固件自动回滚</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_camera">
         <input type="checkbox" id="f_camera" checked/>
         <div class="feat-info">
-          <strong>摄像头模块 (OV2640 / OV5640)</strong>
+          <strong>摄像头模块 (OV2640 / OV5640) <span class="feat-badge supported" id="badge_camera">仅 ESP32 / S3</span></strong>
           <p>含底层 SCCB 驱动、双 PSRAM 帧缓冲与实时 MJPEG 串流</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_gpio_ctrl">
         <input type="checkbox" id="f_gpio_ctrl" checked/>
         <div class="feat-info">
-          <strong>GPIO 开关与 PWM 调光 (GPIO Control)</strong>
+          <strong>GPIO 开关与 PWM 调光 (GPIO Control) <span class="feat-badge supported" id="badge_gpio_ctrl">全芯片支持</span></strong>
           <p>动态引脚电平控制、PWM 渐变调光与状态查询矩阵</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_spiram">
         <input type="checkbox" id="f_spiram" checked/>
         <div class="feat-info">
-          <strong>外部伪静态内存 (PSRAM / SPIRAM)</strong>
+          <strong>外部伪静态内存 (PSRAM / SPIRAM) <span class="feat-badge supported" id="badge_spiram">仅 ESP32 / S3</span></strong>
           <p>使能外部 2MB~8MB RAM，摄像头与大型任务必备</p>
         </div>
       </label>
-      <label class="feat-box">
-        <input type="checkbox" id="f_storage"/>
+
+      <label class="feat-box" id="box_usb_otg">
+        <input type="checkbox" id="f_usb_otg"/>
         <div class="feat-info">
-          <strong>文件系统 (SPIFFS / SD Card)</strong>
-          <p>片上 Flash 存储挂载或 MicroSD 卡文件读写</p>
+          <strong>原生 USB-OTG (虚拟键鼠注入) <span class="feat-badge unsupported" id="badge_usb_otg">仅 ESP32-S2/S3</span></strong>
+          <p>TinyUSB 免驱 HID 注入（硬件需原生 USB 控制器）</p>
         </div>
       </label>
-      <label class="feat-box">
+
+      <label class="feat-box" id="box_display">
         <input type="checkbox" id="f_display"/>
         <div class="feat-info">
-          <strong>屏幕图形引擎 (LCD / E-Paper)</strong>
+          <strong>屏幕图形引擎 (LCD / E-Paper) <span class="feat-badge supported" id="badge_display">支持</span></strong>
           <p>ST7789 IPS 屏或 SSD1680 水墨屏驱动</p>
         </div>
       </label>
-      <label class="feat-box">
-        <input type="checkbox" id="f_usb_otg"/>
+
+      <label class="feat-box" id="box_storage">
+        <input type="checkbox" id="f_storage"/>
         <div class="feat-info">
-          <strong>原生 USB-OTG (虚拟键鼠注入)</strong>
-          <p>TinyUSB 免驱 HID 注入（仅支持 ESP32-S2/S3）</p>
+          <strong>文件系统 (SPIFFS / SD Card) <span class="feat-badge supported" id="badge_storage">支持</span></strong>
+          <p>片上 Flash 存储挂载或 MicroSD 卡文件读写</p>
         </div>
       </label>
     </div>
@@ -184,7 +202,7 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
   <!-- Step 3: Default Network Identity -->
   <div class="card">
     <div class="card-title">
-      <span>3. 预设网络与设备身份 (固化在 Flash 中，亦可在运行时修改)</span>
+      <span>3. 预设网络与设备身份 (固化在 Flash 中，亦可在运行时在线配置修改)</span>
     </div>
     <div class="input-grid">
       <label>默认 WiFi SSID:
@@ -194,10 +212,10 @@ pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font
         <input type="text" id="wifi_pass" value="11111111"/>
       </label>
       <label>设备名称 (Device ID):
-        <input type="text" id="device_id" value="esp_custom_node"/>
+        <input type="text" id="device_id" value="esp32_node"/>
       </label>
       <label>mDNS 本地域名:
-        <input type="text" id="mdns_host" value="esp-custom"/>
+        <input type="text" id="mdns_host" value="esp-node"/>
       </label>
     </div>
   </div>
@@ -230,17 +248,74 @@ let selectedChip = "esp32";
 let pollTimer = null;
 let currentArtifact = "";
 
+// 核心硬件互锁规则表
+const SOC_SPECS = {
+  esp32: {
+    name: "ESP32 (经典双核)",
+    unsupported: {
+      usb_otg: "芯片无原生 USB-OTG 控制器 (仅支持外部串口芯片)"
+    },
+    default_freq: 160
+  },
+  esp32s3: {
+    name: "ESP32-S3 (AI与矢量)",
+    unsupported: {},
+    default_freq: 240
+  },
+  esp32c3: {
+    name: "ESP32-C3 (RISC-V)",
+    unsupported: {
+      camera: "C3 芯片无 8-bit 并行 DVP 摄像头硬件控制器",
+      spiram: "C3 芯片无片外 PSRAM 内存总线接口",
+      usb_otg: "C3 仅支持基础 USB-Serial-JTAG，不支持原生 USB-OTG 协议栈"
+    },
+    default_freq: 160
+  },
+  esp32c2: {
+    name: "ESP32-C2 (超轻量)",
+    unsupported: {
+      camera: "C2 芯片无摄像头硬件接口",
+      spiram: "C2 芯片无片外 PSRAM 支持",
+      storage: "C2 Flash 容量有限，不适宜挂载 SPIFFS 分区",
+      display: "C2 内存受限 (~272KB)，不适宜挂载图形渲染驱动",
+      usb_otg: "C2 芯片无原生 USB-OTG 控制器"
+    },
+    default_freq: 120
+  }
+};
+
 function selectChip(chip, el) {
   selectedChip = chip;
   document.querySelectorAll(".chip-opt").forEach(c => c.classList.remove("active"));
   el.classList.add("active");
-  if (chip !== "esp32s3") {
-    document.getElementById("f_usb_otg").checked = false;
-  }
+
+  const spec = SOC_SPECS[chip] || SOC_SPECS.esp32;
+  const allFeats = ["web_ui", "rest_api", "ota", "camera", "gpio_ctrl", "spiram", "storage", "display", "usb_otg"];
+
+  allFeats.forEach(f => {
+    const box = document.getElementById("box_" + f);
+    const input = document.getElementById("f_" + f);
+    const badge = document.getElementById("badge_" + f);
+
+    if (spec.unsupported && spec.unsupported[f]) {
+      // 硬件不支持：强制取消勾选并禁用，提示原因
+      input.checked = false;
+      input.disabled = true;
+      box.classList.add("disabled");
+      badge.textContent = "硬件不支持: " + spec.unsupported[f];
+      badge.className = "feat-badge unsupported";
+    } else {
+      // 硬件支持：解开禁用状态
+      input.disabled = false;
+      box.classList.remove("disabled");
+      badge.textContent = "硬件支持";
+      badge.className = "feat-badge supported";
+    }
+  });
 }
 
 function loadPreset(type) {
-  if (type === "cam") {
+  if (type === "esp32_cam") {
     selectChip("esp32", document.querySelectorAll(".chip-opt")[0]);
     document.getElementById("f_web_ui").checked = true;
     document.getElementById("f_rest_api").checked = true;
@@ -250,9 +325,29 @@ function loadPreset(type) {
     document.getElementById("f_spiram").checked = true;
     document.getElementById("f_storage").checked = false;
     document.getElementById("f_display").checked = false;
-    document.getElementById("f_usb_otg").checked = false;
-    document.getElementById("device_id").value = "esp32_cam_custom";
+    document.getElementById("device_id").value = "esp32_cam_node";
     document.getElementById("mdns_host").value = "esp-cam";
+  } else if (type === "c3_relay") {
+    selectChip("esp32c3", document.querySelectorAll(".chip-opt")[2]);
+    document.getElementById("f_web_ui").checked = true;
+    document.getElementById("f_rest_api").checked = true;
+    document.getElementById("f_ota").checked = true;
+    document.getElementById("f_gpio_ctrl").checked = true;
+    document.getElementById("f_storage").checked = false;
+    document.getElementById("f_display").checked = false;
+    document.getElementById("device_id").value = "esp32c3_relay";
+    document.getElementById("mdns_host").value = "c3-relay";
+  } else if (type === "s3_dock") {
+    selectChip("esp32s3", document.querySelectorAll(".chip-opt")[1]);
+    document.getElementById("f_web_ui").checked = true;
+    document.getElementById("f_rest_api").checked = true;
+    document.getElementById("f_ota").checked = true;
+    document.getElementById("f_gpio_ctrl").checked = true;
+    document.getElementById("f_display").checked = true;
+    document.getElementById("f_usb_otg").checked = true;
+    document.getElementById("f_spiram").checked = true;
+    document.getElementById("device_id").value = "esp32s3_dock";
+    document.getElementById("mdns_host").value = "s3-dock";
   }
 }
 
@@ -296,6 +391,14 @@ async function triggerBuild() {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload)
     });
+    const data = await res.json();
+    if (!data.ok) {
+      alert("❌ 参数互锁校验未通过: " + data.error);
+      btn.disabled = false;
+      document.getElementById("compile-status").textContent = "校验拒绝";
+      document.getElementById("compile-status").className = "status-pill failed";
+      return;
+    }
     pollStatus();
   } catch(e) {
     alert("请求失败: " + e);
@@ -354,6 +457,11 @@ async function promptOtaPush() {
     alert("请求异常: " + e);
   }
 }
+
+// 页面加载默认初始化
+window.onload = function() {
+  selectChip("esp32", document.querySelectorAll(".chip-opt")[0]);
+};
 </script>
 </body>
 </html>
@@ -363,9 +471,16 @@ def run_build_task(payload):
     global s_current_task
     with s_lock:
         s_current_task["status"] = "building"
-        s_current_task["log"] = ">>> [Cloud Compiler] Initializing custom build job...\n"
+        s_current_task["log"] = ">>> [Cloud Compiler] Validating SoC capabilities and initializing job...\n"
 
     try:
+        target = payload.get("target", "esp32")
+        features = payload.get("features", {})
+        hardware = payload.get("hardware", {})
+
+        # Validation
+        build_flavor.validate_soc_compatibility(target, features, hardware)
+
         # Save temp profile
         profile_name = payload.get("name", "custom_build")
         profile_path = os.path.join(PROFILES_DIR, f"{profile_name}.yaml")
@@ -375,6 +490,7 @@ def run_build_task(payload):
             yaml.dump(payload, f)
 
         with s_lock:
+            s_current_task["log"] += f"✅ SoC compatibility validated for [{target}]\n"
             s_current_task["log"] += f"Saved profile to {profile_path}\n"
             s_current_task["log"] += "Invoking build_flavor on Feiniu NAS pipeline...\n"
 
@@ -429,7 +545,7 @@ def run_build_task(payload):
 
 class CompilerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        return # suppress console noise
+        return
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -477,7 +593,7 @@ class CompilerHandler(BaseHTTPRequestHandler):
                     data=bin_data,
                     headers={"Content-Type": "application/octet-stream", "Content-Length": str(len(bin_data))}
                 )
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     res_body = r.read().decode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -496,6 +612,20 @@ class CompilerHandler(BaseHTTPRequestHandler):
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len).decode("utf-8")
             payload = json.loads(body)
+
+            target = payload.get("target", "esp32")
+            features = payload.get("features", {})
+            hardware = payload.get("hardware", {})
+
+            try:
+                build_flavor.validate_soc_compatibility(target, features, hardware)
+            except ValueError as val_err:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(val_err)}).encode("utf-8"))
+                return
+
             t = threading.Thread(target=run_build_task, args=(payload,))
             t.daemon = True
             t.start()
