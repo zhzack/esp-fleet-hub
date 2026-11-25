@@ -7,7 +7,11 @@
 #include <stdlib.h>
 #include "esp_log.h"
 #include "cJSON.h"
+#include "app_config.h"
 #include "hal_display.h"
+#if CONFIG_FEATURE_PC_MONITOR
+#include "mod_pc_monitor.h"
+#endif
 #include "web_server.h"
 
 static const char *TAG = "mod_display";
@@ -20,17 +24,18 @@ static void send_cors(httpd_req_t *req)
 static esp_err_t display_status_get_handler(httpd_req_t *req)
 {
     send_cors(req);
+#if CONFIG_FEATURE_PC_MONITOR
+    cJSON *root = mod_pc_monitor_build_status_json();
+#else
+    const app_display_config_t *dcfg = &app_config_ptr()->display;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddBoolToObject(root, "ready", hal_display_is_ready());
     cJSON_AddStringToObject(root, "driver", hal_display_driver_name());
-    cJSON_AddNumberToObject(root, "backlight", hal_display_get_backlight());
-    cJSON *lines = cJSON_AddArrayToObject(root, "lines");
-    for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
-        cJSON_AddItemToArray(lines, cJSON_CreateString(hal_display_get_line(i)));
-    }
-    char *out = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
+    app_config_display_to_cjson(dcfg, root);
+#endif
+    char *out = root ? cJSON_PrintUnformatted(root) : NULL;
+    if (root) cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
     if (!out) return httpd_resp_sendstr(req, "{\"ok\":false}");
     esp_err_t err = httpd_resp_sendstr(req, out);
@@ -38,13 +43,13 @@ static esp_err_t display_status_get_handler(httpd_req_t *req)
     return err;
 }
 
-static esp_err_t display_text_post_handler(httpd_req_t *req)
+static esp_err_t display_update_handler(httpd_req_t *req, bool switch_text_on_lines)
 {
     if (!web_server_check_auth(req)) return ESP_FAIL;
     send_cors(req);
 
     int len = req->content_len;
-    if (len <= 0 || len > 512) {
+    if (len <= 0 || len > 1024) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
         return ESP_FAIL;
     }
@@ -61,42 +66,43 @@ static esp_err_t display_text_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    cJSON *root = cJSON_Parse(body);
+#if CONFIG_FEATURE_PC_MONITOR
+    esp_err_t err = mod_pc_monitor_update_display_json(body, switch_text_on_lines);
     free(body);
-    if (!root) {
+    if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Malformed JSON");
         return ESP_FAIL;
     }
-
-    if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) {
-        hal_display_clear();
+#else
+    app_config_t updated;
+    app_config_get(&updated);
+    bool changed = app_config_apply_display_json(body, &updated, switch_text_on_lines);
+    free(body);
+    if (changed) {
+        updated.config_ver++;
+        app_config_save(&updated);
     }
-    const cJSON *bl = cJSON_GetObjectItem(root, "backlight");
-    if (cJSON_IsNumber(bl)) {
-        hal_display_set_backlight(bl->valueint);
-    }
-    for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
-        char k[8];
-        snprintf(k, sizeof(k), "line%d", i);
-        const cJSON *item = cJSON_GetObjectItem(root, k);
-        if (cJSON_IsString(item)) {
-            hal_display_set_line(i, item->valuestring);
-        }
-    }
-    const cJSON *text = cJSON_GetObjectItem(root, "text");
-    if (cJSON_IsString(text)) {
-        hal_display_set_line(0, text->valuestring);
-    }
-
-    cJSON_Delete(root);
+    hal_display_apply_config();
+#endif
     return display_status_get_handler(req);
+}
+
+static esp_err_t display_text_post_handler(httpd_req_t *req)
+{
+    return display_update_handler(req, true);
+}
+
+static esp_err_t display_config_post_handler(httpd_req_t *req)
+{
+    return display_update_handler(req, false);
 }
 
 esp_err_t mod_display_init(void)
 {
     esp_err_t err = hal_display_init();
-    hal_display_set_line(0, "ESP Unified Display");
-    hal_display_set_line(1, hal_display_driver_name());
+#if !CONFIG_FEATURE_PC_MONITOR
+    hal_display_apply_config();
+#endif
     return err;
 }
 
@@ -108,7 +114,10 @@ esp_err_t mod_display_register_routes(httpd_handle_t server)
     httpd_uri_t u_tx = { .uri = "/api/display/text", .method = HTTP_POST, .handler = display_text_post_handler };
     httpd_register_uri_handler(server, &u_tx);
 
-    ESP_LOGI(TAG, "Display REST routes registered (/api/display/status, /api/display/text)");
+    httpd_uri_t u_cf = { .uri = "/api/display/config", .method = HTTP_POST, .handler = display_config_post_handler };
+    httpd_register_uri_handler(server, &u_cf);
+
+    ESP_LOGI(TAG, "Display REST routes registered (/api/display/status, /api/display/config, /api/display/text)");
     return ESP_OK;
 }
 

@@ -37,6 +37,9 @@
 #if CONFIG_FEATURE_DISPLAY
 #include "hal_display.h"
 #endif
+#if CONFIG_FEATURE_PC_MONITOR
+#include "mod_pc_monitor.h"
+#endif
 #if CONFIG_FEATURE_STORAGE
 #include <dirent.h>
 #include <sys/stat.h>
@@ -432,8 +435,16 @@ static void ws_worker_task(void *pv)
             send_ack_with_payload(msgid, true, 1, ui, NULL, NULL);
         } else if (strcmp(mtype, "config.set") == 0 && cJSON_IsObject(pl)) {
             char *ptxt = cJSON_PrintUnformatted(pl);
-            esp_err_t cerr = ptxt ? app_config_update_from_json(ptxt) : ESP_ERR_NO_MEM;
+            app_config_changes_t changes = {0};
+            esp_err_t cerr = ptxt ? app_config_update_from_json_ex(ptxt, &changes) : ESP_ERR_NO_MEM;
             if (ptxt) cJSON_free(ptxt);
+            if (cerr == ESP_OK && changes.display_changed) {
+#if CONFIG_FEATURE_PC_MONITOR
+                mod_pc_monitor_apply_config();
+#elif CONFIG_FEATURE_DISPLAY
+                hal_display_apply_config();
+#endif
+            }
             send_ack(msgid, cerr == ESP_OK, 5, "E400", esp_err_to_name(cerr));
         } else if (strcmp(mtype, "ota.start") == 0 && cJSON_IsObject(pl)) {
 #if CONFIG_FEATURE_OTA
@@ -504,41 +515,47 @@ static void ws_worker_task(void *pv)
             send_ack(msgid, false, 0, "E404", "gpio disabled");
 #endif
         } else if (strcmp(mtype, "display.status") == 0) {
-#if CONFIG_FEATURE_DISPLAY
+#if CONFIG_FEATURE_PC_MONITOR
+            cJSON *ds = mod_pc_monitor_build_status_json();
+            send_ack_with_payload(msgid, ds != NULL, 1, ds, "E500", "oom");
+#elif CONFIG_FEATURE_DISPLAY
             cJSON *ds = cJSON_CreateObject();
             cJSON_AddBoolToObject(ds, "ready", hal_display_is_ready());
             cJSON_AddStringToObject(ds, "driver", hal_display_driver_name());
-            cJSON_AddNumberToObject(ds, "backlight", hal_display_get_backlight());
-            cJSON *lines = cJSON_AddArrayToObject(ds, "lines");
-            for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
-                cJSON_AddItemToArray(lines, cJSON_CreateString(hal_display_get_line(i)));
-            }
+            app_config_display_to_cjson(&app_config_ptr()->display, ds);
             send_ack_with_payload(msgid, true, 1, ds, NULL, NULL);
 #else
             send_ack(msgid, false, 0, "E404", "display disabled");
 #endif
-        } else if (strcmp(mtype, "display.text") == 0 && cJSON_IsObject(pl)) {
-#if CONFIG_FEATURE_DISPLAY
-            if (cJSON_IsTrue(cJSON_GetObjectItem(pl, "clear"))) {
-                hal_display_clear();
+        } else if ((strcmp(mtype, "display.text") == 0 || strcmp(mtype, "display.config") == 0) && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_PC_MONITOR
+            bool switch_text = (strcmp(mtype, "display.text") == 0);
+            char *ptxt = cJSON_PrintUnformatted(pl);
+            esp_err_t derr = ptxt ? mod_pc_monitor_update_display_json(ptxt, switch_text) : ESP_ERR_NO_MEM;
+            if (ptxt) cJSON_free(ptxt);
+            if (derr == ESP_OK) {
+                cJSON *ds = mod_pc_monitor_build_status_json();
+                send_ack_with_payload(msgid, ds != NULL, 2, ds, "E500", "oom");
+            } else {
+                send_ack(msgid, false, 2, "E400", esp_err_to_name(derr));
             }
-            const cJSON *bl = cJSON_GetObjectItem(pl, "backlight");
-            if (cJSON_IsNumber(bl)) {
-                hal_display_set_backlight(bl->valueint);
+#elif CONFIG_FEATURE_DISPLAY
+            bool switch_text = (strcmp(mtype, "display.text") == 0);
+            char *ptxt = cJSON_PrintUnformatted(pl);
+            app_config_t updated;
+            app_config_get(&updated);
+            bool changed = ptxt ? app_config_apply_display_json(ptxt, &updated, switch_text) : false;
+            if (ptxt) cJSON_free(ptxt);
+            if (changed) {
+                updated.config_ver++;
+                app_config_save(&updated);
             }
-            for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
-                char k[8];
-                snprintf(k, sizeof(k), "line%d", i);
-                const cJSON *item = cJSON_GetObjectItem(pl, k);
-                if (cJSON_IsString(item)) {
-                    hal_display_set_line(i, item->valuestring);
-                }
-            }
-            const cJSON *txt = cJSON_GetObjectItem(pl, "text");
-            if (cJSON_IsString(txt)) {
-                hal_display_set_line(0, txt->valuestring);
-            }
-            send_ack(msgid, true, 2, NULL, NULL);
+            hal_display_apply_config();
+            cJSON *ds = cJSON_CreateObject();
+            cJSON_AddBoolToObject(ds, "ready", hal_display_is_ready());
+            cJSON_AddStringToObject(ds, "driver", hal_display_driver_name());
+            app_config_display_to_cjson(&app_config_ptr()->display, ds);
+            send_ack_with_payload(msgid, true, 2, ds, NULL, NULL);
 #else
             send_ack(msgid, false, 0, "E404", "display disabled");
 #endif

@@ -173,7 +173,13 @@ size_t system_caps_to_json(char *dst, size_t max_len)
     cJSON_AddStringToObject(cam, "capture_url", "/capture");
 
     cJSON_AddBoolToObject(cJSON_AddObjectToObject(caps, "storage"), "enabled", c.feat_storage);
-    cJSON_AddBoolToObject(cJSON_AddObjectToObject(caps, "display"), "enabled", c.feat_display);
+    cJSON *disp = cJSON_AddObjectToObject(caps, "display");
+    cJSON_AddBoolToObject(disp, "enabled", c.feat_display);
+    cJSON_AddBoolToObject(disp, "supported", c.feat_display || c.feat_pc_monitor);
+#if CONFIG_FEATURE_PC_MONITOR
+    cJSON_AddNumberToObject(disp, "width", 80);
+    cJSON_AddNumberToObject(disp, "height", 160);
+#endif
     cJSON_AddBoolToObject(cJSON_AddObjectToObject(caps, "usb_otg"), "enabled", c.feat_usb_otg);
 
     cJSON *pcmon = cJSON_AddObjectToObject(caps, "pc_monitor");

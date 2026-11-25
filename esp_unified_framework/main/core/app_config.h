@@ -9,6 +9,23 @@
 extern "C" {
 #endif
 
+#define APP_DISPLAY_MAX_LINES 6
+
+typedef struct {
+    char mode[16];         // "monitor" | "text" | "status" | "off"
+    uint8_t backlight;     // 0-100
+    char theme[16];        // "cyber" | "emerald" | "amber" | "mono"
+    char header_text[24];  // Custom top bar label (empty = auto)
+    char footer_text[24];  // Custom footer badge (empty = auto)
+    bool show_clock;
+    bool show_cpu;
+    bool show_ram;
+    bool show_disk;
+    bool show_net;
+    bool show_uptime;
+    char lines[APP_DISPLAY_MAX_LINES][40];
+} app_display_config_t;
+
 typedef struct {
     // Network & WiFi
     char wifi_ssid[33];
@@ -35,6 +52,9 @@ typedef struct {
 
     // Custom GPIO Overrides JSON (stored as separate NVS string "gpio_cfg")
     char gpio_cfg_json[512];
+
+    // Display Configuration (persisted as NVS string "disp_cfg")
+    app_display_config_t display;
 } app_config_t;
 
 typedef struct {
@@ -44,6 +64,7 @@ typedef struct {
     bool camera_changed;
     bool gpio_changed;
     bool auth_changed;
+    bool display_changed;
 } app_config_changes_t;
 
 esp_err_t app_config_init(void);
@@ -77,6 +98,16 @@ esp_err_t app_config_rollback_wifi(void);
  * @brief Persist updated gpio_cfg JSON into NVS
  */
 esp_err_t app_config_save_gpio_json(const char *json_str);
+
+/**
+ * @brief Parse display JSON object into updated->display, returning true if changed
+ */
+bool app_config_apply_display_json(const char *json_str, app_config_t *updated, bool switch_text_on_lines);
+
+/**
+ * @brief Populate cJSON object with serialized display configuration
+ */
+void app_config_display_to_cjson(const app_display_config_t *disp, void *cjson_obj);
 
 /**
  * @brief Wipe NVS "app" namespace and reset defaults

@@ -9,6 +9,7 @@ import {
   Cpu, Connection, Refresh, Setting, VideoCamera, Monitor, Upload, Promotion, Delete, Check,
 } from '@element-plus/icons-vue'
 import { unifiedApi } from '@/api/unified'
+import DisplayConfigPanel from '@/components/DisplayConfigPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -87,8 +88,8 @@ const inspect = reactive({
   pins: [],
   storageInfo: null,
   displayStatus: null,
-  displayLine0: 'ESP Unified',
-  displayLine1: 'Connected',
+  displayLoading: false,
+  displayError: '',
   hidText: '',
   camImgUrl: '',
   cfgForm: {
@@ -100,6 +101,14 @@ const inspect = reactive({
     ws_gateway_url: '',
   },
 })
+
+const inspectHasDisplay = computed(() =>
+  Boolean(
+    inspect.device?.capabilities?.display?.enabled ||
+      inspect.device?.capabilities?.display?.supported ||
+      inspect.device?.capabilities?.pc_monitor?.enabled,
+  ),
+)
 
 // Batch OTA Modal
 const otaDialog = reactive({
@@ -214,12 +223,26 @@ async function runFlash() {
   ensureTaskPolling()
 }
 
+async function loadInspectDisplay(dev = inspect.device) {
+  if (!dev) return
+  inspect.displayLoading = true
+  inspect.displayError = ''
+  try {
+    inspect.displayStatus = await unifiedApi.proxyGet(dev.device_id, '/api/display/status')
+  } catch (e) {
+    inspect.displayError = e?.response?.data?.detail || e?.message || '读取屏幕配置失败'
+  } finally {
+    inspect.displayLoading = false
+  }
+}
+
 async function openInspect(dev) {
   inspect.device = dev
   inspect.visible = true
   inspect.pins = []
   inspect.storageInfo = null
   inspect.displayStatus = null
+  inspect.displayError = ''
   if (inspect.camImgUrl) {
     URL.revokeObjectURL(inspect.camImgUrl)
     inspect.camImgUrl = ''
@@ -231,7 +254,7 @@ async function openInspect(dev) {
   inspect.cfgForm.hub_url = dev.capabilities?.fleet_agent?.active_hub || ''
   inspect.cfgForm.ws_gateway_url = ''
 
-  if (dev.status !== 'online' || !dev.ip) return
+  if (dev.status !== 'online' && !dev.ws_online) return
   try {
     const cfg = await unifiedApi.proxyGet(dev.device_id, '/api/system/config')
     if (cfg.hub_url) inspect.cfgForm.hub_url = cfg.hub_url
@@ -250,10 +273,12 @@ async function openInspect(dev) {
       inspect.storageInfo = await unifiedApi.proxyGet(dev.device_id, '/api/storage/list')
     } catch { /* ignore */ }
   }
-  if (dev.capabilities?.display?.enabled) {
-    try {
-      inspect.displayStatus = await unifiedApi.proxyGet(dev.device_id, '/api/display/status')
-    } catch { /* ignore */ }
+  if (
+    dev.capabilities?.display?.enabled ||
+    dev.capabilities?.display?.supported ||
+    dev.capabilities?.pc_monitor?.enabled
+  ) {
+    await loadInspectDisplay(dev)
   }
 }
 
@@ -298,13 +323,20 @@ async function toggleFlashLed(duty) {
   ElMessage.success(`补光灯占空比设为 ${duty}`)
 }
 
-async function pushDisplayText() {
-  await unifiedApi.sendCommand(inspect.device.device_id, 'display_text', {
-    line0: inspect.displayLine0,
-    line1: inspect.displayLine1,
-  })
-  inspect.displayStatus = await unifiedApi.proxyGet(inspect.device.device_id, '/api/display/status')
-  ElMessage.success('屏幕内容已更新')
+async function saveUnifiedDisplayConfig(payload) {
+  if (!inspect.device) return
+  inspect.displayLoading = true
+  inspect.displayError = ''
+  try {
+    const res = await unifiedApi.sendCommand(inspect.device.device_id, 'display_config', payload)
+    if (res?.response) inspect.displayStatus = res.response
+    else await loadInspectDisplay(inspect.device)
+    ElMessage.success('屏幕配置已保存并生效')
+  } catch (e) {
+    inspect.displayError = e?.response?.data?.detail || e?.message || '屏幕配置下发失败'
+  } finally {
+    inspect.displayLoading = false
+  }
 }
 
 async function sendHidText() {
@@ -642,13 +674,18 @@ onBeforeUnmount(() => {
           <img v-if="inspect.camImgUrl" :src="inspect.camImgUrl" style="width: 100%; border-radius: 8px" />
         </template>
 
-        <template v-if="inspect.device.capabilities?.display?.enabled">
-          <el-divider content-position="left">SPI 显示屏文本下发</el-divider>
-          <div style="display: flex; flex-direction: column; gap: 6px">
-            <el-input v-model="inspect.displayLine0" size="small" placeholder="第 0 行" />
-            <el-input v-model="inspect.displayLine1" size="small" placeholder="第 1 行" />
-            <el-button size="small" type="primary" @click="pushDisplayText"><el-icon><Monitor /></el-icon> 发送文本</el-button>
-          </div>
+        <template v-if="inspectHasDisplay">
+          <el-divider content-position="left">屏幕显示配置化</el-divider>
+          <DisplayConfigPanel
+            compact
+            :status="inspect.displayStatus"
+            :device-name="inspect.device?.name || inspect.device?.device_id || ''"
+            :loading="inspect.displayLoading"
+            :pc-monitor-default="Boolean(inspect.device?.capabilities?.pc_monitor?.enabled)"
+            :error-message="inspect.displayError"
+            @refresh="loadInspectDisplay()"
+            @save="saveUnifiedDisplayConfig"
+          />
         </template>
 
         <template v-if="inspect.storageInfo">

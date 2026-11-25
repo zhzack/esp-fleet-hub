@@ -30,6 +30,10 @@
 // Initialize SPI master and ST7735 controller
 esp_err_t st7735_init(void);
 
+// Backlight brightness control (0..100%)
+void st7735_set_backlight(int percent);
+int st7735_get_backlight(void);
+
 // Primitive graphics
 void st7735_fill_screen(uint16_t color);
 void st7735_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
@@ -40,6 +44,7 @@ void st7735_draw_vline(int16_t x, int16_t y, int16_t h, uint16_t color);
 // Text & UI components
 void st7735_draw_char(int16_t x, int16_t y, char c, uint16_t color, uint16_t bg);
 void st7735_draw_string(int16_t x, int16_t y, const char *str, uint16_t color, uint16_t bg);
+void st7735_draw_string_padded(int16_t x, int16_t y, const char *str, int max_chars, uint16_t color, uint16_t bg);
 void st7735_draw_progress_bar(int16_t x, int16_t y, int16_t w, int16_t h, float percent, uint16_t bar_color);
 
 #endif // ST7735_H

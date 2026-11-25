@@ -193,11 +193,17 @@ static esp_err_t wifi_ap_post_handler(httpd_req_t *req)
 
 static esp_err_t config_get_handler(httpd_req_t *req)
 {
-    char buf[768];
-    size_t len = app_config_to_json(buf, sizeof(buf));
+    char *buf = malloc(1536);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    size_t len = app_config_to_json(buf, 1536);
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, buf, len);
+    esp_err_t err = httpd_resp_send(req, buf, len);
+    free(buf);
+    return err;
 }
 
 static void wifi_switch_async_task(void *pvParameters)
@@ -213,9 +219,19 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 {
     if (!web_server_check_auth(req)) return ESP_FAIL;
 
-    char buf[1024];
-    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    int len = req->content_len;
+    if (len <= 0 || len > 1535) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing payload");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    int ret = httpd_req_recv(req, buf, len);
     if (ret <= 0) {
+        free(buf);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing payload");
         return ESP_FAIL;
     }
@@ -223,6 +239,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
     app_config_changes_t changes = {0};
     esp_err_t err = app_config_update_from_json_ex(buf, &changes);
+    free(buf);
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
 
@@ -240,6 +257,15 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 #if CONFIG_FEATURE_CAMERA
     if (changes.camera_changed) {
         hal_camera_apply_config(cfg.cam_framesize, cfg.cam_quality, cfg.cam_vflip, cfg.cam_hmirror, cfg.cam_brightness);
+    }
+#endif
+#if CONFIG_FEATURE_PC_MONITOR
+    if (changes.display_changed) {
+        mod_pc_monitor_apply_config();
+    }
+#elif CONFIG_FEATURE_DISPLAY
+    if (changes.display_changed) {
+        hal_display_apply_config();
     }
 #endif
     if (changes.wifi_changed) {

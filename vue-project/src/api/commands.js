@@ -25,6 +25,11 @@ export const commandsApi = {
 
   reboot(uuid)        { return http.post(`${base(uuid)}/reboot`) },
 
+  // 屏幕显示配置化与文本看板
+  displayStatus(uuid)          { return http.get(`${base(uuid)}/display/status`) },
+  displayConfig(uuid, body)    { return http.post(`${base(uuid)}/display/config`, body) },
+  displayText(uuid, body)      { return http.post(`${base(uuid)}/display/text`, body) },
+
   // slot CRUD
   listSlots(uuid)                    { return http.get(`${base(uuid)}/slots`) },
   putSlot(uuid, idx, body)           { return http.put(`${base(uuid)}/slots/${idx}`, body) },

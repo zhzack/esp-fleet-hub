@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { commandsApi } from '@/api/commands'
 import { devicesApi } from '@/api/devices'
+import DisplayConfigPanel from '@/components/DisplayConfigPanel.vue'
 import { getCapabilityFlags } from '@/utils/capabilities'
 
 const props = defineProps({
@@ -29,6 +30,8 @@ const bleInfoData = ref(null)
 const bleBonds = ref([])
 const bleScanList = ref([])
 const transportData = ref(null)
+const displayStatusData = ref(null)
+const displayErrorMsg = ref('')
 const slotsList = ref([])     // {slot_index, addr_type, addr, name, last_used_at}
 const wifiKnownList = ref([]) // [{ssid, label, has_password, last_seen_at}]
 
@@ -61,6 +64,50 @@ async function call(fn, label, { silent = false } = {}) {
     return r
   } catch (e) {
     return null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadDisplayStatus(silent = true) {
+  if (!capFlags.value.supportsDisplay) return
+  loading.value = true
+  displayErrorMsg.value = ''
+  try {
+    const resp = await commandsApi.displayStatus(props.deviceUuid)
+    lastResult.value = resp
+    if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
+      const msg = `${resp.error_code || resp.status}: ${resp.error_message || '设备未响应'}`
+      displayErrorMsg.value = msg
+      if (!silent) ElMessage.warning(`读取屏幕配置失败: ${msg}`)
+      return
+    }
+    displayStatusData.value = extractResult(resp)
+    if (!silent) ElMessage.success('已读取当前屏幕配置')
+  } catch (e) {
+    displayErrorMsg.value = e?.response?.data?.detail || e?.message || '读取屏幕状态失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function saveDisplayConfig(payload) {
+  loading.value = true
+  displayErrorMsg.value = ''
+  try {
+    const resp = await commandsApi.displayConfig(props.deviceUuid, payload)
+    lastResult.value = resp
+    if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
+      const msg = `${resp.error_code || resp.status}: ${resp.error_message || '下发失败'}`
+      displayErrorMsg.value = msg
+      ElMessage.warning(`屏幕配置未生效 (${msg})`)
+      return
+    }
+    const r = extractResult(resp)
+    if (r) displayStatusData.value = r
+    ElMessage.success('屏幕配置已保存并应用到设备')
+  } catch (e) {
+    displayErrorMsg.value = e?.response?.data?.detail || e?.message || '屏幕配置下发失败'
   } finally {
     loading.value = false
   }
@@ -268,6 +315,8 @@ watch(() => props.modelValue, async (v) => {
     bleBonds.value = []
     bleScanList.value = []
     transportData.value = null
+    displayStatusData.value = null
+    displayErrorMsg.value = ''
     slotsList.value = []
     wifiKnownList.value = []
     lastResult.value = null
@@ -284,6 +333,12 @@ watch(() => props.modelValue, async (v) => {
     if (capFlags.value.supportsBle) {
       loadSlots()
     }
+  }
+})
+
+watch(tab, (t) => {
+  if (t === 'display' && props.modelValue && props.deviceUuid && capFlags.value.supportsDisplay && !displayStatusData.value) {
+    loadDisplayStatus(true)
   }
 })
 </script>
@@ -361,7 +416,7 @@ watch(() => props.modelValue, async (v) => {
               </div>
               <div class="vital-card">
                 <div class="vital-label">可用内存 (Heap)</div>
-                <div class="vital-value text-cyan">{{ statusData?.heap_free ? `${Math.round(statusData.heap_free / 1024)} KB` : '正常' }}</div>
+                <div class="vital-value text-cyan">{{ (statusData?.free_heap ?? statusData?.heap_free) ? `${Math.round((statusData.free_heap ?? statusData.heap_free) / 1024)} KB` : '正常' }}</div>
               </div>
             </div>
 
@@ -471,7 +526,22 @@ watch(() => props.modelValue, async (v) => {
           </div>
         </el-tab-pane>
 
-        <!-- 3. BLE Tab (仅在支持 BLE 或尚未上报能力时显示) -->
+        <!-- 3. Configurable Screen / Display Tab -->
+        <el-tab-pane v-if="capFlags.supportsDisplay" label="屏幕配置" name="display">
+          <div class="tab-pane-content">
+            <DisplayConfigPanel
+              :status="displayStatusData"
+              :device-name="deviceName || deviceUuid"
+              :loading="loading"
+              :pc-monitor-default="capFlags.list.includes('pc_monitor')"
+              :error-message="displayErrorMsg"
+              @refresh="loadDisplayStatus(false)"
+              @save="saveDisplayConfig"
+            />
+          </div>
+        </el-tab-pane>
+
+        <!-- 4. BLE Tab (仅在支持 BLE 或尚未上报能力时显示) -->
         <el-tab-pane v-if="capFlags.supportsBle" label="BLE 蓝牙" name="ble">
           <div class="tab-pane-content">
             <div class="action-strip">

@@ -176,7 +176,7 @@ static bool register_with_hub(const char *hub_base)
 
     // 2. Compose comprehensive capabilities + config snapshot payload
     char *caps_raw = malloc(1536);
-    char *cfg_raw  = malloc(768);
+    char *cfg_raw  = malloc(1536);
     if (!caps_raw || !cfg_raw) {
         free(caps_raw);
         free(cfg_raw);
@@ -185,7 +185,7 @@ static bool register_with_hub(const char *hub_base)
         return false;
     }
     system_caps_to_json(caps_raw, 1536);
-    app_config_to_json(cfg_raw, 768);
+    app_config_to_json(cfg_raw, 1536);
 
     cJSON *reg = cJSON_Parse(caps_raw);
     cJSON *cfg_obj = cJSON_Parse(cfg_raw);
@@ -248,6 +248,11 @@ static void apply_shadow_sync(cJSON *sync_cfg)
 #if CONFIG_FEATURE_CAMERA
         if (changes.camera_changed) {
             hal_camera_apply_config(cfg->cam_framesize, cfg->cam_quality, cfg->cam_vflip, cfg->cam_hmirror, cfg->cam_brightness);
+        }
+#endif
+#if CONFIG_FEATURE_PC_MONITOR
+        if (changes.display_changed) {
+            mod_pc_monitor_apply_config();
         }
 #endif
         if (changes.wifi_changed) {

@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #if CONFIG_FEATURE_PC_MONITOR
 #include "hal_st7735.h"
+#include "mod_pc_monitor.h"
 #endif
 
 static const char *TAG = "hal_display";
@@ -166,7 +167,7 @@ esp_err_t hal_display_set_line(int row, const char *text)
     strlcpy(s_lines[row], text, sizeof(s_lines[row]));
 
 #if CONFIG_FEATURE_PC_MONITOR
-    st7735_draw_string(2, row * 20, s_lines[row], COLOR_WHITE, COLOR_BLACK);
+    (void)0;
 #else
     if (s_spi) {
         int y = 8 + row * 24;
@@ -196,11 +197,25 @@ esp_err_t hal_display_set_backlight(int percent)
     if (percent > 100) percent = 100;
     s_backlight = percent;
 #if CONFIG_FEATURE_PC_MONITOR
-    gpio_set_level(BOARD_ST7735_BCKL, percent > 0 ? 1 : 0);
+    st7735_set_backlight(percent);
 #else
     if (BOARD_DISP_BCKL >= 0) gpio_set_level(BOARD_DISP_BCKL, percent > 0 ? 1 : 0);
 #endif
     return ESP_OK;
+}
+
+void hal_display_apply_config(void)
+{
+#if CONFIG_FEATURE_PC_MONITOR
+    mod_pc_monitor_apply_config();
+#else
+    app_config_t cfg;
+    app_config_get(&cfg);
+    hal_display_set_backlight(strcmp(cfg.display.mode, "off") == 0 ? 0 : cfg.display.backlight);
+    for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
+        hal_display_set_line(i, cfg.display.lines[i]);
+    }
+#endif
 }
 
 const char *hal_display_get_line(int row)
@@ -226,6 +241,7 @@ esp_err_t hal_display_init(void) { return ESP_OK; }
 esp_err_t hal_display_set_line(int row, const char *text) { return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t hal_display_clear(void) { return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t hal_display_set_backlight(int percent) { return ESP_ERR_NOT_SUPPORTED; }
+void hal_display_apply_config(void) {}
 const char *hal_display_get_line(int row) { return ""; }
 int hal_display_get_backlight(void) { return 0; }
 bool hal_display_is_ready(void) { return false; }

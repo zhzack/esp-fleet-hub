@@ -1,5 +1,7 @@
 """V2 device command HTTP endpoints."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ router = APIRouter()
 
 _BLE_CAPS = {"ble", "ble_hid", "ble_keyboard", "ble_mouse", "ble_scanner"}
 _USB_CAPS = {"usb", "usb_otg", "usb_hid", "usb_keyboard", "usb_mouse"}
+_DISPLAY_CAPS = {"display", "pc_monitor"}
 
 
 def _require_capability(dev, allowed_caps: set[str], label: str) -> None:
@@ -260,3 +263,95 @@ async def reboot(
     user: User = Depends(get_current_user),
 ):
     return await _send(db, user, device_uuid, "reboot", timeout_ms=1500)
+
+
+class DisplayConfigIn(BaseModel):
+    mode: Literal["monitor", "text", "status", "off"] | None = None
+    backlight: int | None = None
+    theme: Literal["cyber", "emerald", "amber", "mono"] | None = None
+    header_text: str | None = None
+    footer_text: str | None = None
+    show_clock: bool | None = None
+    show_cpu: bool | None = None
+    show_ram: bool | None = None
+    show_disk: bool | None = None
+    show_net: bool | None = None
+    show_uptime: bool | None = None
+    lines: list[str] | None = None
+    clear: bool | None = None
+
+
+class DisplayTextIn(BaseModel):
+    text: str | None = None
+    line0: str | None = None
+    line1: str | None = None
+    line2: str | None = None
+    line3: str | None = None
+    line4: str | None = None
+    line5: str | None = None
+    lines: list[str] | None = None
+    backlight: int | None = None
+    clear: bool | None = None
+    mode: Literal["monitor", "text", "status", "off"] | None = None
+
+
+def _validate_backlight(backlight: int | None) -> None:
+    if backlight is not None and not (0 <= backlight <= 100):
+        raise HTTPException(400, "backlight must be between 0 and 100")
+
+
+@router.get("/{device_uuid}/display/status")
+async def display_status(
+    device_uuid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "display.status",
+        timeout_ms=4000,
+        required_caps=_DISPLAY_CAPS,
+        cap_label="屏幕显示",
+    )
+
+
+@router.post("/{device_uuid}/display/config")
+async def display_config(
+    device_uuid: str,
+    body: DisplayConfigIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validate_backlight(body.backlight)
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "display.config",
+        payload=body.model_dump(exclude_none=True),
+        timeout_ms=4000,
+        required_caps=_DISPLAY_CAPS,
+        cap_label="屏幕显示",
+    )
+
+
+@router.post("/{device_uuid}/display/text")
+async def display_text(
+    device_uuid: str,
+    body: DisplayTextIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validate_backlight(body.backlight)
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "display.text",
+        payload=body.model_dump(exclude_none=True),
+        timeout_ms=4000,
+        required_caps=_DISPLAY_CAPS,
+        cap_label="屏幕显示",
+    )

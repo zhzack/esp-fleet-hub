@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveApiBase, resolveWsBase, buildWsUrl } from '../src/utils/network.js'
 import { getCapabilityFlags } from '../src/utils/capabilities.js'
+import { buildDisplayPayload, normalizeDisplayConfig } from '../src/utils/displayPresets.js'
 
 test('resolveApiBase uses backend port on loopback dev server and relative /api in prod', () => {
   const devLoc = { hostname: 'localhost', port: '5173', protocol: 'http:', host: 'localhost:5173' }
@@ -39,7 +40,39 @@ test('getCapabilityFlags hides BLE/transport for C3 non-HID nodes and enables ap
   assert.equal(dualHid.supportsTransport, true)
   assert.equal(dualHid.supportsTrackpad, true)
 
+  const c3Mon = getCapabilityFlags(['gpio', 'display', 'pc_monitor', 'joystick', 'ota'])
+  assert.equal(c3Mon.hasDisplay, true)
+  assert.equal(c3Mon.supportsDisplay, true)
+
+  const headless = getCapabilityFlags(['gpio', 'ota'])
+  assert.equal(headless.hasDisplay, false)
+  assert.equal(headless.supportsDisplay, false)
+
   const unreported = getCapabilityFlags([])
   assert.equal(unreported.supportsBle, true)
   assert.equal(unreported.supportsTransport, true)
+  assert.equal(unreported.supportsDisplay, true)
+})
+
+test('displayPresets normalizeDisplayConfig and buildDisplayPayload clamp and structure fields', () => {
+  const norm = normalizeDisplayConfig({
+    mode: 'text',
+    backlight: 150,
+    theme: 'emerald',
+    header_text: 'DESK-C3',
+    show_disk: false,
+    lines: ['A', 'B'],
+  })
+  assert.equal(norm.mode, 'text')
+  assert.equal(norm.backlight, 100)
+  assert.equal(norm.theme, 'emerald')
+  assert.equal(norm.show_disk, false)
+  assert.equal(norm.lines.length, 6)
+  assert.equal(norm.lines[0], 'A')
+  assert.equal(norm.lines[2], '')
+
+  const payload = buildDisplayPayload({ ...norm, backlight: -5 })
+  assert.equal(payload.backlight, 0)
+  assert.equal(payload.header_text, 'DESK-C3')
+  assert.equal(payload.lines.length, 6)
 })

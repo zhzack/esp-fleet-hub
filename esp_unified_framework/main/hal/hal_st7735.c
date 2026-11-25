@@ -3,6 +3,7 @@
 #include "board_pins.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -46,6 +47,12 @@
 #define ST7735_GMCTRN1  0xE1
 
 static spi_device_handle_t spi;
+static bool s_bckl_pwm = false;
+static int s_bckl_percent = 100;
+
+#define ST7735_BCKL_LEDC_TIMER  LEDC_TIMER_2
+#define ST7735_BCKL_LEDC_MODE   LEDC_LOW_SPEED_MODE
+#define ST7735_BCKL_LEDC_CH     LEDC_CHANNEL_5
 
 // Static DMA-aligned buffers to avoid runtime heap allocation / DMA misalign exceptions
 #define CHUNK_PIXELS 64
@@ -107,7 +114,7 @@ static void st7735_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1
 
 esp_err_t st7735_init(void) {
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << PIN_NUM_BCKL),
+        .pin_bit_mask = (1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -115,8 +122,33 @@ esp_err_t st7735_init(void) {
     };
     gpio_config(&io_conf);
 
-    // Turn off backlight during init
-    gpio_set_level(PIN_NUM_BCKL, 0);
+    // Initialize backlight PWM (or digital fallback) OFF during LCD reset
+    ledc_timer_config_t bt = {
+        .speed_mode = ST7735_BCKL_LEDC_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num = ST7735_BCKL_LEDC_TIMER,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_channel_config_t bc = {
+        .speed_mode = ST7735_BCKL_LEDC_MODE,
+        .channel = ST7735_BCKL_LEDC_CH,
+        .timer_sel = ST7735_BCKL_LEDC_TIMER,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = PIN_NUM_BCKL,
+        .duty = 0,
+        .hpoint = 0,
+    };
+    if (ledc_timer_config(&bt) == ESP_OK && ledc_channel_config(&bc) == ESP_OK) {
+        s_bckl_pwm = true;
+    } else {
+        gpio_config_t bio = {
+            .pin_bit_mask = (1ULL << PIN_NUM_BCKL),
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&bio);
+        gpio_set_level(PIN_NUM_BCKL, 0);
+    }
 
     // Hardware reset
     gpio_set_level(PIN_NUM_RST, 0);
@@ -230,10 +262,27 @@ esp_err_t st7735_init(void) {
     st7735_fill_screen(COLOR_BLACK);
 
     // Turn on backlight
-    gpio_set_level(PIN_NUM_BCKL, 1);
+    st7735_set_backlight(100);
 
-    ESP_LOGI(TAG, "ST7735 initialized successfully (160x80 landscape)");
+    ESP_LOGI(TAG, "ST7735 initialized successfully (80x160 portrait)");
     return ESP_OK;
+}
+
+void st7735_set_backlight(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    s_bckl_percent = percent;
+    if (s_bckl_pwm) {
+        uint32_t duty = (uint32_t)((percent * 255) / 100);
+        ledc_set_duty(ST7735_BCKL_LEDC_MODE, ST7735_BCKL_LEDC_CH, duty);
+        ledc_update_duty(ST7735_BCKL_LEDC_MODE, ST7735_BCKL_LEDC_CH);
+    } else {
+        gpio_set_level(PIN_NUM_BCKL, percent > 0 ? 1 : 0);
+    }
+}
+
+int st7735_get_backlight(void) {
+    return s_bckl_percent;
 }
 
 void st7735_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
@@ -322,6 +371,19 @@ void st7735_draw_string(int16_t x, int16_t y, const char *str, uint16_t color, u
         st7735_draw_char(x, y, *str, color, bg);
         x += 8;
         str++;
+    }
+}
+
+void st7735_draw_string_padded(int16_t x, int16_t y, const char *str, int max_chars, uint16_t color, uint16_t bg) {
+    if (!str) str = "";
+    int drawn = 0;
+    while (drawn < max_chars && str[drawn] != '\0') {
+        st7735_draw_char(x + drawn * 8, y, str[drawn], color, bg);
+        drawn++;
+    }
+    while (drawn < max_chars) {
+        st7735_draw_char(x + drawn * 8, y, ' ', color, bg);
+        drawn++;
     }
 }
 

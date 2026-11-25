@@ -131,6 +131,7 @@ def send_command_to_device(dev_id, cmd_type, cmd_payload=None):
             "camera_config": "/api/camera/config",
             "camera_flash": "/api/camera/flash",
             "display_text": "/api/display/text",
+            "display_config": "/api/display/config",
             "hid_text": "/api/hid/text",
             "hid_key": "/api/hid/key",
             "reboot": "/api/system/reboot",
