@@ -8,9 +8,26 @@ __pycache__
 *.pyc
 *.pyo
 
-# logs / local data
+# logs / local data / SQLite DBs
 logs/
 *.log
+*.db
+*.db-wal
+*.db-shm
+
+# firmware build artifacts (keep source/profiles/tools for unified_bridge)
+**/build/
+**/managed_components/
+**/.pio/
+esp_unified_framework/dist/
+esp_unified_framework/data/
+esp_unified_framework/sdkconfig
+esp_unified_framework/sdkconfig.defaults
+esp_unified_framework/pipeline.yaml
+ble_hid/build/
+*.elf
+*.map
+*.bin
 
 # vue build artifacts (rebuilt in Docker)
 vue-project/node_modules
@@ -27,6 +44,7 @@ uploads/
 
 # misc local stuff
 *.sh
+!docker-entrypoint.sh
 vehicle_data_backup.sql
 vehicle_management.sql
 createSql.sql

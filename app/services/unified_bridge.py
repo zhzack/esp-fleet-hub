@@ -12,6 +12,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config.config import settings
 from app.core.logger.logger import logger
 from app.database.crud import firmware as crud_firmware
 from app.database.schemas.firmware import FirmwareCreate
@@ -38,6 +39,14 @@ _mdns_adv: Optional[mdns_advertiser.MdnsHubAdvertiser] = None
 
 def init_unified_hub():
     hub_db.set_backend(sql_hub_store)
+    os.environ.setdefault("IDF_BUILD_CMD", settings.IDF_BUILD_CMD)
+    os.environ.setdefault("IDF_BUILD_SSH_HOST", settings.IDF_BUILD_SSH_HOST)
+    os.environ.setdefault("IDF_REMOTE_PROJECT_DIR", settings.IDF_REMOTE_PROJECT_DIR)
+    os.environ.setdefault("IDF_SSH_KEY", settings.IDF_SSH_KEY)
+    os.environ.setdefault("IDF_SSH_STRICT_HOST_KEY", settings.IDF_SSH_STRICT_HOST_KEY)
+    if "pytest" not in sys.modules:
+        sql_hub_store.mark_stale_compiler_tasks_failed()
+    web_compiler.set_task_store(sql_hub_store.save_compiler_task, sql_hub_store.load_compiler_tasks)
     legacy_db = UNIFIED_ROOT / "data" / "fleet.db"
     if "pytest" not in sys.modules and legacy_db.is_file():
         moved = migrate_legacy_fleet_sqlite(str(legacy_db))
@@ -83,27 +92,33 @@ def lookup_device_ws_secret(device_uuid: str) -> str:
     return ""
 
 
-def start_cloud_build(payload: dict, hub_port: int = 8000):
+def start_cloud_build(payload: dict, hub_port: int = 8000) -> str:
     target = payload.get("target", "esp32")
     features = payload.get("features", {})
     hardware = payload.get("hardware", {})
     build_flavor.validate_soc_compatibility(target, features, hardware)
+    profile_name = payload.get("name", "custom_build")
+    tid = web_compiler.create_task("build", f"{profile_name} ({target})", status="building")
     t = threading.Thread(
         target=web_compiler.run_build_task,
         args=(payload,),
-        kwargs={"hub_port": hub_port},
+        kwargs={"hub_port": hub_port, "task_id": tid},
         daemon=True,
     )
     t.start()
+    return tid
 
 
-def start_serial_flash(payload: dict, hub_port: int = 8000):
+def start_serial_flash(payload: dict, hub_port: int = 8000) -> str:
+    port = payload.get("port", "COM11")
+    fn = payload.get("file", "")
+    tid = web_compiler.create_task("flash", f"{port} <- {fn}", status="flashing")
     t = threading.Thread(
         target=web_compiler.run_serial_flash_task,
         args=(
-            payload.get("port", "COM11"),
+            port,
             int(payload.get("baud", 921600)),
-            payload.get("file", ""),
+            fn,
             payload.get("target", "esp32"),
             payload.get("full", True),
             payload.get("auto_provision", True),
@@ -111,10 +126,11 @@ def start_serial_flash(payload: dict, hub_port: int = 8000):
             payload.get("wifi_pass", "11111111"),
             payload.get("mdns_host", "esp-node"),
         ),
-        kwargs={"hub_port": hub_port},
+        kwargs={"hub_port": hub_port, "task_id": tid},
         daemon=True,
     )
     t.start()
+    return tid
 
 
 def publish_firmware_to_hid_repo(

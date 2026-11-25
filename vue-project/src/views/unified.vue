@@ -69,11 +69,16 @@ const flashForm = reactive({
 })
 
 const taskState = reactive({
+  task_id: '',
+  kind: 'idle',
+  label: '',
   status: 'idle',
   log: '',
   artifact_name: '',
   artifact_size: 0,
+  tasks: [],
 })
+const activeTaskId = ref('')
 
 // Device Inspector Drawer
 const inspect = reactive({
@@ -170,9 +175,10 @@ function selectProfile(p) {
 
 async function pollTask() {
   try {
-    const st = await unifiedApi.taskStatus()
+    const st = await unifiedApi.taskStatus(activeTaskId.value)
     Object.assign(taskState, st)
-    if (st.status !== 'building' && st.status !== 'flashing') {
+    const anyRunning = (st.tasks || []).some((t) => t.status === 'building' || t.status === 'flashing')
+    if (st.status !== 'building' && st.status !== 'flashing' && !anyRunning) {
       clearInterval(taskTimer)
       taskTimer = null
       refreshAll()
@@ -180,6 +186,11 @@ async function pollTask() {
   } catch {
     // ignore
   }
+}
+
+function selectTask(tid) {
+  activeTaskId.value = tid
+  pollTask()
 }
 
 function ensureTaskPolling() {
@@ -190,13 +201,15 @@ function ensureTaskPolling() {
 
 async function runBuild() {
   const payload = JSON.parse(JSON.stringify(buildForm))
-  await unifiedApi.startBuild(payload)
+  const res = await unifiedApi.startBuild(payload)
+  if (res?.task_id) activeTaskId.value = res.task_id
   ElMessage.success(`云端编译已启动: ${payload.name}`)
   ensureTaskPolling()
 }
 
 async function runFlash() {
-  await unifiedApi.flashSerial({ ...flashForm })
+  const res = await unifiedApi.flashSerial({ ...flashForm })
+  if (res?.task_id) activeTaskId.value = res.task_id
   ElMessage.success(`开始串口烧录到 ${flashForm.port}`)
   ensureTaskPolling()
 }
@@ -334,8 +347,10 @@ async function submitBatchOta() {
   otaDialog.submitting = true
   try {
     const res = await unifiedApi.batchOta(otaDialog.file, otaDialog.selectedIds)
-    ElMessage.success(`批量 OTA 下发完成: ${JSON.stringify(res.results)}`)
+    const okCnt = (res.results || []).filter((r) => r.ok).length
+    ElMessage.success(`批量 OTA 已下发 (${okCnt}/${(res.results || []).length})`)
     otaDialog.visible = false
+    setTimeout(pollDevices, 800)
   } finally {
     otaDialog.submitting = false
   }
@@ -388,9 +403,12 @@ onBeforeUnmount(() => {
                 <div class="dev-name">{{ d.name || d.device_id }}</div>
                 <div class="dev-id">{{ d.device_id }} · {{ d.mac }}</div>
               </div>
-              <el-tag :type="d.status === 'online' ? 'success' : 'warning'" size="small">
-                {{ d.status === 'online' ? '在线' : d.status }}
-              </el-tag>
+              <div style="display: flex; gap: 6px; align-items: center">
+                <el-tag v-if="d.ws_online" type="primary" size="small" effect="plain">WS 隧道</el-tag>
+                <el-tag :type="d.status === 'online' ? 'success' : 'warning'" size="small">
+                  {{ d.status === 'online' ? '在线' : d.status }}
+                </el-tag>
+              </div>
             </div>
 
             <div class="dev-meta">
@@ -398,6 +416,21 @@ onBeforeUnmount(() => {
               <div>网络：{{ d.ip || '未上线' }} · RSSI {{ d.rssi }} dBm</div>
               <div>存储：Flash {{ d.flash_mb }}MB / PSRAM {{ d.psram_mb || 0 }}MB / Heap {{ Math.round((d.free_heap || 0) / 1024) }}KB</div>
               <div>影子版本：v{{ d.shadow?.reported_ver || 1 }} -> v{{ d.shadow?.desired_ver || 1 }} ({{ d.shadow?.sync_status || 'synced' }})</div>
+            </div>
+
+            <div
+              v-if="d.ota_progress && ['starting', 'downloading', 'verifying', 'rebooting', 'failed'].includes(d.ota_progress.status)"
+              class="ota-progress-box"
+            >
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px">
+                <span>OTA 状态: {{ d.ota_progress.status }}</span>
+                <span>{{ d.ota_progress.progress }}%</span>
+              </div>
+              <el-progress
+                :percentage="d.ota_progress.progress"
+                :status="d.ota_progress.status === 'failed' ? 'exception' : (d.ota_progress.progress === 100 ? 'success' : '')"
+                :stroke-width="6"
+              />
             </div>
 
             <div class="caps-row">
@@ -525,6 +558,20 @@ onBeforeUnmount(() => {
             <el-button type="success" :disabled="!isAdmin" :loading="taskState.status === 'flashing'" @click="runFlash">
               一键芯片指纹校对并烧录
             </el-button>
+
+            <div v-if="taskState.tasks?.length" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px">
+              <el-tag
+                v-for="t in taskState.tasks.slice(0, 6)"
+                :key="t.task_id"
+                size="small"
+                style="cursor: pointer"
+                :type="t.status === 'success' ? 'success' : (t.status === 'failed' ? 'danger' : 'warning')"
+                :effect="taskState.task_id === t.task_id ? 'dark' : 'plain'"
+                @click="selectTask(t.task_id)"
+              >
+                {{ t.label || t.kind }} · {{ t.status }}
+              </el-tag>
+            </div>
 
             <pre class="console-log">{{ taskState.log || '等待构建或烧录任务...' }}</pre>
           </div>

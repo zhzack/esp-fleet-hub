@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends -o Acquire::Retries=3 curl openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
@@ -20,7 +20,11 @@ RUN pip install --upgrade pip \
  && pip install -r requirements.txt \
  && pip install 'bcrypt<4.1'
 
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 # 默认命令——dev compose 会覆盖为 --reload
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

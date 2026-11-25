@@ -186,7 +186,11 @@ def generate_sdkconfig_defaults(profile_data):
         lines.append('CONFIG_FEATURE_HTTP_SERVER=n')
 
     if features.get("ota", True):
-        lines.append('CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y')
+        lines.extend([
+            'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y',
+            'CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y',
+            'CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y',
+        ])
 
     feat_map = {
         "web_ui": "CONFIG_FEATURE_WEB_UI",
@@ -227,8 +231,18 @@ def generate_sdkconfig_defaults(profile_data):
     return "\n".join(lines) + "\n"
 
 
+def _build_env_config():
+    return {
+        "cmd": os.environ.get("IDF_BUILD_CMD", "").strip() or "idf-build",
+        "ssh_host": os.environ.get("IDF_BUILD_SSH_HOST", "").strip() or "b1ue@192.168.68.146",
+        "remote_dir": os.environ.get("IDF_REMOTE_PROJECT_DIR", "").strip() or "/vol1/esp/projects/esp_unified_framework",
+        "ssh_key": os.path.expanduser(os.environ.get("IDF_SSH_KEY", "").strip() or "~/.ssh/id_ed25519"),
+        "ssh_strict": os.environ.get("IDF_SSH_STRICT_HOST_KEY", "").strip() or "accept-new",
+    }
+
+
 def clean_stale_sdkconfig():
-    """Remove local sdkconfig and remote NAS sdkconfig so new sdkconfig.defaults is always honored."""
+    """Remove local sdkconfig and remote build node sdkconfig so new sdkconfig.defaults is always honored."""
     local_sdkcfg = os.path.join(PROJECT_ROOT, "sdkconfig")
     if os.path.isfile(local_sdkcfg):
         try:
@@ -236,14 +250,14 @@ def clean_stale_sdkconfig():
         except OSError:
             pass
 
-    # Also clear stale sdkconfig on Feiniu NAS build node before stage_sync runs
-    ssh_key = os.path.expanduser("~/.ssh/id_ed25519")
-    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=4"]
+    ec = _build_env_config()
+    ssh_key = ec["ssh_key"]
+    cmd = ["ssh", "-o", f"StrictHostKeyChecking={ec['ssh_strict']}", "-o", "ConnectTimeout=4"]
     if os.path.isfile(ssh_key):
         cmd.extend(["-i", ssh_key])
     cmd.extend([
-        "b1ue@192.168.68.146",
-        "rm -f /vol1/esp/projects/esp_unified_framework/sdkconfig",
+        ec["ssh_host"],
+        f"rm -f {ec['remote_dir'].rstrip('/')}/sdkconfig",
     ])
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
@@ -375,7 +389,7 @@ def build_profile(profile_path_or_name, ota_ip=None, clean=False):
         if not hub_url:
             try:
                 import mdns_advertiser
-                hub_url = f"http://{mdns_advertiser.get_lan_ip()}:8088"
+                hub_url = f"http://{mdns_advertiser.get_lan_ip()}:{os.environ.get('PORT', '8000')}"
             except Exception:
                 hub_url = ""
         if hub_url:
@@ -415,7 +429,7 @@ def build_profile(profile_path_or_name, ota_ip=None, clean=False):
     with open(pipeline_path, "w", encoding="utf-8") as f:
         yaml.dump(pipeline_data, f)
 
-    cmd = ["idf-build", "-t", target]
+    cmd = [_build_env_config()["cmd"], "-t", target]
     if clean:
         cmd.append("--clean")
     print(f"🔨 Invoking build pipeline: {' '.join(cmd)}...")

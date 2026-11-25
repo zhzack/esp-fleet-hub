@@ -51,11 +51,14 @@ export const unifiedApi = {
   batchOta(file, deviceIds) {
     return http.post('/v2/unified/ota/batch', { file, device_ids: deviceIds })
   },
+  otaProgress(deviceId) {
+    return http.get(`/v2/unified/ota/progress/${encodeURIComponent(deviceId)}`)
+  },
   startBuild(payload) {
     return http.post('/v2/unified/build', payload)
   },
-  taskStatus() {
-    return http.get('/v2/unified/task')
+  taskStatus(taskId = '') {
+    return http.get('/v2/unified/task', { params: taskId ? { task_id: taskId } : {} })
   },
   flashSerial(payload) {
     return http.post('/v2/unified/flash_serial', payload)

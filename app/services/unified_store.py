@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -15,11 +16,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+import app.database.base  # noqa: F401 — ensure all ORM FK targets (e.g. users) are registered
+from app.core.wifi_crypto import decrypt_field, encrypt_field
 from app.database.crud import device as crud_device
-from app.database.models.device import Device
+from app.database.models.device import Device, DeviceConnection
 from app.database.models.unified_fleet import (
     UnifiedAuditLog,
     UnifiedAuthNonce,
+    UnifiedCompilerTask,
     UnifiedDevice,
     UnifiedDeviceConfig,
     UnifiedPendingCommand,
@@ -82,8 +86,8 @@ def _row_to_device_dict(row: UnifiedDevice, cfg: UnifiedDeviceConfig | None, *, 
     if strip_secrets:
         d["has_api_token"] = bool(row.api_token)
     else:
-        d["device_secret"] = row.device_secret or ""
-        d["api_token"] = row.api_token or ""
+        d["device_secret"] = decrypt_field(row.device_secret)
+        d["api_token"] = decrypt_field(row.api_token)
     if cfg is not None:
         d["shadow"] = {
             "device_id": cfg.device_id,
@@ -164,7 +168,7 @@ class SqlAlchemyHubStore:
             db.delete(row)
             dev = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == device_id).first()
             db.commit()
-            dev_secret = dev.device_secret if dev and dev.device_secret else ""
+            dev_secret = decrypt_field(dev.device_secret) if dev and dev.device_secret else ""
 
         secret = dev_secret or global_secret
         if not secret:
@@ -203,7 +207,7 @@ class SqlAlchemyHubStore:
                 if board:
                     existing.board = board
                 if allow_empty_secret or device_secret:
-                    existing.device_secret = device_secret
+                    existing.device_secret = encrypt_field(device_secret)
                 if existing.status != "online":
                     existing.status = "provisioned"
             else:
@@ -217,7 +221,7 @@ class SqlAlchemyHubStore:
                         flash_mb=int(flash_mb or 4),
                         status="provisioned",
                         claimed=0,
-                        device_secret=device_secret or "",
+                        device_secret=encrypt_field(device_secret),
                         created_at=now,
                     )
                 )
@@ -455,7 +459,7 @@ class SqlAlchemyHubStore:
             if claimed is not None:
                 dev.claimed = 1 if claimed else 0
             if api_token is not None:
-                dev.api_token = api_token
+                dev.api_token = encrypt_field(api_token)
             db.commit()
         return self.get_device(device_id)
 
@@ -547,6 +551,94 @@ class SqlAlchemyHubStore:
                 for r in rows
             ]
 
+    def save_compiler_task(self, task: dict[str, Any]) -> None:
+        tid = str(task.get("task_id", "")).strip()
+        if not tid:
+            return
+        with _session_ctx() as db:
+            row = db.query(UnifiedCompilerTask).filter(UnifiedCompilerTask.task_id == tid).first()
+            if row is None:
+                row = UnifiedCompilerTask(
+                    task_id=tid,
+                    kind=str(task.get("kind", "build"))[:16],
+                    label=str(task.get("label", ""))[:255],
+                    status=str(task.get("status", "queued"))[:32],
+                    log=str(task.get("log", "")),
+                    artifact_name=str(task.get("artifact_name", ""))[:255],
+                    artifact_size=int(task.get("artifact_size", 0) or 0),
+                    percent=int(task.get("percent", 0) or 0),
+                    created_at=int(task.get("created_at", 0) or 0),
+                    updated_at=int(task.get("updated_at", 0) or 0),
+                )
+                db.add(row)
+            else:
+                row.kind = str(task.get("kind", row.kind))[:16]
+                row.label = str(task.get("label", row.label))[:255]
+                row.status = str(task.get("status", row.status))[:32]
+                row.log = str(task.get("log", row.log))
+                row.artifact_name = str(task.get("artifact_name", row.artifact_name))[:255]
+                row.artifact_size = int(task.get("artifact_size", row.artifact_size) or 0)
+                row.percent = int(task.get("percent", row.percent) or 0)
+                row.updated_at = int(task.get("updated_at", int(time.time())) or 0)
+            db.commit()
+
+    def load_compiler_tasks(self, limit: int = 30) -> list[dict[str, Any]]:
+        with _session_ctx() as db:
+            rows = (
+                db.query(UnifiedCompilerTask)
+                .order_by(UnifiedCompilerTask.created_at.desc())
+                .limit(int(limit))
+                .all()
+            )
+            return [
+                {
+                    "task_id": r.task_id,
+                    "kind": r.kind,
+                    "label": r.label,
+                    "status": r.status,
+                    "log": r.log,
+                    "artifact_name": r.artifact_name,
+                    "artifact_size": r.artifact_size,
+                    "percent": r.percent,
+                    "created_at": r.created_at,
+                    "updated_at": r.updated_at,
+                }
+                for r in reversed(rows)
+            ]
+
+    def mark_stale_compiler_tasks_failed(self) -> int:
+        now = int(time.time())
+        with _session_ctx() as db:
+            stale = (
+                db.query(UnifiedCompilerTask)
+                .filter(UnifiedCompilerTask.status.in_(("queued", "building", "flashing")))
+                .all()
+            )
+            for row in stale:
+                row.status = "failed"
+                row.log = (row.log or "") + "\n⚠️ [系统恢复] 服务端曾重启，任务已终止。\n"
+                row.updated_at = now
+            if stale:
+                db.commit()
+            return len(stale)
+
+
+def reconcile_stale_online_devices(db: Session) -> dict[str, int]:
+    """Reset orphaned online device states & open connections after an ungraceful server exit."""
+    now = datetime.now(timezone.utc)
+    stale_devs = (
+        db.query(Device)
+        .filter(Device.status.in_(("online", "busy")))
+        .update({Device.status: "offline"}, synchronize_session=False)
+    )
+    stale_conns = (
+        db.query(DeviceConnection)
+        .filter(DeviceConnection.disconnected_at.is_(None))
+        .update({DeviceConnection.disconnected_at: now}, synchronize_session=False)
+    )
+    db.commit()
+    return {"devices_reset": int(stale_devs or 0), "connections_closed": int(stale_conns or 0)}
+
 
 def migrate_legacy_fleet_sqlite(sqlite_path: str) -> int:
     """Import pre-existing rows from legacy esp_unified_framework/data/fleet.db once."""
@@ -579,8 +671,8 @@ def migrate_legacy_fleet_sqlite(sqlite_path: str) -> int:
                         capabilities_json=r["capabilities_json"] or "{}",
                         status=r["status"] or "provisioned",
                         claimed=int(r["claimed"] or 0),
-                        device_secret=r["device_secret"] or "",
-                        api_token=r["api_token"] or "",
+                        device_secret=encrypt_field(r["device_secret"] or ""),
+                        api_token=encrypt_field(r["api_token"] or ""),
                         rssi=int(r["rssi"] or 0),
                         free_heap=int(r["free_heap"] or 0),
                         uptime_sec=int(r["uptime_sec"] or 0),

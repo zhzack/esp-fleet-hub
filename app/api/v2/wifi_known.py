@@ -5,8 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.database.crud import device as crud_device
+from app.core.security import ensure_device_access, get_current_user
 from app.database.crud import device_wifi_known as crud_wifi
 from app.database.models.user import User
 from app.database.session import get_db
@@ -16,12 +15,7 @@ router = APIRouter()
 
 
 def _check_owner(db: Session, user: User, device_uuid: str):
-    dev = crud_device.get_by_uuid(db, device_uuid)
-    if not dev:
-        raise HTTPException(404, "device not found")
-    if user.role != "admin" and dev.owner_user_id not in (None, user.id):
-        raise HTTPException(403, "not your device")
-    return dev
+    return ensure_device_access(db, user, device_uuid)
 
 
 class WifiKnownOut(BaseModel):

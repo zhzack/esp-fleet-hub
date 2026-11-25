@@ -38,31 +38,38 @@ Client (Web UI / REST / WS) ──> ESP Fleet Hub (FastAPI) ──> Multi-Chip F
 ## 📂 Directory Structure
 
 ```text
-py_web/
+py_web/ (ESP Fleet Hub)
+├── .github/workflows/    # CI pipeline (Alembic, pytest, unified framework, frontend build/test)
+├── alembic/              # SQLAlchemy schema migrations (SQLite & MySQL)
+├── alembic.ini
 ├── app/                  # FastAPI backend application
-│   ├── api/              # REST (v1, v2) & WebSocket routers
-│   ├── core/             # Configuration, logging, security
+│   ├── api/              # REST (v1, v2, fleet_compat) & WebSocket (/ws/device, /ws/client)
+│   ├── core/             # Configuration, logging, JWT/HMAC security & field crypto
 │   ├── database/         # SQLAlchemy models, schemas, and sessions
-│   ├── services/         # Dispatcher, ACK tracker, multi-target, routing
-│   └── main.py           # FastAPI entrypoint and static mount
-├── vue-project/          # Vue 3 SPA frontend
-│   ├── src/              # Components, views, stores, router, API client
+│   ├── services/         # Dispatcher, ACK/OTA tracker, queue, firmware_utils, unified_store & compiler bridge
+│   └── main.py           # FastAPI entrypoint and SPA mount
+├── vue-project/          # Vue 3 SPA frontend (built -> vue-project/dist)
+│   ├── scripts/          # Node native unit tests (check_frontend.test.mjs)
+│   ├── src/              # Components, views (/unified, /devices, /terminal, ...), stores, router
 │   └── vite.config.js
-├── ble_hid/              # ESP32-S3 ESP-IDF firmware project
-│   ├── main/             # BLE HID, USB HID, Wi-Fi / WebSocket logic, OTA
-│   └── flash.py          # Firmware build / flash / monitor helper
+├── esp_unified_framework/ # Unified multi-chip firmware (ESP32-S3/C3/ESP32/ESP8266) + LuatOS compiler tools
+│   ├── main/             # Modular HAL, web UI, fleet_agent, ws_gateway (TLS + chunked RX), rollback OTA, USB-OTG HID
+│   ├── profiles/         # YAML hardware capability & Kconfig strip profiles (incl. esp32_cam_full)
+│   └── tools/            # build_flavor.py, web_compiler.py (multi-task + per-port locks), nvs_gen.py, fleet_router.py, hub_db.py
+├── ble_hid/              # Dedicated ESP32-S3 BLE + USB HID firmware project
 ├── scripts/              # Runner & ops scripts
 │   ├── py/               # Cross-platform Python scripts (start, stop, logs, clean, build)
 │   ├── sh/               # Shell equivalents (Git Bash / WSL / Linux / macOS)
 │   └── mysql/            # MySQL backup / restore / schema dump helpers
 ├── tools/                # Host-side utilities (PC passthrough, macro recorder, WS tester)
-├── tests/                # Pytest suite (REST & WS APIs, schemas, services, ESP32 dispatch E2E, smoke)
+├── tests/                # Pytest suite (REST/WS APIs, security hardening, RBAC, WS tunnel, unified fleet, smoke)
 ├── docs/                 # System architecture, protocol specs, API reference
-├── deploy/               # Deployment configs (MySQL init SQL)
+├── deploy/               # Legacy SQL reference configs
 ├── backups/              # Database backups (gitignored)
 ├── uploads/              # Firmware upload storage (gitignored)
 ├── logs/                 # Runtime logs (gitignored)
-├── Dockerfile            # Production image (multi-stage: frontend build + backend runtime)
+├── docker-entrypoint.sh  # Container entrypoint running `alembic upgrade head` automatically
+├── Dockerfile            # Production image (multi-stage: frontend build + backend runtime + openssh-client)
 ├── Dockerfile.backend    # Backend-only image (used by compose.dev.yml)
 ├── Dockerfile.frontend.dev # Vite dev-server image (used by compose.dev.yml)
 ├── compose.dev.yml       # Docker compose configuration (Development)
@@ -92,7 +99,10 @@ py_web/
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Start FastAPI server
+# 3. Apply database migrations (SQLite or MySQL per .env)
+alembic upgrade head
+
+# 4. Start FastAPI server
 python run.py
 # Or using script:
 python scripts/py/start_backend.py
@@ -116,8 +126,11 @@ Frontend development server will be running at `http://127.0.0.1:5173`.
 ### 4. Run Tests
 
 ```bash
-# Full pytest suite (REST/WS APIs, schemas, ESP32 dispatch E2E; uses in-memory SQLite)
-.venv\Scripts\pytest
+# Full pytest suite (REST/WS APIs, security hardening, schemas, unified framework, ESP32 dispatch E2E)
+python -m pytest -q
+
+# Frontend unit tests & production build check
+cd vue-project && npm test && npm run build
 
 # E2E smoke test against a running backend (simulates an ESP32 over WebSocket)
 python tests/smoke_test.py

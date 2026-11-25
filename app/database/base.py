@@ -21,4 +21,5 @@ from app.database.models.unified_fleet import (  # noqa: F401
     UnifiedPendingCommand,
     UnifiedAuthNonce,
     UnifiedAuditLog,
+    UnifiedCompilerTask,
 )

@@ -3,7 +3,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,18 +11,24 @@ from fastapi.staticfiles import StaticFiles
 from app.api.fleet_compat import router as fleet_compat_router
 from app.api.router import api_router
 from app.api.ws import ws_router
-from app.core.config.config import settings
+from app.core.cache import close_redis
+from app.core.config.config import settings, validate_runtime_security
 from app.core.logger.logger import logger
 from app.services import unified_bridge
+from app.services.unified_store import reconcile_stale_online_devices
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_runtime_security()
     # 兜底创建新增的 ORM 表（已有的旧表保留不动）。
-    # 生产建议改 alembic；开发期 create_all 足够。
+    # 生产容器通过 entrypoint 预先执行 `alembic upgrade head`；开发与 pytest 仍保留兜底。
     from app.database.base import Base  # noqa: F401 — 拉齐所有 model
-    from app.database.session import engine
+    from app.database.session import SessionLocal, engine
     Base.metadata.create_all(bind=engine)
     if "pytest" not in sys.modules:
+        with SessionLocal() as db:
+            reconcile_stale_online_devices(db)
         unified_port = int(os.environ.get("PORT", "8000") or 8000)
         unified_bridge.start_mdns_hub(port=unified_port)
     logger.info(
@@ -32,6 +38,7 @@ async def lifespan(app: FastAPI):
     yield
     if "pytest" not in sys.modules:
         unified_bridge.stop_mdns_hub()
+    await close_redis()
 
 
 app = FastAPI(
@@ -104,6 +111,9 @@ if FRONTEND_DIST.exists():
     # SPA fallback：所有非 /api、/ws 路径都返回 index.html
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str, request: Request):
+        clean = full_path.lstrip("/")
+        if clean in ("api", "ws") or clean.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="Not Found")
         # 已被前面的路由匹配的不会进这里；只兜底前端 history 路径
         return FileResponse(FRONTEND_DIST / "index.html")
 else:

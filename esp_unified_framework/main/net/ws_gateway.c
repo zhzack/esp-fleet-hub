@@ -15,7 +15,11 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
+#include "mbedtls/base64.h"
 #include "mbedtls/md.h"
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+#include "esp_crt_bundle.h"
+#endif
 #include "cJSON.h"
 
 #include "app_config.h"
@@ -30,6 +34,17 @@
 #if CONFIG_FEATURE_GPIO_CTRL
 #include "hal_gpio.h"
 #endif
+#if CONFIG_FEATURE_DISPLAY
+#include "hal_display.h"
+#endif
+#if CONFIG_FEATURE_STORAGE
+#include <dirent.h>
+#include <sys/stat.h>
+#include "hal_storage.h"
+#endif
+#if CONFIG_FEATURE_CAMERA
+#include "hal_camera.h"
+#endif
 
 static const char *TAG = "ws_gw";
 
@@ -38,6 +53,19 @@ static QueueHandle_t s_rx_queue = NULL;
 static volatile bool s_online = false;
 static volatile bool s_connected = false;
 static char s_auth_nonce[65] = "";
+
+#define WS_RX_MAX_FRAME_LEN 16384
+static char *s_rx_frag_buf = NULL;
+static size_t s_rx_frag_cap = 0;
+static size_t s_rx_frag_len = 0;
+
+static void reset_rx_frag_buf(void)
+{
+    free(s_rx_frag_buf);
+    s_rx_frag_buf = NULL;
+    s_rx_frag_cap = 0;
+    s_rx_frag_len = 0;
+}
 
 static void make_uuid(char out[37])
 {
@@ -428,14 +456,198 @@ static void ws_worker_task(void *pv)
             send_ack(msgid, true, 1, NULL, NULL);
             vTaskDelay(pdMS_TO_TICKS(400));
             esp_restart();
-        } else if (strcmp(mtype, "gpio_set") == 0 && cJSON_IsObject(pl)) {
+        } else if (strcmp(mtype, "sys.config") == 0) {
+            char *cbuf = malloc(1536);
+            if (!cbuf) {
+                send_ack(msgid, false, 0, "E500", "oom");
+            } else {
+                app_config_to_json(cbuf, 1536);
+                cJSON *parsed = cJSON_Parse(cbuf);
+                free(cbuf);
+                send_ack_with_payload(msgid, true, 1, parsed, NULL, NULL);
+            }
+        } else if (strcmp(mtype, "gpio.pins") == 0) {
+#if CONFIG_FEATURE_GPIO_CTRL
+            char *gbuf = malloc(1536);
+            if (!gbuf) {
+                send_ack(msgid, false, 0, "E500", "oom");
+            } else {
+                hal_gpio_pins_to_json(gbuf, 1536);
+                cJSON *parsed = cJSON_Parse(gbuf);
+                free(gbuf);
+                send_ack_with_payload(msgid, true, 1, parsed, NULL, NULL);
+            }
+#else
+            send_ack(msgid, false, 0, "E404", "gpio disabled");
+#endif
+        } else if ((strcmp(mtype, "gpio_set") == 0 || strcmp(mtype, "gpio.set") == 0) && cJSON_IsObject(pl)) {
 #if CONFIG_FEATURE_GPIO_CTRL
             const cJSON *jp = cJSON_GetObjectItem(pl, "pin");
             const cJSON *jv = cJSON_GetObjectItem(pl, "val");
-            bool ok = cJSON_IsNumber(jp) && cJSON_IsNumber(jv) && (hal_gpio_write(jp->valueint, jv->valueint) == ESP_OK);
+            const cJSON *jd = cJSON_GetObjectItem(pl, "duty");
+            bool ok = false;
+            if (cJSON_IsNumber(jp)) {
+                if (cJSON_IsNumber(jd)) {
+                    ok = (hal_gpio_set_pwm(jp->valueint, (uint8_t)jd->valueint) == ESP_OK);
+                } else if (cJSON_IsNumber(jv)) {
+                    ok = (hal_gpio_write(jp->valueint, jv->valueint) == ESP_OK);
+                }
+            }
             send_ack(msgid, ok, 1, "E500", "gpio failed");
 #else
             send_ack(msgid, false, 0, "E404", "gpio disabled");
+#endif
+        } else if (strcmp(mtype, "display.status") == 0) {
+#if CONFIG_FEATURE_DISPLAY
+            cJSON *ds = cJSON_CreateObject();
+            cJSON_AddBoolToObject(ds, "ready", hal_display_is_ready());
+            cJSON_AddStringToObject(ds, "driver", hal_display_driver_name());
+            cJSON_AddNumberToObject(ds, "backlight", hal_display_get_backlight());
+            cJSON *lines = cJSON_AddArrayToObject(ds, "lines");
+            for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
+                cJSON_AddItemToArray(lines, cJSON_CreateString(hal_display_get_line(i)));
+            }
+            send_ack_with_payload(msgid, true, 1, ds, NULL, NULL);
+#else
+            send_ack(msgid, false, 0, "E404", "display disabled");
+#endif
+        } else if (strcmp(mtype, "display.text") == 0 && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_DISPLAY
+            if (cJSON_IsTrue(cJSON_GetObjectItem(pl, "clear"))) {
+                hal_display_clear();
+            }
+            const cJSON *bl = cJSON_GetObjectItem(pl, "backlight");
+            if (cJSON_IsNumber(bl)) {
+                hal_display_set_backlight(bl->valueint);
+            }
+            for (int i = 0; i < HAL_DISPLAY_MAX_LINES; i++) {
+                char k[8];
+                snprintf(k, sizeof(k), "line%d", i);
+                const cJSON *item = cJSON_GetObjectItem(pl, k);
+                if (cJSON_IsString(item)) {
+                    hal_display_set_line(i, item->valuestring);
+                }
+            }
+            const cJSON *txt = cJSON_GetObjectItem(pl, "text");
+            if (cJSON_IsString(txt)) {
+                hal_display_set_line(0, txt->valuestring);
+            }
+            send_ack(msgid, true, 2, NULL, NULL);
+#else
+            send_ack(msgid, false, 0, "E404", "display disabled");
+#endif
+        } else if (strcmp(mtype, "storage.list") == 0) {
+#if CONFIG_FEATURE_STORAGE
+            size_t total = 0, used = 0;
+            bool mounted = hal_storage_is_mounted();
+            if (mounted) hal_storage_get_usage(&total, &used);
+            cJSON *sr = cJSON_CreateObject();
+            cJSON_AddBoolToObject(sr, "mounted", mounted);
+            cJSON_AddNumberToObject(sr, "total_bytes", (double)total);
+            cJSON_AddNumberToObject(sr, "used_bytes", (double)used);
+            cJSON *files = cJSON_AddArrayToObject(sr, "files");
+            if (mounted) {
+                DIR *dir = opendir(hal_storage_base_path());
+                if (dir) {
+                    struct dirent *ent;
+                    while ((ent = readdir(dir)) != NULL) {
+                        char full[96];
+                        struct stat st = {0};
+                        snprintf(full, sizeof(full), "%s/%.64s", hal_storage_base_path(), ent->d_name);
+                        if (stat(full, &st) == 0) {
+                            cJSON *f = cJSON_CreateObject();
+                            cJSON_AddStringToObject(f, "name", ent->d_name);
+                            cJSON_AddNumberToObject(f, "size", (double)st.st_size);
+                            cJSON_AddItemToArray(files, f);
+                        }
+                    }
+                    closedir(dir);
+                }
+            }
+            send_ack_with_payload(msgid, true, 2, sr, NULL, NULL);
+#else
+            send_ack(msgid, false, 0, "E404", "storage disabled");
+#endif
+        } else if (strcmp(mtype, "camera.flash") == 0 && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_CAMERA
+            const cJSON *jd = cJSON_GetObjectItem(pl, "duty");
+            int duty = cJSON_IsNumber(jd) ? jd->valueint : 0;
+            if (duty < 0) duty = 0;
+            if (duty > 255) duty = 255;
+            esp_err_t ferr = hal_camera_set_flash_duty((uint8_t)duty);
+            cJSON *fr = cJSON_CreateObject();
+            cJSON_AddNumberToObject(fr, "flash_duty", duty);
+            send_ack_with_payload(msgid, ferr == ESP_OK, 1, fr, "E500", esp_err_to_name(ferr));
+#else
+            send_ack(msgid, false, 0, "E404", "camera disabled");
+#endif
+        } else if (strcmp(mtype, "camera.config.get") == 0) {
+#if CONFIG_FEATURE_CAMERA
+            app_config_t cfg;
+            app_config_get(&cfg);
+            cJSON *cc = cJSON_CreateObject();
+            cJSON_AddNumberToObject(cc, "framesize", cfg.cam_framesize);
+            cJSON_AddNumberToObject(cc, "quality", cfg.cam_quality);
+            cJSON_AddBoolToObject(cc, "vflip", cfg.cam_vflip);
+            cJSON_AddBoolToObject(cc, "hmirror", cfg.cam_hmirror);
+            cJSON_AddNumberToObject(cc, "brightness", cfg.cam_brightness);
+            send_ack_with_payload(msgid, true, 1, cc, NULL, NULL);
+#else
+            send_ack(msgid, false, 0, "E404", "camera disabled");
+#endif
+        } else if (strcmp(mtype, "camera.config") == 0 && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_CAMERA
+            app_config_t cfg;
+            app_config_get(&cfg);
+            const cJSON *fs = cJSON_GetObjectItem(pl, "framesize");
+            const cJSON *q  = cJSON_GetObjectItem(pl, "quality");
+            const cJSON *vf = cJSON_GetObjectItem(pl, "vflip");
+            const cJSON *hm = cJSON_GetObjectItem(pl, "hmirror");
+            const cJSON *br = cJSON_GetObjectItem(pl, "brightness");
+            if (cJSON_IsNumber(fs)) cfg.cam_framesize = (uint8_t)fs->valueint;
+            if (cJSON_IsNumber(q) && q->valueint >= 4 && q->valueint <= 63) cfg.cam_quality = (uint8_t)q->valueint;
+            if (cJSON_IsBool(vf)) cfg.cam_vflip = cJSON_IsTrue(vf);
+            if (cJSON_IsBool(hm)) cfg.cam_hmirror = cJSON_IsTrue(hm);
+            if (cJSON_IsNumber(br)) cfg.cam_brightness = (int8_t)br->valueint;
+            cfg.config_ver++;
+            app_config_save(&cfg);
+            esp_err_t cerr = hal_camera_apply_config(cfg.cam_framesize, cfg.cam_quality, cfg.cam_vflip, cfg.cam_hmirror, cfg.cam_brightness);
+            send_ack(msgid, cerr == ESP_OK, 2, "E500", esp_err_to_name(cerr));
+#else
+            send_ack(msgid, false, 0, "E404", "camera disabled");
+#endif
+        } else if (strcmp(mtype, "camera.capture") == 0) {
+#if CONFIG_FEATURE_CAMERA
+            if (!hal_camera_is_ready()) {
+                send_ack(msgid, false, 0, "E503", "camera not ready");
+            } else {
+                camera_fb_t *fb = hal_camera_fb_get();
+                if (!fb) {
+                    send_ack(msgid, false, 0, "E500", "frame grab failed");
+                } else if (fb->len > 65536) {
+                    hal_camera_fb_return(fb);
+                    send_ack(msgid, false, 0, "E413", "frame too large for WS tunnel");
+                } else {
+                    size_t b64_cap = ((fb->len + 2) / 3) * 4 + 4;
+                    unsigned char *b64 = malloc(b64_cap);
+                    size_t olen = 0;
+                    if (!b64 || mbedtls_base64_encode(b64, b64_cap, &olen, fb->buf, fb->len) != 0) {
+                        free(b64);
+                        hal_camera_fb_return(fb);
+                        send_ack(msgid, false, 0, "E500", "base64 encode failed");
+                    } else {
+                        b64[olen] = '\0';
+                        hal_camera_fb_return(fb);
+                        cJSON *cap = cJSON_CreateObject();
+                        cJSON_AddStringToObject(cap, "content_type", "image/jpeg");
+                        cJSON_AddStringToObject(cap, "image_b64", (const char *)b64);
+                        free(b64);
+                        send_ack_with_payload(msgid, true, 5, cap, NULL, NULL);
+                    }
+                }
+            }
+#else
+            send_ack(msgid, false, 0, "E404", "camera disabled");
 #endif
         }
 
@@ -450,20 +662,52 @@ static void on_ws_event(void *handler_args, esp_event_base_t base, int32_t event
         case WEBSOCKET_EVENT_CONNECTED:
             s_connected = true;
             s_auth_nonce[0] = '\0';
+            reset_rx_frag_buf();
             send_register();
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
         case WEBSOCKET_EVENT_ERROR:
             s_connected = false;
             s_online = false;
+            reset_rx_frag_buf();
             break;
         case WEBSOCKET_EVENT_DATA:
-            if (e && e->op_code == 0x1 && e->data_len > 0 && e->data_len < 4096 && s_rx_queue) {
-                char *copy = malloc(e->data_len + 1);
-                if (copy) {
-                    memcpy(copy, e->data_ptr, e->data_len);
-                    copy[e->data_len] = '\0';
-                    if (xQueueSend(s_rx_queue, &copy, 0) != pdTRUE) free(copy);
+            if (e && (e->op_code == 0x1 || e->op_code == 0x0) && e->data_len > 0 && s_rx_queue) {
+                if (e->payload_offset == 0 && e->data_len == e->payload_len && e->fin && e->data_len < WS_RX_MAX_FRAME_LEN) {
+                    reset_rx_frag_buf();
+                    char *copy = malloc(e->data_len + 1);
+                    if (copy) {
+                        memcpy(copy, e->data_ptr, e->data_len);
+                        copy[e->data_len] = '\0';
+                        if (xQueueSend(s_rx_queue, &copy, 0) != pdTRUE) free(copy);
+                    }
+                } else {
+                    size_t total = (size_t)e->payload_len;
+                    size_t end_off = (size_t)e->payload_offset + (size_t)e->data_len;
+                    if (total == 0 || total >= WS_RX_MAX_FRAME_LEN || end_off >= WS_RX_MAX_FRAME_LEN) {
+                        reset_rx_frag_buf();
+                        break;
+                    }
+                    if (e->payload_offset == 0 || !s_rx_frag_buf || s_rx_frag_cap <= total) {
+                        reset_rx_frag_buf();
+                        s_rx_frag_buf = malloc(total + 1);
+                        if (!s_rx_frag_buf) break;
+                        s_rx_frag_cap = total + 1;
+                    }
+                    if ((size_t)e->payload_offset <= s_rx_frag_len && end_off <= total) {
+                        memcpy(s_rx_frag_buf + e->payload_offset, e->data_ptr, e->data_len);
+                        s_rx_frag_len = end_off;
+                        if (s_rx_frag_len >= total && e->fin) {
+                            s_rx_frag_buf[total] = '\0';
+                            char *done_msg = s_rx_frag_buf;
+                            s_rx_frag_buf = NULL;
+                            s_rx_frag_cap = 0;
+                            s_rx_frag_len = 0;
+                            if (xQueueSend(s_rx_queue, &done_msg, 0) != pdTRUE) free(done_msg);
+                        }
+                    } else {
+                        reset_rx_frag_buf();
+                    }
                 }
             }
             break;
@@ -523,6 +767,9 @@ static void ws_mgr_task(void *pv)
                 .reconnect_timeout_ms = 5000,
                 .network_timeout_ms = 8000,
                 .task_stack = 6144,
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+                .crt_bundle_attach = esp_crt_bundle_attach,
+#endif
             };
             s_ws = esp_websocket_client_init(&wcfg);
             if (s_ws) {

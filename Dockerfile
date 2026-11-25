@@ -18,9 +18,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# system deps for cryptography / bcrypt wheels are precompiled, but keep curl for healthcheck
+# system deps: curl for healthcheck, openssh-client for remote NAS idf-build
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends -o Acquire::Retries=3 curl openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
@@ -28,9 +28,13 @@ RUN pip install --upgrade pip \
  && pip install -r requirements.txt \
  && pip install 'bcrypt<4.1'
 
-# app source
+# app source & unified framework tools
 COPY app/ ./app/
-COPY deploy/ ./deploy/
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
+COPY esp_unified_framework/ ./esp_unified_framework/
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
 
 # built frontend from stage 1 -> served by FastAPI (vue-project/dist)
 COPY --from=frontend /web/dist/ ./vue-project/dist/
@@ -40,4 +44,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8000/api/v1/health || exit 1
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

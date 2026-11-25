@@ -7,8 +7,8 @@ class LogBus:
     def __init__(self):
         self.subscribers = defaultdict(list)
 
-    async def publish(self, execution_id: str, line: str):
-        for queue in self.subscribers[execution_id]:
+    async def publish(self, execution_id: str, line: str | None):
+        for queue in list(self.subscribers[execution_id]):
             await queue.put(line)
 
     async def subscribe(self, execution_id: str) -> AsyncGenerator[str, None]:
@@ -17,9 +17,12 @@ class LogBus:
         try:
             while True:
                 line = await queue.get()
+                if line is None:
+                    break
                 yield line
         finally:
-            self.subscribers[execution_id].remove(queue)
+            if queue in self.subscribers[execution_id]:
+                self.subscribers[execution_id].remove(queue)
 
 
 log_bus = LogBus()

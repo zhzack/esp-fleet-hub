@@ -9,7 +9,7 @@ class AckTracker:
 
     async def expect(self, msg_id: str, timeout: float) -> dict:
         """等待 ACK；超时抛 asyncio.TimeoutError。返回 ack 的 payload dict。"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._pending[msg_id] = fut
         try:

@@ -1,5 +1,8 @@
-"""JWT 鉴权 + 密码哈希 + FastAPI 依赖。"""
+"""JWT 鉴权 + 密码哈希 + 下载签名 + 设备访问控制依赖。"""
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import time
 from typing import Optional
 
 from fastapi import Depends, HTTPException, WebSocket, status
@@ -9,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config.config import settings
 from app.database.session import get_db
+from app.database.models.device import Device
 from app.database.models.user import User
 
 import bcrypt
@@ -26,17 +30,11 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-# ----- JWT -----
-_JWT_SECRET = settings.JWT_SECRET
-_JWT_ALG = settings.JWT_ALGORITHM
-_JWT_EXP_MIN = int(settings.JWT_EXPIRE_MINUTES)
-
-
 def create_access_token(
     sub: str, role: str = "user", expires_minutes: Optional[int] = None
 ) -> tuple[str, int]:
     """返回 (token, expires_in_seconds)。"""
-    exp_min = expires_minutes or _JWT_EXP_MIN
+    exp_min = expires_minutes or int(settings.JWT_EXPIRE_MINUTES)
     now = datetime.now(timezone.utc)
     exp = now + timedelta(minutes=exp_min)
     payload = {
@@ -45,12 +43,55 @@ def create_access_token(
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
     }
-    token = jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALG)
+    token = jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
     return token, exp_min * 60
 
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALG])
+    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+
+
+def create_download_token(resource: str, ttl_sec: int = 1800) -> str:
+    """Generate compact `<exp_hex>.<hmac24>` signed token for OTA/browser downloads."""
+    exp = int(time.time()) + max(1, int(ttl_sec))
+    msg = f"{resource}:{exp}".encode("utf-8")
+    sig = hmac.new(settings.JWT_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:24]
+    return f"{exp:x}.{sig}"
+
+
+def verify_download_token(resource: str, token: str | None) -> bool:
+    """Validate compact `<exp_hex>.<hmac24>` download token."""
+    if not token or "." not in token:
+        return False
+    try:
+        exp_hex, sig = token.split(".", 1)
+        exp = int(exp_hex, 16)
+    except (ValueError, TypeError):
+        return False
+    if exp < int(time.time()):
+        return False
+    msg = f"{resource}:{exp}".encode("utf-8")
+    expected = hmac.new(settings.JWT_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:24]
+    return hmac.compare_digest(expected, sig)
+
+
+def ensure_device_access(
+    db: Session,
+    user: User,
+    device_uuid: str,
+    *,
+    allow_unclaimed: bool | None = None,
+) -> Device:
+    """Enforce ownership/admin authorization on a primary `devices` row."""
+    dev = db.query(Device).filter(Device.device_uuid == device_uuid).first()
+    if not dev:
+        raise HTTPException(404, "device not found")
+    if user.role == "admin" or dev.owner_user_id == user.id:
+        return dev
+    unclaimed_ok = settings.ALLOW_UNCLAIMED_DEVICE_CONTROL if allow_unclaimed is None else allow_unclaimed
+    if dev.owner_user_id is None and unclaimed_ok:
+        return dev
+    raise HTTPException(403, "not your device")
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)

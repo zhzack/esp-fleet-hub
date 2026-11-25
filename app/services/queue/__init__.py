@@ -13,6 +13,7 @@ from app.core.config.config import settings
 
 class QueueBackend(Protocol):
     async def push(self, device_id: str, envelope: dict) -> None: ...
+    async def requeue(self, device_id: str, envelope: dict) -> None: ...
     async def pop(self, device_id: str) -> Optional[dict]: ...
     async def size(self, device_id: str) -> int: ...
 
@@ -26,6 +27,9 @@ class MemoryBackend:
     async def push(self, device_id: str, envelope: dict) -> None:
         await self._queues[device_id].put(envelope)
 
+    async def requeue(self, device_id: str, envelope: dict) -> None:
+        await self._queues[device_id].put(envelope)
+
     async def pop(self, device_id: str) -> Optional[dict]:
         return await self._queues[device_id].get()
 
@@ -34,7 +38,9 @@ class MemoryBackend:
 
 
 class RedisBackend:
-    """Redis List 实现（LPUSH / BRPOP）。"""
+    """Redis List 实现（LPUSH 入队 / BRPOP 出队 / RPUSH 退回队头，含过期保护）。"""
+
+    _QUEUE_TTL_SEC = 3600
 
     def __init__(self) -> None:
         from app.core.cache import get_redis  # 延迟导入避免循环
@@ -45,10 +51,18 @@ class RedisBackend:
         return f"queue:device:{device_id}"
 
     async def push(self, device_id: str, envelope: dict) -> None:
-        await self._r.lpush(self._key(device_id), json.dumps(envelope))
+        key = self._key(device_id)
+        await self._r.lpush(key, json.dumps(envelope))
+        await self._r.expire(key, self._QUEUE_TTL_SEC)
+
+    async def requeue(self, device_id: str, envelope: dict) -> None:
+        """Push failed in-flight frame back to the BRPOP consumer tail (FIFO head)."""
+        key = self._key(device_id)
+        await self._r.rpush(key, json.dumps(envelope))
+        await self._r.expire(key, self._QUEUE_TTL_SEC)
 
     async def pop(self, device_id: str) -> Optional[dict]:
-        item = await self._r.brpop(self._key(device_id), timeout=0)
+        item = await self._r.brpop(self._key(device_id), timeout=1)
         if item is None:
             return None
         _key, raw = item

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sys
 import uuid
@@ -18,10 +19,11 @@ from sqlalchemy.orm import Session
 from app.core.config.config import settings
 from app.core.logger.logger import logger
 from app.database.crud import device as crud_device
+from app.database.models.unified_fleet import UnifiedDevice
 from app.database.session import SessionLocal
 from app.services.ack_tracker import ack_tracker
 from app.services.device_registry import device_registry
-from app.services.idempotency import seen_or_record
+from app.services.idempotency import seen_or_record_async
 from app.services.ota_tracker import ota_tracker
 from app.services.queue import queue_backend
 from app.services.unified_bridge import lookup_device_ws_secret
@@ -30,6 +32,9 @@ router = APIRouter()
 
 HEARTBEAT_INTERVAL = 10   # 设备应每 10s 一次
 HEARTBEAT_TIMEOUT = 35    # 服务端 35s 未收到任何帧 → 主动断开
+
+
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _new_db() -> Session:
@@ -59,12 +64,13 @@ async def device_ws(websocket: WebSocket):
     await websocket.accept()
     session_id = str(uuid.uuid4())
     device_uuid: str | None = None
+    registered_uuid: str | None = None
     sender_task: asyncio.Task | None = None
-    last_seen = asyncio.get_event_loop().time()
+    last_seen = asyncio.get_running_loop().time()
 
     db = _new_db()
 
-    auth_nonce_issued: str | None = None  # 本连接待应答的设备鉴权 nonce
+    auth_nonce_issued: tuple[str, str] | None = None  # (nonce, cand_device_id)
 
     async def _sender_loop(dev_uuid: str):
         """消费 queue，把 envelope 发给设备。"""
@@ -77,7 +83,7 @@ async def device_ws(websocket: WebSocket):
             except Exception as e:
                 logger.warning(f"[ws/device] send failed for {dev_uuid}: {e}")
                 # 把消息塞回去，留给重连后重发
-                await queue_backend.push(dev_uuid, env)
+                await queue_backend.requeue(dev_uuid, env)
                 return
 
     try:
@@ -91,7 +97,7 @@ async def device_ws(websocket: WebSocket):
                 await websocket.close(code=1011)
                 break
 
-            last_seen = asyncio.get_event_loop().time()
+            last_seen = asyncio.get_running_loop().time()
             env = _wrap_legacy(raw) if isinstance(raw, dict) else None
             if env is None:
                 continue
@@ -102,26 +108,32 @@ async def device_ws(websocket: WebSocket):
             payload = env.get("payload", {}) or {}
 
             # 幂等：上行幂等只对 register/action 类无意义，但 ack/error 必须独立处理
-            if mtype not in ("ack", "error", "heartbeat") and msg_id and seen_or_record(msg_id):
+            if mtype not in ("ack", "error", "heartbeat") and msg_id and await seen_or_record_async(msg_id):
                 logger.debug(f"[ws/device] dup msg_id={msg_id} ignored")
                 continue
 
             if mtype == "register":
-                device_uuid = payload.get("device_id") or header.get("device_id")
-                if not device_uuid:
-                    await websocket.send_json(_error_env(msg_id, "E004", "missing device_id"))
+                cand_id = str(payload.get("device_id") or header.get("device_id") or "").strip()
+                if not cand_id or not _DEVICE_ID_RE.match(cand_id):
+                    await websocket.send_json(_error_env(msg_id, "E004", "missing or invalid device_id"))
+                    await websocket.close(code=1008)
+                    break
+
+                if registered_uuid is not None and cand_id != registered_uuid:
+                    await websocket.send_json(_error_env(msg_id, "E403", "cannot switch device_id on active session"))
                     await websocket.close(code=1008)
                     break
 
                 # --- 设备鉴权（HMAC-SHA256 挑战-应答，支持全局密钥或 Hub 预置单机密钥） ---
                 shared_secret = settings.DEVICE_SHARED_SECRET
-                dev_secret = "" if "pytest" in sys.modules else lookup_device_ws_secret(device_uuid)
+                dev_secret = "" if "pytest" in sys.modules else lookup_device_ws_secret(cand_id)
                 candidate_secrets = [s for s in (dev_secret, shared_secret) if s]
                 if candidate_secrets:
                     auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
                     if not auth.get("proof"):
-                        # 首次 register：下发 nonce 挑战，暂不注册
-                        auth_nonce_issued = secrets.token_hex(16)
+                        # 首次 register：下发绑定 device_id 的 nonce 挑战，暂不注册
+                        nonce_val = secrets.token_hex(16)
+                        auth_nonce_issued = (nonce_val, cand_id)
                         await websocket.send_json({
                             "header": {
                                 "msg_id": str(uuid.uuid4()),
@@ -129,30 +141,39 @@ async def device_ws(websocket: WebSocket):
                                 "type": "auth_challenge",
                                 "timestamp": int(datetime.now(timezone.utc).timestamp()),
                             },
-                            "payload": {"nonce": auth_nonce_issued},
+                            "payload": {"nonce": nonce_val},
                         })
                         continue
-                    # 携带应答：校验 nonce 与任一有效 secret 的 HMAC
+                    # 携带应答：校验 nonce 与 cand_id 绑定 + 任一有效 secret 的 HMAC
                     proof_str = str(auth.get("proof", ""))
-                    proof_ok = auth.get("nonce") == auth_nonce_issued and any(
-                        hmac.compare_digest(
-                            hmac.new(
-                                sec.encode(),
-                                str(auth.get("nonce", "")).encode(),
-                                hashlib.sha256,
-                            ).hexdigest(),
-                            proof_str,
+                    expected_nonce, expected_dev = auth_nonce_issued or ("", "")
+                    proof_ok = (
+                        bool(expected_nonce)
+                        and expected_dev == cand_id
+                        and auth.get("nonce") == expected_nonce
+                        and any(
+                            hmac.compare_digest(
+                                hmac.new(
+                                    sec.encode(),
+                                    expected_nonce.encode(),
+                                    hashlib.sha256,
+                                ).hexdigest(),
+                                proof_str,
+                            )
+                            for sec in candidate_secrets
                         )
-                        for sec in candidate_secrets
                     )
                     auth_nonce_issued = None
                     if not proof_ok:
                         logger.warning(
-                            f"[ws/device] auth failed for {device_uuid}, closing"
+                            f"[ws/device] auth failed for {cand_id}, closing"
                         )
                         await websocket.send_json(_error_env(msg_id, "E401", "device auth failed"))
                         await websocket.close(code=4401)
                         break
+
+                device_uuid = cand_id
+                registered_uuid = cand_id
 
                 # 同一 device 重连：先把旧连接踢掉，避免两路并存导致 ack 路由错乱
                 old_ws = device_registry.get(device_uuid)
@@ -166,6 +187,13 @@ async def device_ws(websocket: WebSocket):
                 caps = payload.get("capabilities") or []
                 name = payload.get("name")
                 dev = crud_device.upsert_from_register(db, device_uuid, name, caps)
+                ud = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == device_uuid).first()
+                if ud is not None:
+                    ud.status = "online"
+                    ud.last_seen_at = int(datetime.now(timezone.utc).timestamp())
+                    if name:
+                        ud.name = name
+                    db.commit()
                 client_host = websocket.client.host if websocket.client else None
                 crud_device.record_connection(db, dev.id, client_host, session_id)
                 device_registry.register(device_uuid, websocket)
@@ -193,6 +221,11 @@ async def device_ws(websocket: WebSocket):
                         dev.last_online_at = datetime.now(timezone.utc)
                         if dev.status == "offline":
                             dev.status = "online"
+                        ud = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == device_uuid).first()
+                        if ud is not None:
+                            ud.last_seen_at = int(datetime.now(timezone.utc).timestamp())
+                            if ud.status != "online":
+                                ud.status = "online"
                         db.commit()
                 # 不强制回复
 

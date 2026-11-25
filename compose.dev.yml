@@ -29,7 +29,6 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data_dev:/var/lib/mysql
-      - ./deploy/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 5s
@@ -71,6 +70,9 @@ services:
     volumes:
       - ./app:/app/app
       - ./deploy:/app/deploy
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./alembic:/app/alembic
+      - ./esp_unified_framework:/app/esp_unified_framework
       - ./requirements.txt:/app/requirements.txt:ro
     command:
       - uvicorn

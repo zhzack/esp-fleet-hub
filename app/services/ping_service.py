@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 def ping() -> dict:
     return {
         "status": "ok",
-        "service": "minimal-web-demo",
+        "service": "esp-fleet-hub",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -12,6 +12,6 @@ def ping() -> dict:
 def ping2() -> dict:
     return {
         "status": "ok",
-        "service": "minimal-web-demo",
+        "service": "esp-fleet-hub",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }

@@ -10,6 +10,9 @@
 #include "esp_http_client.h"
 #include "mdns.h"
 #include "mbedtls/md.h"
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+#include "esp_crt_bundle.h"
+#endif
 #include "cJSON.h"
 #include "sdkconfig.h"
 
@@ -69,6 +72,9 @@ static int http_request_json(const char *url, esp_http_client_method_t method,
         .timeout_ms = 5000,
         .event_handler = http_ev_handler,
         .user_data = &acc,
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+        .crt_bundle_attach = esp_crt_bundle_attach,
+#endif
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
@@ -106,7 +112,7 @@ static bool resolve_hub_url(char *dst, size_t max_len)
                 char ip_str[16];
                 esp_ip4_addr_t ip4 = r->addr->addr.u_addr.ip4;
                 snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip4));
-                snprintf(dst, max_len, "http://%s:%u", ip_str, r->port ? r->port : 8088);
+                snprintf(dst, max_len, "http://%s:%u", ip_str, r->port ? r->port : 8000);
                 mdns_query_results_free(results);
                 return true;
             }

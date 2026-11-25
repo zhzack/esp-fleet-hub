@@ -21,7 +21,6 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./deploy/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 5s
@@ -46,8 +45,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile           # 多 stage：node build → python runtime + dist
-    image: hid-gateway:latest
-    container_name: py_web_app
+    image: esp-fleet-hub:latest
+    container_name: esp_fleet_hub_app
     restart: unless-stopped
     depends_on:
       mysql:
@@ -61,7 +60,14 @@ services:
       REDIS_HOST: redis
     ports:
       - "8000:8000"
+    volumes:
+      - firmware_uploads:/app/uploads
+      - unified_dist:/app/esp_unified_framework/dist
+      - app_logs:/app/logs
 
 volumes:
   mysql_data:
   redis_data:
+  firmware_uploads:
+  unified_dist:
+  app_logs:

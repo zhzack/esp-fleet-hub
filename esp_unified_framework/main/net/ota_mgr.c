@@ -10,9 +10,13 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+#include "esp_crt_bundle.h"
+#endif
 #include "cJSON.h"
 #include "wifi_mgr.h"
 
@@ -358,6 +362,9 @@ esp_err_t ota_mgr_pull_from_url(const char *url, const char *expected_sha256, bo
         .method = HTTP_METHOD_GET,
         .timeout_ms = 15000,
         .buffer_size = 4096,
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+        .crt_bundle_attach = esp_crt_bundle_attach,
+#endif
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {

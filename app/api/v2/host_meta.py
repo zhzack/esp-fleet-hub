@@ -9,21 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
-from app.database.crud import device as crud_device
+from app.core.security import ensure_device_access, get_current_user
 from app.database.crud import device_host_meta as crud_meta
 from app.database.models.device import Device
 from app.database.models.user import User
 from app.database.session import get_db
 
 router = APIRouter()
-
-
-def _check_device(db: Session, device_uuid: str) -> Device:
-    dev = db.query(Device).filter(Device.device_uuid == device_uuid).first()
-    if not dev:
-        raise HTTPException(404, "device not found")
-    return dev
 
 
 class HostMetaIn(BaseModel):
@@ -47,7 +39,7 @@ def list_host_meta(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    dev = _check_device(db, device_uuid)
+    dev = ensure_device_access(db, user, device_uuid)
     return crud_meta.list_for_device(db, dev.id)
 
 
@@ -61,7 +53,7 @@ def put_host_meta(
 ):
     if ":" not in addr or len(addr.split(":")) != 6:
         raise HTTPException(400, "addr must be AA:BB:CC:DD:EE:FF")
-    dev = _check_device(db, device_uuid)
+    dev = ensure_device_access(db, user, device_uuid)
     return crud_meta.upsert(
         db, dev.id, addr,
         platform=body.platform, name=body.name, addr_type=body.addr_type,

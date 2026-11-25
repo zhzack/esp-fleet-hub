@@ -1,0 +1,50 @@
+name: ESP Fleet Hub CI
+
+on:
+  push:
+    branches: [main, feat/*]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-cov httpx
+          pip install 'bcrypt<4.1'
+      - name: Verify Alembic clean migration
+        env:
+          DATABASE_URL: sqlite:///./ci_smoke.db
+        run: |
+          alembic upgrade head
+          alembic current
+          rm -f ci_smoke.db
+      - name: Run pytest suite
+        run: |
+          python -m pytest -q
+      - name: Run ESP unified framework tests
+        run: |
+          python esp_unified_framework/tools/test_phase3_hub.py
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vue-project
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

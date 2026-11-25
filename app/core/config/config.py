@@ -13,25 +13,38 @@ class Settings(BaseSettings):
     MYSQL_SERVER: str = Field(default="127.0.0.1")
     MYSQL_PORT: int = Field(default=3306)
     MYSQL_USER: str = Field(default="root")
-    MYSQL_PASSWORD: str
-    MYSQL_DB: str
+    MYSQL_PASSWORD: str = Field(default="")
+    MYSQL_DB: str = Field(default="esp_fleet_hub")
 
     # --- Redis ---
     REDIS_HOST: str = Field(default="127.0.0.1")
     REDIS_PORT: int = Field(default=6379)
     REDIS_DB: int = Field(default=0)
 
-    # --- JWT ---
+    # --- JWT & 加密 ---
     JWT_SECRET: str = Field(default="change-me-please")
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_EXPIRE_MINUTES: int = Field(default=1440)
+    WIFI_CRYPTO_KEY: str = Field(default="")
+    ALLOW_SELF_REGISTER: bool = Field(default=True)
+    ALLOW_ANONYMOUS_FIRMWARE_DOWNLOAD: bool = Field(default=False)
+    ALLOW_UNCLAIMED_DEVICE_CONTROL: bool = Field(default=True)
 
-    # --- 设备 WS 鉴权：预共享密钥（HMAC-SHA256 挑战-应答）。
-    # 为空 = 鉴权关闭（兼容旧部署）；非空 = 设备注册须完成挑战应答。 ---
+    # --- 设备 WS / Fleet HTTP 鉴权 ---
+    # 为空 = 鉴权关闭（兼容旧部署）；非空 = 设备注册须完成挑战应答。
     DEVICE_SHARED_SECRET: str = Field(default="")
+    FLEET_STRICT_DEVICE_AUTH: bool = Field(default=False)
 
     # --- 队列后端：memory | redis ---
     QUEUE_BACKEND: str = Field(default="memory")
+
+    # --- 远端固件编译流水线 & Hub 外网可达地址（可选环境变量覆盖） ---
+    IDF_BUILD_CMD: str = Field(default="idf-build")
+    IDF_BUILD_SSH_HOST: str = Field(default="b1ue@192.168.68.146")
+    IDF_REMOTE_PROJECT_DIR: str = Field(default="/vol1/esp/projects/esp_unified_framework")
+    IDF_SSH_KEY: str = Field(default="~/.ssh/id_ed25519")
+    IDF_SSH_STRICT_HOST_KEY: str = Field(default="accept-new")
+    HUB_PUBLIC_URL: str = Field(default="")
 
     # --- 跨域 ---
     BACKEND_CORS_ORIGINS: Union[List[str], str] = []
@@ -68,3 +81,25 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+_WEAK_SECRETS = {
+    "",
+    "change-me",
+    "change-me-please",
+    "change-me-to-a-long-random-string",
+    "secret",
+}
+
+
+def validate_runtime_security(*, force: bool = False) -> None:
+    """Reject insecure default JWT_SECRET when running in production (DEBUG=False)."""
+    import sys
+
+    if not force and (settings.DEBUG or "pytest" in sys.modules):
+        return
+    sec = (settings.JWT_SECRET or "").strip()
+    if sec in _WEAK_SECRETS or len(sec) < 16:
+        raise RuntimeError(
+            "Unsafe JWT_SECRET configured for non-debug mode; "
+            "set a >=16-char random JWT_SECRET in .env or environment."
+        )

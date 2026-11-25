@@ -8,7 +8,7 @@ and polls /api/joystick/state (`seq`-based) to trigger OS media/volume keys clea
 
 Usage:
   python tools/pc_monitor_agent.py --host 192.168.68.210
-  python tools/pc_monitor_agent.py --hub http://127.0.0.1:8088 --device esp32c3-72f320
+  python tools/pc_monitor_agent.py --hub http://127.0.0.1:8000 --hub-token <JWT> --device esp32c3-72f320
 """
 
 import argparse
@@ -66,7 +66,11 @@ def resolve_device_host(args) -> str:
 
     # Query Fleet Hub for online PC Monitor device IP
     hub = args.hub.rstrip("/")
-    data = json.loads(OPENER.open(f"{hub}/api/fleet/devices", timeout=4).read().decode())
+    headers = {}
+    if getattr(args, "hub_token", ""):
+        headers["Authorization"] = f"Bearer {args.hub_token}"
+    req = urllib.request.Request(f"{hub}/api/v2/unified/devices", headers=headers)
+    data = json.loads(OPENER.open(req, timeout=4).read().decode())
     for dev in data.get("devices", []):
         caps = dev.get("capabilities") or {}
         if args.device and dev.get("device_id") != args.device:
@@ -79,7 +83,8 @@ def resolve_device_host(args) -> str:
 def main():
     parser = argparse.ArgumentParser(description="ESP32-C3 Wi-Fi PC Monitor & Joystick Media Agent")
     parser.add_argument("--host", default="", help="Direct device IP or base URL (e.g. 192.168.68.210)")
-    parser.add_argument("--hub", default="http://127.0.0.1:8088", help="Fleet Hub URL for auto-discovery")
+    parser.add_argument("--hub", default="http://127.0.0.1:8000", help="Fleet Hub URL for auto-discovery")
+    parser.add_argument("--hub-token", default="", help="Bearer JWT when resolving via Fleet Hub API")
     parser.add_argument("--device", default="", help="Target device_id when resolving via Fleet Hub")
     parser.add_argument("--token", default="", help="Optional API Token (X-API-Key)")
     parser.add_argument("--interval", type=float, default=1.0, help="Push interval seconds")

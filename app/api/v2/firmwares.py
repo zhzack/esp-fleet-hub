@@ -1,10 +1,7 @@
 import hashlib
-import os
-import shutil
-import socket
-import uuid
 from pathlib import Path
 from typing import List, Optional
+import uuid
 
 from fastapi import (
     APIRouter,
@@ -12,6 +9,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -19,9 +17,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.logger.logger import logger
-from app.core.security import get_current_user
+from app.core.security import ensure_device_access, get_current_user, get_optional_user
 from app.database.crud import firmware as crud_firmware
 from app.database.crud import device as crud_device
+from app.database.models.unified_fleet import UnifiedDevice
 from app.database.models.user import User
 from app.database.schemas.firmware import (
     FirmwareCreate,
@@ -31,6 +30,11 @@ from app.database.schemas.firmware import (
 )
 from app.database.session import get_db
 from app.services import dispatcher
+from app.services.firmware_utils import (
+    build_signed_download_url,
+    check_chip_compatibility,
+    require_download_auth,
+)
 from app.services.ota_tracker import ota_tracker
 
 router = APIRouter()
@@ -39,30 +43,12 @@ UPLOAD_DIR = Path("uploads/firmwares")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _get_lan_ip() -> str:
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
-
-
 def _build_download_url(request: Request, firmware_id: int) -> str:
-    host = request.headers.get("host") or "127.0.0.1:8000"
-    if ":" in host:
-        hostname, port = host.split(":", 1)
-    else:
-        hostname, port = host, "80"
-
-    # 如果是从 localhost 访问，ESP32 无法直接连 localhost，需换成服务器局域网真实 IP
-    if hostname in ("127.0.0.1", "localhost", "0.0.0.0"):
-        hostname = _get_lan_ip()
-
-    scheme = request.url.scheme or "http"
-    return f"{scheme}://{hostname}:{port}/api/v2/firmwares/{firmware_id}/download"
+    return build_signed_download_url(
+        request,
+        f"/api/v2/firmwares/{firmware_id}/download",
+        f"fw:{firmware_id}",
+    )
 
 
 @router.post("/upload", response_model=FirmwareOut)
@@ -78,11 +64,12 @@ async def upload_firmware(
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin permission required to upload firmware")
 
-    if not file.filename.endswith(".bin"):
+    orig_name = Path(file.filename or "").name
+    if not orig_name or not orig_name.endswith(".bin"):
         raise HTTPException(status_code=400, detail="Only .bin firmware files are supported")
 
     file_uuid = str(uuid.uuid4())[:8]
-    safe_filename = f"{file_uuid}_{file.filename}"
+    safe_filename = f"{file_uuid}_{orig_name}"
     file_path = UPLOAD_DIR / safe_filename
 
     hasher = hashlib.sha256()
@@ -104,7 +91,7 @@ async def upload_firmware(
 
     firmware_in = FirmwareCreate(
         version=version.strip(),
-        filename=file.filename,
+        filename=orig_name,
         file_path=str(file_path),
         file_size=file_size,
         sha256=sha256,
@@ -176,8 +163,11 @@ def delete_firmware(
 @router.get("/{firmware_id}/download")
 def download_firmware(
     firmware_id: int,
+    sig: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_optional_user),
 ):
+    require_download_auth(f"fw:{firmware_id}", sig, user)
     fw = crud_firmware.get_firmware(db, firmware_id)
     if not fw:
         raise HTTPException(status_code=404, detail="Firmware not found")
@@ -222,6 +212,13 @@ async def push_firmware_ota(
             results.append({"device_uuid": dev_uuid, "status": "failed", "error": "device not found"})
             continue
 
+        ud = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == dev_uuid).first()
+        if ud and ud.chip:
+            ok_chip, chip_err = check_chip_compatibility(ud.chip, fw.target_chip or "")
+            if not ok_chip:
+                results.append({"device_uuid": dev_uuid, "status": "failed", "error": chip_err})
+                continue
+
         # 初始化 tracker 状态
         ota_tracker.update_progress(
             dev_uuid,
@@ -259,8 +256,10 @@ async def push_firmware_ota(
 @router.get("/progress/{device_uuid}")
 def get_ota_progress(
     device_uuid: str,
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    ensure_device_access(db, user, device_uuid)
     p = ota_tracker.get_progress(device_uuid)
     if not p:
         return {
@@ -280,9 +279,7 @@ async def get_device_ota_status(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    dev = crud_device.get_by_uuid(db, device_uuid)
-    if not dev:
-        raise HTTPException(status_code=404, detail="Device not found")
+    ensure_device_access(db, user, device_uuid)
 
     res = await dispatcher.deliver_command(
         db,

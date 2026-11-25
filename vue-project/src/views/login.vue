@@ -21,6 +21,8 @@ const isShaking = ref(false)
 const rememberMe = ref(true)
 
 const hasAdmin = ref(true)
+const allowRegister = ref(true)
+const isDevMode = import.meta.env.DEV
 
 const form = reactive({
   username: '',
@@ -57,9 +59,10 @@ function triggerShake() {
 }
 
 function quickFillDemo() {
+  if (!isDevMode) return
   form.username = 'alice'
   form.password = 'secret123'
-  ElMessage.info('已快速填入测试账号 alice')
+  ElMessage.info('已快速填入本地测试账号 alice')
 }
 
 async function submit() {
@@ -130,8 +133,11 @@ onMounted(async () => {
   try {
     const st = await authApi.bootstrapStatus()
     hasAdmin.value = Boolean(st?.has_admin)
+    allowRegister.value = st?.allow_register !== false
+    if (!allowRegister.value && mode.value === 'register') mode.value = 'login'
   } catch {
     hasAdmin.value = true
+    allowRegister.value = true
   }
 })
 </script>
@@ -158,6 +164,7 @@ onMounted(async () => {
         账号登录
       </button>
       <button
+        v-if="allowRegister"
         type="button"
         class="tab-btn"
         :class="{ active: mode === 'register' }"
@@ -236,7 +243,7 @@ onMounted(async () => {
       <!-- 记住账号 & 找回密码 (登录模式) -->
       <div v-if="mode === 'login'" class="form-auxiliary">
         <el-checkbox v-model="rememberMe">记住账号</el-checkbox>
-        <span class="demo-quick" @click="quickFillDemo">填入测试账号</span>
+        <span v-if="isDevMode" class="demo-quick" @click="quickFillDemo">填入测试账号</span>
       </div>
 
       <!-- 提交按钮 -->
@@ -253,7 +260,7 @@ onMounted(async () => {
     </el-form>
 
     <!-- Footer Switch -->
-    <div class="auth-footer">
+    <div v-if="allowRegister || mode === 'register'" class="auth-footer">
       <span v-if="mode === 'login'">还没有账号？</span>
       <span v-else>已经拥有账号？</span>
       <button

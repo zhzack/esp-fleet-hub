@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.config.config import settings
 from app.database.session import get_db
 from app.database.crud import user as crud_user
 from app.database.schemas.user import UserCreate, UserOut, Token, PasswordChange
@@ -12,9 +13,9 @@ router = APIRouter()
 
 @router.get("/bootstrap-status")
 def bootstrap_status(db: Session = Depends(get_db)):
-    """Report whether at least one admin account already exists."""
+    """Report whether at least one admin account exists and whether self-registration is enabled."""
     has_admin = db.query(User.id).filter(User.role == "admin").first() is not None
-    return {"has_admin": has_admin}
+    return {"has_admin": has_admin, "allow_register": bool(settings.ALLOW_SELF_REGISTER or not has_admin)}
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
@@ -23,6 +24,12 @@ def register(
     db: Session = Depends(get_db),
     caller: User | None = Depends(get_optional_user),
 ):
+    has_admin = db.query(User.id).filter(User.role == "admin").first() is not None
+    if has_admin and not settings.ALLOW_SELF_REGISTER and (caller is None or caller.role != "admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "当前系统已关闭开放注册，请联系管理员创建账号",
+        )
     if crud_user.get_by_username(db, payload.username):
         raise HTTPException(status.HTTP_409_CONFLICT, "用户名已存在，请更换或直接登录")
     role = payload.role

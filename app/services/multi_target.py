@@ -86,9 +86,10 @@ async def _wait_connected_to(
     poll_ms: int = 250,
 ) -> bool:
     """轮询 ble.info 直到当前 peer 等于 target。"""
-    end = asyncio.get_event_loop().time() + timeout_s
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout_s
     target_addr = _normalize_addr(t.addr)
-    while asyncio.get_event_loop().time() < end:
+    while loop.time() < end:
         info = await _ble_info(db, user_id, device_uuid)
         if info and info.get("connected"):
             peer_addr = _normalize_addr(str(info.get("peer", "")))

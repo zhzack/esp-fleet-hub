@@ -26,8 +26,8 @@ class UnifiedDevice(Base):
     capabilities_json = Column(Text, default="{}", nullable=False)
     status = Column(String(32), default="provisioned", nullable=False)
     claimed = Column(Integer, default=0, nullable=False)
-    device_secret = Column(String(128), default="", nullable=False)
-    api_token = Column(String(128), default="", nullable=False)
+    device_secret = Column(Text, default="", nullable=False)
+    api_token = Column(Text, default="", nullable=False)
     rssi = Column(Integer, default=0, nullable=False)
     free_heap = Column(Integer, default=0, nullable=False)
     uptime_sec = Column(Integer, default=0, nullable=False)
@@ -83,3 +83,18 @@ class UnifiedAuditLog(Base):
     event = Column(String(64), nullable=False)
     detail = Column(Text, default="", nullable=False)
     created_at = Column(Integer, default=0, nullable=False)
+
+
+class UnifiedCompilerTask(Base):
+    __tablename__ = "unified_compiler_tasks"
+
+    task_id = Column(String(32), primary_key=True)
+    kind = Column(String(16), nullable=False)
+    label = Column(String(255), default="", nullable=False)
+    status = Column(String(32), default="queued", nullable=False, index=True)
+    log = Column(Text, default="", nullable=False)
+    artifact_name = Column(String(255), default="", nullable=False)
+    artifact_size = Column(Integer, default=0, nullable=False)
+    percent = Column(Integer, default=0, nullable=False)
+    created_at = Column(Integer, default=0, nullable=False, index=True)
+    updated_at = Column(Integer, default=0, nullable=False)

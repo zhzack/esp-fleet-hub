@@ -77,11 +77,15 @@ def test_firmware_upload_and_lifecycle(client, admin_token):
     assert detail_res.status_code == 200
     assert detail_res.json()["version"] == "v1.3.0"
 
-    # 4. 下载固件验证
-    download_res = client.get(f"/api/v2/firmwares/{fw_id}/download")
+    # 4. 下载固件验证（匿名无签名拒绝 401，携带合法签名 ?sig= 或 Bearer Token 允许下载）
+    assert client.get(f"/api/v2/firmwares/{fw_id}/download").status_code == 401
+    signed_path = fw_data["download_url"].split("/api/", 1)[1]
+    download_res = client.get(f"/api/{signed_path}")
     assert download_res.status_code == 200
     assert download_res.content == fake_bin
     assert download_res.headers.get("X-Firmware-Version") == "v1.3.0"
+    auth_dl = client.get(f"/api/v2/firmwares/{fw_id}/download", headers=headers)
+    assert auth_dl.status_code == 200
 
     # 5. 删除固件
     del_res = client.delete(f"/api/v2/firmwares/{fw_id}", headers=headers)

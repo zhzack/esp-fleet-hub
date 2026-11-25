@@ -4,6 +4,7 @@ from typing import List
 
 from app.database.session import get_db
 from app.database.crud import device as crud_device
+from app.database.models.unified_fleet import UnifiedDevice
 from app.database.schemas.device import DeviceCreate, DeviceUpdate, DeviceOut
 from app.core.security import get_current_user
 from app.database.models.user import User
@@ -58,7 +59,12 @@ def claim_device(
     user: User = Depends(get_current_user),
 ):
     try:
-        return crud_device.claim_device(db, device_id, user.id)
+        dev = crud_device.claim_device(db, device_id, user.id)
+        ud = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == dev.device_uuid).first()
+        if ud is not None:
+            ud.claimed = 1
+            db.commit()
+        return dev
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -78,13 +84,19 @@ def update_device(
     if payload.owner_user_id is not None and user.role != "admin":
         raise HTTPException(403, "only admin can reassign ownership")
     try:
-        return crud_device.update_device(
+        updated = crud_device.update_device(
             db,
             device_id,
             name=payload.name,
             capabilities=payload.capabilities,
             owner_user_id=payload.owner_user_id,
         )
+        if payload.name is not None:
+            ud = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == updated.device_uuid).first()
+            if ud is not None:
+                ud.name = updated.name
+                db.commit()
+        return updated
     except ValueError as e:
         raise HTTPException(400, str(e))
 
