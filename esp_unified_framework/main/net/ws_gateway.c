@@ -206,6 +206,12 @@ static void send_register(void)
 #if CONFIG_FEATURE_CAMERA
     cJSON_AddItemToArray(caps, cJSON_CreateString("camera"));
 #endif
+#if CONFIG_FEATURE_PC_MONITOR
+    cJSON_AddItemToArray(caps, cJSON_CreateString("pc_monitor"));
+#endif
+#if CONFIG_FEATURE_JOYSTICK
+    cJSON_AddItemToArray(caps, cJSON_CreateString("joystick"));
+#endif
 #if CONFIG_FEATURE_OTA
     cJSON_AddItemToArray(caps, cJSON_CreateString("ota"));
 #endif
@@ -649,6 +655,10 @@ static void ws_worker_task(void *pv)
 #else
             send_ack(msgid, false, 0, "E404", "camera disabled");
 #endif
+        } else if (msgid[0] != '\0' && strcmp(mtype, "heartbeat") != 0) {
+            char unbuf[64];
+            snprintf(unbuf, sizeof(unbuf), "unsupported command: %.36s", mtype);
+            send_ack(msgid, false, 0, "E404", unbuf);
         }
 
         cJSON_Delete(root);

@@ -11,6 +11,7 @@ import {
   Grid, List, Check, Connection, Delete,
 } from '@element-plus/icons-vue'
 import { devicesApi } from '@/api/devices'
+import { getCapabilityFlags } from '@/utils/capabilities'
 import DeviceControl from './device-control.vue'
 
 const router = useRouter()
@@ -32,14 +33,24 @@ const editDialog = reactive({
   form: { id: null, name: '', capabilities: [], owner_user_id: null },
 })
 
-const control = reactive({ visible: false, deviceUuid: '', deviceName: '' })
+const control = reactive({ visible: false, deviceUuid: '', deviceName: '', capabilities: [] })
 
 const capOptions = [
   { label: 'USB 键盘', value: 'usb_keyboard' },
   { label: 'USB 鼠标', value: 'usb_mouse' },
   { label: 'BLE 蓝牙键盘', value: 'ble_keyboard' },
   { label: 'BLE 蓝牙鼠标', value: 'ble_mouse' },
+  { label: 'GPIO 控制', value: 'gpio' },
+  { label: '屏幕显示', value: 'display' },
+  { label: 'PC 监控', value: 'pc_monitor' },
+  { label: '5向摇杆', value: 'joystick' },
+  { label: '摄像头', value: 'camera' },
+  { label: 'OTA 升级', value: 'ota' },
 ]
+
+function canTrackpad(row) {
+  return getCapabilityFlags(row?.capabilities).supportsTrackpad
+}
 
 function isOnline(uuid) {
   return online.value.includes(uuid)
@@ -99,6 +110,7 @@ onBeforeUnmount(() => {
 function openControl(row) {
   control.deviceUuid = row.device_uuid
   control.deviceName = row.name || row.device_uuid
+  control.capabilities = Array.isArray(row.capabilities) ? [...row.capabilities] : []
   control.visible = true
 }
 
@@ -280,7 +292,8 @@ async function claimDevice(row) {
               type="success"
               plain
               :icon="Aim"
-              :disabled="!isOnline(d.device_uuid)"
+              :disabled="!isOnline(d.device_uuid) || !canTrackpad(d)"
+              :title="canTrackpad(d) ? '打开虚拟触控板' : '当前设备未启用 HID 键鼠能力'"
               @click="openTrackpad(d)"
             >
               触控
@@ -343,7 +356,7 @@ async function claimDevice(row) {
           <template #default="{ row }">
             <el-button v-if="!row.owner_user_id" size="small" type="primary" plain @click="claimDevice(row)">认领</el-button>
             <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="success" plain :disabled="!isOnline(row.device_uuid)" @click="openTrackpad(row)">触控</el-button>
+            <el-button size="small" type="success" plain :disabled="!isOnline(row.device_uuid) || !canTrackpad(row)" :title="canTrackpad(row) ? '打开虚拟触控板' : '当前设备未启用 HID 键鼠能力'" @click="openTrackpad(row)">触控</el-button>
             <el-button size="small" type="primary" :disabled="!isOnline(row.device_uuid)" @click="openControl(row)">控制</el-button>
           </template>
         </el-table-column>
@@ -405,6 +418,7 @@ async function claimDevice(row) {
       v-model="control.visible"
       :device-uuid="control.deviceUuid"
       :device-name="control.deviceName"
+      :capabilities="control.capabilities"
     />
   </div>
 </template>

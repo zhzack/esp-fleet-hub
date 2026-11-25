@@ -11,6 +11,22 @@ from app.services import dispatcher
 
 router = APIRouter()
 
+_BLE_CAPS = {"ble", "ble_hid", "ble_keyboard", "ble_mouse", "ble_scanner"}
+_USB_CAPS = {"usb", "usb_otg", "usb_hid", "usb_keyboard", "usb_mouse"}
+
+
+def _require_capability(dev, allowed_caps: set[str], label: str) -> None:
+    """Block incompatible commands immediately when a device already reported non-empty capabilities."""
+    caps = dev.capabilities
+    if not isinstance(caps, list) or not caps:
+        return
+    normalized = {str(c).strip().lower() for c in caps if str(c).strip()}
+    if normalized and not (normalized & allowed_caps):
+        raise HTTPException(
+            status_code=400,
+            detail=f"设备未启用 {label} 能力（已上报能力: {', '.join(sorted(normalized))}）",
+        )
+
 
 async def _send(
     db: Session,
@@ -19,8 +35,12 @@ async def _send(
     cmd_type: str,
     payload: dict | None = None,
     timeout_ms: int = 3000,
+    required_caps: set[str] | None = None,
+    cap_label: str = "",
 ) -> dict:
-    ensure_device_access(db, user, device_uuid)
+    dev = ensure_device_access(db, user, device_uuid)
+    if required_caps:
+        _require_capability(dev, required_caps, cap_label)
     return await dispatcher.deliver_command(
         db,
         device_uuid=device_uuid,
@@ -108,7 +128,7 @@ async def ble_info(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await _send(db, user, device_uuid, "ble.info")
+    return await _send(db, user, device_uuid, "ble.info", required_caps=_BLE_CAPS, cap_label="BLE 蓝牙")
 
 
 @router.get("/{device_uuid}/ble/bonds")
@@ -117,7 +137,7 @@ async def ble_list_bonds(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await _send(db, user, device_uuid, "ble.list_bonds")
+    return await _send(db, user, device_uuid, "ble.list_bonds", required_caps=_BLE_CAPS, cap_label="BLE 蓝牙")
 
 
 @router.post("/{device_uuid}/ble/unpair")
@@ -129,7 +149,10 @@ async def ble_unpair(
 ):
     if len(body.addr) != 6:
         raise HTTPException(400, "addr must be 6 bytes")
-    return await _send(db, user, device_uuid, "ble.unpair", payload=body.model_dump())
+    return await _send(
+        db, user, device_uuid, "ble.unpair", payload=body.model_dump(),
+        required_caps=_BLE_CAPS, cap_label="BLE 蓝牙",
+    )
 
 
 @router.post("/{device_uuid}/ble/unpair_all")
@@ -138,7 +161,7 @@ async def ble_unpair_all(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await _send(db, user, device_uuid, "ble.unpair_all")
+    return await _send(db, user, device_uuid, "ble.unpair_all", required_caps=_BLE_CAPS, cap_label="BLE 蓝牙")
 
 
 @router.post("/{device_uuid}/ble/disconnect")
@@ -147,7 +170,7 @@ async def ble_disconnect(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await _send(db, user, device_uuid, "ble.disconnect")
+    return await _send(db, user, device_uuid, "ble.disconnect", required_caps=_BLE_CAPS, cap_label="BLE 蓝牙")
 
 
 @router.post("/{device_uuid}/ble/switch")
@@ -159,7 +182,10 @@ async def ble_switch(
 ):
     if len(body.addr) != 6:
         raise HTTPException(400, "addr must be 6 bytes")
-    return await _send(db, user, device_uuid, "ble.switch", payload=body.model_dump())
+    return await _send(
+        db, user, device_uuid, "ble.switch", payload=body.model_dump(),
+        required_caps=_BLE_CAPS, cap_label="BLE 蓝牙",
+    )
 
 
 class BleScanIn(BaseModel):
@@ -182,6 +208,8 @@ async def ble_scan(
         "ble.scan",
         payload=payload,
         timeout_ms=max(dur + 4000, 8000),
+        required_caps=_BLE_CAPS,
+        cap_label="BLE 蓝牙",
     )
 
 
@@ -200,7 +228,10 @@ async def transport_get(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await _send(db, user, device_uuid, "transport.get")
+    return await _send(
+        db, user, device_uuid, "transport.get",
+        required_caps=_USB_CAPS | _BLE_CAPS, cap_label="HID 传输",
+    )
 
 
 class TransportIn(BaseModel):
@@ -216,7 +247,10 @@ async def transport_set(
 ):
     if body.mode not in ("ble", "usb", "auto"):
         raise HTTPException(400, "mode must be ble/usb/auto")
-    return await _send(db, user, device_uuid, "transport.set", payload=body.model_dump())
+    return await _send(
+        db, user, device_uuid, "transport.set", payload=body.model_dump(),
+        required_caps=_USB_CAPS | _BLE_CAPS, cap_label="HID 传输",
+    )
 
 
 @router.post("/{device_uuid}/reboot")

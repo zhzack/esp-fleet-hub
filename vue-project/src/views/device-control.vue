@@ -2,13 +2,21 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { commandsApi } from '@/api/commands'
+import { devicesApi } from '@/api/devices'
+import { getCapabilityFlags } from '@/utils/capabilities'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   deviceUuid: { type: String, default: '' },
   deviceName: { type: String, default: '' },
+  capabilities: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue'])
+
+const localCaps = ref([])
+const capFlags = computed(() =>
+  getCapabilityFlags(props.capabilities?.length ? props.capabilities : localCaps.value),
+)
 
 const tab = ref('status')
 const loading = ref(false)
@@ -171,9 +179,16 @@ async function doUnpairAll() {
 }
 
 async function doScan() {
-  if (!bleInfoData.value) await loadBleInfo(true)
-  if (!bleBonds.value.length) await loadBonds(true)
+  if (!capFlags.value.supportsBle) {
+    ElMessage.warning('当前设备未集成 BLE 蓝牙能力')
+    return
+  }
   const r = await call(() => commandsApi.bleScan(props.deviceUuid, 4000), 'BLE 扫描周边')
+  if (!r) return
+  await Promise.allSettled([
+    !bleInfoData.value ? loadBleInfo(true) : Promise.resolve(),
+    !bleBonds.value.length ? loadBonds(true) : Promise.resolve(),
+  ])
   const list = r?.devices || (Array.isArray(r) ? r : [])
   const curPeer = String(bleInfoData.value?.peer || '').toUpperCase()
   const bondedAddrs = new Set((bleBonds.value || []).map(b => fmtAddr(b.addr).toUpperCase()))
@@ -242,9 +257,10 @@ function selectWifiRow(row) {
   ElMessage.info(`已选定 SSID: ${row.ssid}，请输入密码后点击连接`)
 }
 
-watch(() => props.modelValue, (v) => {
+watch(() => props.modelValue, async (v) => {
   if (v && props.deviceUuid) {
     tab.value = 'status'
+    localCaps.value = Array.isArray(props.capabilities) ? [...props.capabilities] : []
     statusData.value = null
     wifiStatusData.value = null
     wifiScanList.value = []
@@ -255,8 +271,19 @@ watch(() => props.modelValue, (v) => {
     slotsList.value = []
     wifiKnownList.value = []
     lastResult.value = null
+    if (!localCaps.value.length) {
+      try {
+        const list = await devicesApi.list()
+        const cur = (list || []).find((d) => d.device_uuid === props.deviceUuid)
+        if (cur && Array.isArray(cur.capabilities)) {
+          localCaps.value = cur.capabilities
+        }
+      } catch { /* ignore */ }
+    }
     loadStatus()
-    loadSlots()
+    if (capFlags.value.supportsBle) {
+      loadSlots()
+    }
   }
 })
 </script>
@@ -324,9 +351,13 @@ watch(() => props.modelValue, (v) => {
                 <div class="vital-label">WiFi SSID</div>
                 <div class="vital-value text-primary">{{ statusData?.ssid || statusData?.wifi?.ssid || '已连接' }}</div>
               </div>
-              <div class="vital-card">
+              <div v-if="capFlags.supportsBle" class="vital-card">
                 <div class="vital-label">BLE 状态</div>
                 <div class="vital-value text-purple">{{ statusData?.ble?.connected ? '已连主机' : '待机' }}</div>
+              </div>
+              <div v-else class="vital-card">
+                <div class="vital-label">固件能力</div>
+                <div class="vital-value text-purple">{{ capFlags.list.join(', ') || '标准节点' }}</div>
               </div>
               <div class="vital-card">
                 <div class="vital-label">可用内存 (Heap)</div>
@@ -440,8 +471,8 @@ watch(() => props.modelValue, (v) => {
           </div>
         </el-tab-pane>
 
-        <!-- 3. BLE Tab -->
-        <el-tab-pane label="BLE 蓝牙" name="ble">
+        <!-- 3. BLE Tab (仅在支持 BLE 或尚未上报能力时显示) -->
+        <el-tab-pane v-if="capFlags.supportsBle" label="BLE 蓝牙" name="ble">
           <div class="tab-pane-content">
             <div class="action-strip">
               <el-button size="small" @click="loadBleInfo" class="control-action-btn">BLE 信息</el-button>
@@ -544,8 +575,8 @@ watch(() => props.modelValue, (v) => {
           </div>
         </el-tab-pane>
 
-        <!-- 4. Transport Mode Tab -->
-        <el-tab-pane label="HID 传输" name="transport">
+        <!-- 4. Transport Mode Tab (仅在启用 USB/BLE HID 或未上报能力时显示) -->
+        <el-tab-pane v-if="capFlags.supportsTransport" label="HID 传输" name="transport">
           <div class="tab-pane-content">
             <div class="action-strip">
               <el-button size="small" @click="loadTransport" class="control-action-btn">刷新传输状态</el-button>
