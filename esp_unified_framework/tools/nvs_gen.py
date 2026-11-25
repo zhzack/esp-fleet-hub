@@ -167,3 +167,41 @@ def generate_nvs_provision_bin(out_path, config_dict, partition_size=0x4000):
     with open(out_path, "wb") as f:
         f.write(builder.to_bytes())
     return out_path
+
+
+ESP8266_CFG_MAGIC = 0x45554633
+ESP8266_EEPROM_OFFSET_1M = 0xFB000
+_ESP8266_CFG_FMT = "<IIH33s65s32s32s96s48s48sI"
+
+
+def _c_str_bytes(val: str | None, max_len: int) -> bytes:
+    raw = str(val or "").encode("utf-8")[: max(0, max_len - 1)]
+    return raw.ljust(max_len, b"\x00")
+
+
+def generate_esp8266_eeprom_bin(out_path: str, config_dict: dict) -> str:
+    """Build a 4KB sector-aligned ESP8266 EEPROM provisioning block matching struct AppCfg."""
+    cfg_ver = int(config_dict.get("config_ver", 1) or 1)
+    web_port = int(config_dict.get("web_port", 80) or 80)
+    body = struct.pack(
+        "<IIH33s65s32s32s96s48s48s",
+        ESP8266_CFG_MAGIC,
+        cfg_ver,
+        web_port,
+        _c_str_bytes(config_dict.get("wifi_ssid"), 33),
+        _c_str_bytes(config_dict.get("wifi_pass"), 65),
+        _c_str_bytes(config_dict.get("device_id"), 32),
+        _c_str_bytes(config_dict.get("mdns_host"), 32),
+        _c_str_bytes(config_dict.get("hub_url"), 96),
+        _c_str_bytes(config_dict.get("device_secret"), 48),
+        _c_str_bytes(config_dict.get("api_token"), 48),
+    )
+    crc = zlib.crc32(body) & 0xFFFFFFFF
+    cfg_bytes = body + struct.pack("<I", crc)
+    sector = bytearray(b"\xFF" * 4096)
+    sector[0 : len(cfg_bytes)] = cfg_bytes
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(sector)
+    return out_path

@@ -67,6 +67,7 @@ struct AppCfg {
     char api_token[48];
     uint32_t crc32;
 };
+static_assert(sizeof(AppCfg) == 368, "AppCfg size mismatch with nvs_gen.py");
 
 static AppCfg g_cfg;
 static ESP8266WebServer server(80);
@@ -791,8 +792,8 @@ static void setupHttpServer() {
 // Fleet Hub Client (mDNS _esp-hub._tcp + Challenge HMAC-SHA256 + Heartbeat)
 // ---------------------------------------------------------------------------
 #if FEATURE_FLEET_AGENT
-static bool resolveHubUrl() {
-    if (g_cfg.hub_url[0] != '\0') {
+static bool resolveHubUrl(bool forceMdns = false) {
+    if (!forceMdns && g_cfg.hub_url[0] != '\0') {
         strlcpy(g_active_hub, g_cfg.hub_url, sizeof(g_active_hub));
         size_t l = strlen(g_active_hub);
         while (l > 0 && g_active_hub[l - 1] == '/') g_active_hub[--l] = '\0';
@@ -801,14 +802,20 @@ static bool resolveHubUrl() {
     int n = MDNS.queryService("esp-hub", "tcp");
     if (n > 0) {
         snprintf(g_active_hub, sizeof(g_active_hub), "http://%s:%u",
-                 MDNS.IP(0).toString().c_str(), MDNS.port(0) ? MDNS.port(0) : 8088);
+                 MDNS.IP(0).toString().c_str(), MDNS.port(0) ? MDNS.port(0) : 8000);
         return true;
     }
     return false;
 }
 
+static uint8_t s_hub_fail_cnt = 0;
+
 static bool registerWithHub() {
-    if (!resolveHubUrl()) return false;
+    bool useMdns = (s_hub_fail_cnt >= 3);
+    if (!resolveHubUrl(useMdns) && useMdns) {
+        if (!resolveHubUrl(false)) return false;
+    }
+    if (g_active_hub[0] == '\0') return false;
 
     WiFiClient client;
     HTTPClient http;
@@ -842,11 +849,15 @@ static bool registerWithHub() {
         int code = http.POST(regBody);
         if (code == 200) {
             ok = true;
+            s_hub_fail_cnt = 0;
             Serial.printf("[fleet] Registered cleanly with Fleet Hub (%s)!\n", g_active_hub);
         } else {
-            Serial.printf("[fleet] Register HTTP %d\n", code);
+            s_hub_fail_cnt++;
+            Serial.printf("[fleet] Register HTTP %d (%s)\n", code, g_active_hub);
         }
         http.end();
+    } else {
+        s_hub_fail_cnt++;
     }
     return ok;
 }
@@ -872,10 +883,21 @@ static void sendHeartbeat() {
             if (resp.indexOf("\"reregister\":true") >= 0) {
                 g_hub_registered = false;
             }
-            if (resp.indexOf("\"sync_config\":{") >= 0) {
-                int p = resp.indexOf("\"sync_config\":{");
-                int e = resp.indexOf('}', p);
-                if (e > p) applyConfigJson(resp.substring(p + 14, e + 1));
+            int p = resp.indexOf("\"sync_config\":{");
+            if (p >= 0) {
+                int start = resp.indexOf('{', p);
+                int depth = 0;
+                bool inStr = false;
+                int endIdx = -1;
+                for (int i = start; i < (int)resp.length(); i++) {
+                    char ch = resp[i];
+                    if (ch == '"' && (i == 0 || resp[i - 1] != '\\')) inStr = !inStr;
+                    if (!inStr) {
+                        if (ch == '{') depth++;
+                        else if (ch == '}' && --depth == 0) { endIdx = i; break; }
+                    }
+                }
+                if (endIdx > start) applyConfigJson(resp.substring(start, endIdx + 1));
             }
         } else if (code < 0) {
             g_hub_registered = false;

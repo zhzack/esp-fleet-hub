@@ -80,6 +80,32 @@ class TestNvsGenerator(unittest.TestCase):
             self.assertIn(b"esp32c3-aabbcc\x00", data)
             self.assertIn(b"http://192.168.68.159:8088\x00", data)
 
+    def test_esp8266_eeprom_layout_and_crc32(self):
+        with tempfile.TemporaryDirectory() as td:
+            out_bin = os.path.join(td, "esp8266_eeprom.bin")
+            nvs_gen.generate_esp8266_eeprom_bin(out_bin, {
+                "wifi_ssid": "LabWiFi",
+                "wifi_pass": "pass1234",
+                "device_id": "esp8266-aabbcc",
+                "mdns_host": "esp8266-aabbcc",
+                "hub_url": "http://192.168.68.159:8000",
+                "web_port": 80,
+                "config_ver": 1,
+            })
+            with open(out_bin, "rb") as f:
+                data = f.read()
+            self.assertEqual(len(data), 4096)
+            self.assertEqual(struct.calcsize(nvs_gen._ESP8266_CFG_FMT), 368)
+            magic, ver, port, ssid, pw, dev_id, mdns, hub, sec, tok, crc = struct.unpack_from(
+                nvs_gen._ESP8266_CFG_FMT, data, 0
+            )
+            self.assertEqual(magic, nvs_gen.ESP8266_CFG_MAGIC)
+            self.assertEqual(ver, 1)
+            self.assertEqual(port, 80)
+            self.assertEqual(ssid.rstrip(b"\x00"), b"LabWiFi")
+            self.assertEqual(hub.rstrip(b"\x00"), b"http://192.168.68.159:8000")
+            self.assertEqual(crc, zlib.crc32(data[:364]) & 0xFFFFFFFF)
+
 
 class TestFleetHubDb(unittest.TestCase):
     def setUp(self):

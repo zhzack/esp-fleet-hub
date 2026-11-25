@@ -103,18 +103,35 @@ def _row_to_device_dict(row: UnifiedDevice, cfg: UnifiedDeviceConfig | None, *, 
     return d
 
 
-def _ensure_main_device(db: Session, device_id: str, name: str | None = None, claimed: int | None = None):
+def _caps_dict_to_list(caps: Any) -> list[str]:
+    if isinstance(caps, list):
+        return [str(c).strip() for c in caps if str(c).strip()]
+    if isinstance(caps, dict):
+        return [str(k).strip() for k, v in caps.items() if isinstance(v, dict) and v.get("enabled")]
+    return []
+
+
+def _ensure_main_device(
+    db: Session,
+    device_id: str,
+    name: str | None = None,
+    claimed: int | None = None,
+    capabilities: list[str] | None = None,
+):
     """Keep py_web's primary `devices` table aligned with unified device metadata."""
     dev = crud_device.get_by_uuid(db, device_id)
     if dev is None:
         dev = Device(
             device_uuid=device_id,
             name=name or device_id,
-            capabilities=[],
+            capabilities=capabilities or [],
         )
         db.add(dev)
-    elif name:
-        dev.name = name
+    else:
+        if name:
+            dev.name = name
+        if capabilities:
+            dev.capabilities = capabilities
     return dev
 
 
@@ -351,7 +368,7 @@ class SqlAlchemyHubStore:
                 cfg_row.sync_status = sync_st
                 cfg_row.updated_at = now
 
-            _ensure_main_device(db, device_id)
+            _ensure_main_device(db, device_id, capabilities=_caps_dict_to_list(caps))
             db.add(
                 UnifiedAuditLog(
                     device_id=device_id,

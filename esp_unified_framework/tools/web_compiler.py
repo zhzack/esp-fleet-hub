@@ -39,6 +39,7 @@ _build_lock = threading.Lock()
 _port_locks = {}
 _task_save_fn = None
 _task_load_fn = None
+DEFAULT_HUB_PORT = int(os.environ.get("HUB_PORT", 8000))
 
 
 def set_task_store(save_fn, load_fn=None):
@@ -218,7 +219,7 @@ def list_serial_ports():
 
 
 def run_build_task(payload, hub_port=None, task_id=None):
-    eff_port = int(hub_port or SERVER_PORT)
+    eff_port = int(hub_port or DEFAULT_HUB_PORT)
     target = payload.get("target", "esp32")
     profile_name = payload.get("name", "custom_build")
     tid = task_id or create_task("build", f"{profile_name} ({target})", status="building")
@@ -291,16 +292,6 @@ def run_build_task(payload, hub_port=None, task_id=None):
                         if os.path.isfile(cand):
                             built_8266 = cand
 
-                if not built_8266:
-                    src_8266 = os.path.join(DIST_DIR, "esp8266_smart_switch.bin")
-                    if not os.path.isfile(src_8266):
-                        src_tester = os.path.abspath(os.path.join(PROJECT_ROOT, "..", "..", "esp8266-batch-tester", "firmware.bin"))
-                        if os.path.isfile(src_tester):
-                            os.makedirs(DIST_DIR, exist_ok=True)
-                            shutil.copyfile(src_tester, src_8266)
-                    if os.path.isfile(src_8266):
-                        built_8266 = src_8266
-
                 if built_8266:
                     meta = build_flavor.archive_build_artifacts(profile_name, payload, built_8266)
                     _update_task(
@@ -311,7 +302,11 @@ def run_build_task(payload, hub_port=None, task_id=None):
                         append_log=f"\n🎉 [ESP8266 构建完成] {profile_name}.bin ({meta['size']/1024:.1f} KB)\n",
                     )
                 else:
-                    _update_task(tid, status="failed", append_log="\n❌ 未能产出 ESP8266 固件产物！\n")
+                    _update_task(
+                        tid,
+                        status="failed",
+                        append_log="\n❌ ESP8266 PlatformIO 编译失败，未产出有效固件（不再回退复制离线测试固件）。\n",
+                    )
                 return
 
             # Branch B: Modern ESP-IDF chips (ESP32 / S3 / C3 / C2)
@@ -373,7 +368,7 @@ def run_build_task(payload, hub_port=None, task_id=None):
 def run_serial_flash_task(port, baud, file_name, target, full_flash=True,
                           auto_provision=True, wifi_ssid="1", wifi_pass="11111111", mdns_host="esp-node",
                           hub_port=None, task_id=None):
-    eff_port = int(hub_port or SERVER_PORT)
+    eff_port = int(hub_port or DEFAULT_HUB_PORT)
     tid = task_id or create_task("flash", f"{port} <- {file_name}", status="flashing")
     header_log = (
         f"\n===========================================================================\n"
@@ -467,27 +462,40 @@ def run_serial_flash_task(port, baud, file_name, target, full_flash=True,
         effective_target = meta["target"].lower() if meta and meta.get("target") else target.lower()
 
         nvs_prov_path = None
+        eeprom_prov_path = None
         prov_dev_id = None
-        if auto_provision and detected_mac:
-            mac_tail = detected_mac.replace(":", "").lower()[-6:]
+        if auto_provision and (detected_mac or effective_target == "esp8266"):
+            mac_tail = detected_mac.replace(":", "").lower()[-6:] if detected_mac else "node"
             prov_dev_id = f"{effective_target}-{mac_tail}"
             dev_secret = "" if effective_target == "esp8266" else secrets.token_hex(16)
             lan_ip = mdns_advertiser.get_lan_ip()
             hub_url = f"http://{lan_ip}:{eff_port}"
 
-            hub_db.provision_device(
-                device_id=prov_dev_id,
-                mac=detected_mac,
-                chip=detected_chip or effective_target.upper(),
-                flash_mb=int(detected_flash_mb or 4),
-                board=meta.get("board", "auto") if meta else "auto",
-                device_secret=dev_secret,
-                hub_url=hub_url,
-                allow_empty_secret=(effective_target == "esp8266"),
-            )
+            if detected_mac:
+                hub_db.provision_device(
+                    device_id=prov_dev_id,
+                    mac=detected_mac,
+                    chip=detected_chip or effective_target.upper(),
+                    flash_mb=int(detected_flash_mb or 4),
+                    board=meta.get("board", "auto") if meta else "auto",
+                    device_secret=dev_secret,
+                    hub_url=hub_url,
+                    allow_empty_secret=(effective_target == "esp8266"),
+                )
 
-            if effective_target != "esp8266":
-                prov_dir = os.path.join(PROJECT_ROOT, "data", "nvs_prov")
+            prov_dir = os.path.join(PROJECT_ROOT, "data", "nvs_prov")
+            if effective_target == "esp8266":
+                eeprom_prov_path = os.path.join(prov_dir, f"{prov_dev_id}_eeprom.bin")
+                nvs_gen.generate_esp8266_eeprom_bin(eeprom_prov_path, {
+                    "wifi_ssid": wifi_ssid,
+                    "wifi_pass": wifi_pass,
+                    "device_id": prov_dev_id,
+                    "mdns_host": f"{effective_target}-{mac_tail}" if detected_mac else mdns_host,
+                    "hub_url": hub_url,
+                    "web_port": 80,
+                    "config_ver": 1,
+                })
+            else:
                 nvs_prov_path = os.path.join(prov_dir, f"{prov_dev_id}.bin")
                 nvs_gen.generate_nvs_provision_bin(nvs_prov_path, {
                     "wifi_ssid": wifi_ssid,
@@ -506,7 +514,14 @@ def run_serial_flash_task(port, baud, file_name, target, full_flash=True,
             cmd += ["--chip", effective_target.replace("-", "")]
 
         if effective_target == "esp8266":
-            cmd += ["write-flash", "0x0", dist_bin]
+            flash_items = ["0x0", dist_bin]
+            if eeprom_prov_path and os.path.isfile(eeprom_prov_path):
+                flash_items.extend([hex(nvs_gen.ESP8266_EEPROM_OFFSET_1M), eeprom_prov_path])
+                _update_task(
+                    tid,
+                    append_log=f"模式: ESP8266 Flash@0x0 + EEPROM出厂预置@{hex(nvs_gen.ESP8266_EEPROM_OFFSET_1M)}\n",
+                )
+            cmd += ["write-flash", "--flash-size", "detect"] + flash_items
         else:
             base_name = file_name[:-4] if file_name.endswith(".bin") else file_name
             bundle_dir = os.path.join(DIST_DIR, "bundles", base_name)
