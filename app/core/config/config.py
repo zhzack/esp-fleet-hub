@@ -5,7 +5,7 @@ from typing import List, Union
 
 class Settings(BaseSettings):
     # --- 基础 ---
-    PROJECT_NAME: str = "HID Gateway Platform"
+    PROJECT_NAME: str = "ESP Fleet Hub"
     VERSION: str = "1.0.0"
     DEBUG: bool = Field(default=False)
 

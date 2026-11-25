@@ -1,0 +1,24 @@
+defaults:
+  device_id: esp32_node
+  mdns_host: esp-node
+  wifi_pass: '11111111'
+  wifi_ssid: '1'
+features:
+  camera: false
+  display: false
+  gpio_ctrl: true
+  http_server: true
+  joystick: false
+  ota: true
+  pc_monitor: false
+  rest_api: true
+  storage: false
+  usb_otg: false
+  web_ui: true
+  ws_gateway: true
+hardware:
+  cpu_freq_mhz: 160
+  flash_size: 4MB
+  spiram: false
+name: esp32_node
+target: esp32

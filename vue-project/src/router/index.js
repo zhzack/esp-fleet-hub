@@ -57,7 +57,7 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (to.meta.title) document.title = `${to.meta.title} · HID Gateway`
+  if (to.meta.title) document.title = `${to.meta.title} · ESP Fleet Hub`
   if (to.meta.requiresAuth && !auth.token) {
     // 避免 redirect 链式嵌套：只保留最初始的目标路径
     const redirect = to.query.redirect || (to.path === '/login' ? '/dashboard' : to.fullPath)

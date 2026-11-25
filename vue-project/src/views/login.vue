@@ -20,6 +20,8 @@ const formRef = ref(null)
 const isShaking = ref(false)
 const rememberMe = ref(true)
 
+const hasAdmin = ref(true)
+
 const form = reactive({
   username: '',
   password: '',
@@ -120,10 +122,16 @@ async function submit() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   const saved = localStorage.getItem('saved_username')
   if (saved) {
     form.username = saved
+  }
+  try {
+    const st = await authApi.bootstrapStatus()
+    hasAdmin.value = Boolean(st?.has_admin)
+  } catch {
+    hasAdmin.value = true
   }
 })
 </script>
@@ -135,8 +143,8 @@ onMounted(() => {
       <div class="brand-badge">
         <el-icon :size="24" class="brand-icon"><Connection /></el-icon>
       </div>
-      <h1 class="brand-title">HID Gateway</h1>
-      <p class="brand-subtitle">硬件级网络外设控制与中继中枢</p>
+      <h1 class="brand-title">ESP Fleet Hub</h1>
+      <p class="brand-subtitle">跨芯片统一设备中枢 · 云端裁剪 · 无线 HID 控制平台</p>
     </div>
 
     <!-- Mode Switch Tabs -->
@@ -217,8 +225,8 @@ onMounted(() => {
         />
       </el-form-item>
 
-      <!-- 角色选择 (注册模式) -->
-      <el-form-item v-if="mode === 'register'" label="用户角色">
+      <!-- 角色选择 (仅无管理员时显示初始引导，已有管理员后仅可注册普通用户) -->
+      <el-form-item v-if="mode === 'register' && !hasAdmin" label="用户角色">
         <el-radio-group v-model="form.role" class="role-group">
           <el-radio-button label="user">普通控制员 (User)</el-radio-button>
           <el-radio-button label="admin">系统管理员 (Admin)</el-radio-button>

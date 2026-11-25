@@ -4,17 +4,36 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.database.crud import user as crud_user
 from app.database.schemas.user import UserCreate, UserOut, Token, PasswordChange
-from app.core.security import create_access_token, get_current_user, verify_password
+from app.core.security import create_access_token, get_current_user, get_optional_user, verify_password
 from app.database.models.user import User
 
 router = APIRouter()
 
 
+@router.get("/bootstrap-status")
+def bootstrap_status(db: Session = Depends(get_db)):
+    """Report whether at least one admin account already exists."""
+    has_admin = db.query(User.id).filter(User.role == "admin").first() is not None
+    return {"has_admin": has_admin}
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def register(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    caller: User | None = Depends(get_optional_user),
+):
     if crud_user.get_by_username(db, payload.username):
         raise HTTPException(status.HTTP_409_CONFLICT, "用户名已存在，请更换或直接登录")
-    user = crud_user.create(db, payload.username, payload.password, payload.role)
+    role = payload.role
+    if role == "admin":
+        has_admin = db.query(User).filter(User.role == "admin").first() is not None
+        if has_admin and (caller is None or caller.role != "admin"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "已有管理员存在，仅允许管理员创建新的管理员账号",
+            )
+    user = crud_user.create(db, payload.username, payload.password, role)
     return user
 
 

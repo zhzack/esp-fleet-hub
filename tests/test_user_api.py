@@ -116,3 +116,55 @@ def test_user_me_and_password_change(client):
         json={"username": "charlie", "password": "NewPassword456"},
     )
     assert new_login.status_code == 200
+
+
+def test_admin_registration_protection(client):
+    # 初始无管理员，bootstrap-status 返回 False
+    assert client.get("/api/v1/auth/bootstrap-status").json()["has_admin"] is False
+
+    # 首个管理员可正常初始化创建
+    first = client.post(
+        "/api/v1/auth/register",
+        json={"username": "root_admin", "password": "Password123", "role": "admin"},
+    )
+    assert first.status_code == 201
+    assert client.get("/api/v1/auth/bootstrap-status").json()["has_admin"] is True
+
+    # 已有管理员后，未鉴权调用注册 admin 必须被拒绝 (403)
+    escalate = client.post(
+        "/api/v1/auth/register",
+        json={"username": "attacker", "password": "Password123", "role": "admin"},
+    )
+    assert escalate.status_code == 403
+
+    # 普通用户注册依然放行
+    reg_user = client.post(
+        "/api/v1/auth/register",
+        json={"username": "normal_u", "password": "Password123", "role": "user"},
+    )
+    assert reg_user.status_code == 201
+    u_tok = client.post(
+        "/api/v1/auth/login",
+        json={"username": "normal_u", "password": "Password123"},
+    ).json()["access_token"]
+
+    # 普通用户带 Token 也不能注册管理员
+    escalate_u = client.post(
+        "/api/v1/auth/register",
+        headers={"Authorization": f"Bearer {u_tok}"},
+        json={"username": "attacker2", "password": "Password123", "role": "admin"},
+    )
+    assert escalate_u.status_code == 403
+
+    # 已登录管理员可以创建第二个管理员
+    adm_tok = client.post(
+        "/api/v1/auth/login",
+        json={"username": "root_admin", "password": "Password123"},
+    ).json()["access_token"]
+    ok_adm = client.post(
+        "/api/v1/auth/register",
+        headers={"Authorization": f"Bearer {adm_tok}"},
+        json={"username": "second_admin", "password": "Password123", "role": "admin"},
+    )
+    assert ok_adm.status_code == 201
+    assert ok_adm.json()["role"] == "admin"

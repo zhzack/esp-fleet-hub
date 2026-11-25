@@ -1,6 +1,9 @@
 import http from './http'
 
 export const authApi = {
+  bootstrapStatus() {
+    return http.get('/v1/auth/bootstrap-status')
+  },
   login(username, password) {
     return http.post('/v1/auth/login', { username, password })
   },

@@ -1,16 +1,30 @@
+set(EXTRA_REQUIRES "")
+if(IDF_TARGET STREQUAL "esp32s2" OR IDF_TARGET STREQUAL "esp32s3" OR IDF_TARGET STREQUAL "esp32p4")
+    list(APPEND EXTRA_REQUIRES espressif__esp_tinyusb)
+endif()
+
 idf_component_register(
     SRCS
         "app_main.c"
+        "core/board_pins.c"
         "core/system_caps.c"
         "core/app_config.c"
         "core/log_capture.c"
+        "core/serial_cli.c"
         "net/wifi_mgr.c"
         "net/ota_mgr.c"
         "net/web_server.c"
+        "net/fleet_agent.c"
+        "net/ws_gateway.c"
         "hal/hal_gpio.c"
         "hal/hal_camera.c"
+        "hal/hal_storage.c"
+        "hal/hal_display.c"
         "modules/mod_gpio.c"
         "modules/mod_camera.c"
+        "modules/mod_storage.c"
+        "modules/mod_display.c"
+        "modules/mod_usb_otg.c"
         "hal/font8x16.c"
         "hal/hal_st7735.c"
         "hal/hal_joystick.c"
@@ -23,10 +37,13 @@ idf_component_register(
         "modules"
     REQUIRES
         nvs_flash
+        json
         esp_wifi
         esp_event
         esp_netif
         esp_http_server
+        esp_http_client
+        mbedtls
         app_update
         driver
         esp_driver_gpio
@@ -34,9 +51,11 @@ idf_component_register(
         mdns
         esp32-camera
         spi_flash
+        spiffs
         esp_timer
         esp_psram
         esp_hw_support
         heap
+        espressif__esp_websocket_client
+        ${EXTRA_REQUIRES}
 )
-

@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
           </el-tag>
         </div>
         <p class="banner-desc">
-          HID Gateway 平台运行正常。所有下发指令将经由 ESP32 硬件直连模拟输出到受控宿主机。
+          ESP Fleet Hub 运行正常。支持跨芯片统一控制、USB/BLE HID 硬件注入及空中 OTA 调度。
         </p>
       </div>
 

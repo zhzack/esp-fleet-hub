@@ -1,0 +1,21 @@
+defaults:
+  device_id: esp_custom_node
+  mdns_host: esp-custom
+  wifi_pass: '11111111'
+  wifi_ssid: '1'
+features:
+  camera: true
+  display: false
+  gpio_ctrl: true
+  http_server: true
+  ota: true
+  rest_api: true
+  storage: false
+  usb_otg: true
+  web_ui: true
+hardware:
+  cpu_freq_mhz: 240
+  flash_size: 4MB
+  spiram: true
+name: esp_custom_node
+target: esp32s3

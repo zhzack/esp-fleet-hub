@@ -28,6 +28,19 @@ menu "ESP Unified Framework - LuatOS-Style Component Matrix"
             default y
             help
                 Provides /api/ota/upload endpoint and dual-partition A/B rollback safety.
+
+        config FEATURE_SERIAL_CLI
+            bool "Enable Interactive UART / USB-Serial CLI Provisioning"
+            default y
+            help
+                Enables lightweight non-blocking serial command console for local setup and recovery.
+
+        config FEATURE_FLEET_AGENT
+            bool "Enable Fleet Hub Auto-Registration & Config Shadow Sync"
+            default y
+            help
+                Discovers Fleet Hub over mDNS (_esp-hub._tcp) or hub_url, authenticates with HMAC-SHA256,
+                registers capabilities, sends periodic heartbeats, and syncs remote config/OTA commands.
     endmenu
 
     menu "Hardware Peripheral Drivers"
@@ -73,9 +86,46 @@ menu "ESP Unified Framework - LuatOS-Style Component Matrix"
             default n
             help
                 Enables 5-way joystick driver for media/volume and UI control.
+
+        config FEATURE_WS_GATEWAY
+            bool "Enable WebSocket V2 HID Gateway Client (connects to py_web /ws/device)"
+            default n
+            help
+                Maintains persistent WebSocket connection to py_web HID Gateway Server
+                so console/trackpad/macros dispatch low-latency HID actions to this node.
+    endmenu
+
+    menu "Hardware Board Pinout Profile"
+        choice BOARD_PROFILE
+            prompt "Target Board Profile"
+            default BOARD_AUTO_DEFAULT
+            help
+                Selects board-specific default GPIO pinouts, camera SCCB/DVP wiring, and LED polarities.
+
+            config BOARD_AUTO_DEFAULT
+                bool "Auto Select Default Board by Target SoC"
+            config BOARD_ESP32_CAM_AITHINKER
+                bool "AI-Thinker ESP32-CAM"
+            config BOARD_ESP32S3_CAM_DEV
+                bool "ESP32-S3 CAM (Freenove / Goouuu S3)"
+            config BOARD_ESP32S3_DEVKIT
+                bool "ESP32-S3 DevKitC Generic"
+            config BOARD_ESP32C3_AIR101
+                bool "LuatOS ESP32-C3 + Air101 LCD Shield"
+            config BOARD_ESP32C3_SUPERMINI
+                bool "ESP32-C3 SuperMini / Core"
+            config BOARD_ESP32_GENERIC
+                bool "ESP32 Classic DevKit Generic"
+            config BOARD_ESP32C2_GENERIC
+                bool "ESP32-C2 Minimal Generic"
+        endchoice
     endmenu
 
     menu "Default Network & Device Identity"
+        config APP_FW_VERSION
+            string "Firmware Version Tag"
+            default "1.1.0-unified"
+
         config APP_DEFAULT_WIFI_SSID
             string "Default WiFi SSID"
             default "1"
@@ -85,12 +135,20 @@ menu "ESP Unified Framework - LuatOS-Style Component Matrix"
             default "11111111"
 
         config APP_DEFAULT_DEVICE_ID
-            string "Default Device ID"
-            default "esp_unified_node"
+            string "Default Device ID (empty = auto MAC-based)"
+            default ""
 
         config APP_MDNS_HOST
             string "Default mDNS Hostname"
             default "esp-node"
+
+        config APP_DEFAULT_HUB_URL
+            string "Default Fleet Hub URL (empty = auto mDNS discovery)"
+            default ""
+
+        config APP_DEFAULT_WS_GATEWAY_URL
+            string "Default py_web WebSocket URL (empty = derive from Hub :8000)"
+            default ""
     endmenu
 
 endmenu

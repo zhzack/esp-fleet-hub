@@ -1,4 +1,5 @@
 #include "hal_joystick.h"
+#include "board_pins.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -7,11 +8,11 @@
 #define TAG "JOYSTICK"
 
 // Portrait 80x160 orientation key mapping:
-#define PIN_KEY_UP     9   // Push UP towards screen header (Vol +)
-#define PIN_KEY_DOWN   5   // Push DOWN towards screen footer (Vol -)
-#define PIN_KEY_LEFT   8   // Push LEFT towards screen left (Prev)
-#define PIN_KEY_RIGHT  13  // Push RIGHT towards screen right (Next)
-#define PIN_KEY_CENTER 4   // Center Press (Play / Pause)
+#define PIN_KEY_UP     BOARD_JOY_UP     // Push UP towards screen header (Vol +)
+#define PIN_KEY_DOWN   BOARD_JOY_DOWN   // Push DOWN towards screen footer (Vol -)
+#define PIN_KEY_LEFT   BOARD_JOY_LEFT   // Push LEFT towards screen left (Prev)
+#define PIN_KEY_RIGHT  BOARD_JOY_RIGHT  // Push RIGHT towards screen right (Next)
+#define PIN_KEY_CENTER BOARD_JOY_CENTER // Center Press (Play / Pause)
 
 static joystick_callback_t s_key_cb = NULL;
 

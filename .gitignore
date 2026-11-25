@@ -16,3 +16,17 @@ setup_mac_ssh.ps1
 
 # ZCode 会话缓存
 .zcode/
+
+# ESP-IDF / PlatformIO 构建产物与运行时生成配置
+**/build/
+**/managed_components/
+**/.pio/
+esp_unified_framework/dist/
+esp_unified_framework/data/
+esp_unified_framework/pipeline.yaml
+esp_unified_framework/sdkconfig
+esp_unified_framework/sdkconfig.defaults
+esp32_cam/sdkconfig
+esp32_cam/sdkconfig.defaults
+*.elf
+*.map

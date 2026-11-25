@@ -17,6 +17,7 @@ features:
   usb_otg: false
   pc_monitor: true
   joystick: true
+  ws_gateway: true
 defaults:
   wifi_ssid: "1"
   wifi_pass: "11111111"

@@ -11,9 +11,12 @@
 #include "app_config.h"
 #include "system_caps.h"
 #include "log_capture.h"
+#include "serial_cli.h"
 #include "wifi_mgr.h"
 #include "ota_mgr.h"
 #include "web_server.h"
+#include "fleet_agent.h"
+#include "ws_gateway.h"
 
 #if CONFIG_FEATURE_GPIO_CTRL
 #include "mod_gpio.h"
@@ -25,6 +28,18 @@
 
 #if CONFIG_FEATURE_PC_MONITOR
 #include "mod_pc_monitor.h"
+#endif
+
+#if CONFIG_FEATURE_STORAGE
+#include "mod_storage.h"
+#endif
+
+#if CONFIG_FEATURE_DISPLAY
+#include "mod_display.h"
+#endif
+
+#if CONFIG_FEATURE_USB_OTG
+#include "mod_usb_otg.h"
 #endif
 
 static const char *TAG = "unified_main";
@@ -78,8 +93,35 @@ void app_main(void)
     mod_pc_monitor_init();
 #endif
 
+#if CONFIG_FEATURE_STORAGE
+    ESP_LOGI(TAG, "[Feature] Initializing SPIFFS Storage Module...");
+    mod_storage_init();
+#endif
+
+#if CONFIG_FEATURE_DISPLAY
+    ESP_LOGI(TAG, "[Feature] Initializing Display Text/Status Module...");
+    mod_display_init();
+#endif
+
+#if CONFIG_FEATURE_USB_OTG
+    ESP_LOGI(TAG, "[Feature] Initializing USB-OTG Composite HID Module...");
+    mod_usb_otg_init();
+#endif
+
     // 8. Start Unified Web Platform Server
     ESP_ERROR_CHECK(web_server_start());
+
+    // 9. Start Fleet Hub Registration & Sync Agent
+#if CONFIG_FEATURE_FLEET_AGENT
+    fleet_agent_init();
+#endif
+
+#if CONFIG_FEATURE_WS_GATEWAY
+    ws_gateway_init();
+#endif
+
+    // 10. Start Lightweight Interactive Serial CLI
+    serial_cli_init();
 
     ESP_LOGI(TAG, "ESP Unified Framework initialization complete.");
 

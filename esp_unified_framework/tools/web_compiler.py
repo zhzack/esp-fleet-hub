@@ -1,744 +1,95 @@
 #!/usr/bin/env python3
 """
-LuatOS-Style Visual Web Compiler for ESP Unified Framework
-Provides a browser-based UI to customize features, select chips, and trigger remote NAS builds
-with full hardware capability interlocking and compatibility validation.
+ESP Unified Fleet Hub & LuatOS-Style Visual Web Compiler Server
+Provides:
+- mDNS service advertisement (_esp-hub._tcp) for zero-config device discovery
+- SQLite Device Fleet Registry, HMAC Challenge-Response Auth & Config Shadow Sync
+- Cross-Chip Cloud Compilation (Feiniu NAS IDF pipeline + local ESP8266 PIO)
+- Serial Flasher with Hardware Pre-Probe & Automatic NVS Pre-Provisioning
 """
 
-import sys, os, json, time, subprocess, threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import urllib.parse, urllib.request
+import sys
+import os
+import re
+import json
+import time
+import shutil
+import secrets
+import subprocess
+import threading
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import urllib.parse
+import urllib.request
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
 PROFILES_DIR = os.path.join(PROJECT_ROOT, "profiles")
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "tools"))
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
+
 import build_flavor
+import hub_db
+import nvs_gen
+import mdns_advertiser
+import fleet_router
+from hub_ui import HTML_PAGE
 
 s_current_task = {
-    "status": "idle", # "idle", "building", "success", "failed"
+    "status": "idle",
     "log": "",
     "artifact_name": "",
     "artifact_size": 0,
-    "percent": 0
+    "percent": 0,
 }
 s_lock = threading.Lock()
+SERVER_PORT = 8088
 
-HTML_PAGE = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ESP 固件定制编译平台 (LuatOS Cloud Compilation Style)</title>
-<style>
-:root{--bg:#0b1120;--surface:#1e293b;--border:#334155;--primary:#3b82f6;--primary-hover:#2563eb;--text:#f8fafc;--text-dim:#94a3b8;--success:#10b981;--warn:#f59e0b;--danger:#ef4444;--radius:10px}
-*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-body{background:var(--bg);color:var(--text);padding:20px;font-size:14px;line-height:1.5}
-.container{max-width:1050px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
-header{display:flex;justify-content:space-between;align-items:center;background:var(--surface);padding:16px 24px;border-radius:var(--radius);border:1px solid var(--border)}
-.logo{display:flex;align-items:center;gap:12px}
-.logo-badge{width:36px;height:36px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;display:flex;flex-direction:column;gap:16px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.2)}
-.card-title{font-size:16px;font-weight:600;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:12px}
-.chip-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
-.chip-opt{border:2px solid var(--border);border-radius:8px;padding:14px;cursor:pointer;transition:all .15s;background:#0f172a66;text-align:center}
-.chip-opt:hover{border-color:var(--primary)}
-.chip-opt.active{border-color:var(--primary);background:#1e3a8a44;box-shadow:0 0 0 1px var(--primary)}
-.chip-name{font-weight:bold;font-size:15px;color:#fff}
-.chip-sub{font-size:11px;color:var(--text-dim);margin-top:4px}
-.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
-.feat-box{background:#0f172a80;border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:12px;cursor:pointer;transition:all .15s;position:relative}
-.feat-box:hover{border-color:#475569}
-.feat-box.disabled{opacity:0.42;cursor:not-allowed;background:#090d16;border-style:dashed;border-color:#33415566}
-.feat-box input[type=checkbox]{margin-top:3px;transform:scale(1.2);accent-color:var(--primary)}
-.feat-info strong{display:flex;align-items:center;gap:6px;color:#fff;font-size:13px}
-.feat-info p{font-size:11px;color:var(--text-dim);margin-top:2px}
-.feat-badge{font-size:10px;padding:1px 6px;border-radius:4px;font-weight:600}
-.feat-badge.supported{background:#065f4688;color:#6ee7b7}
-.feat-badge.unsupported{background:#7f1d1d88;color:#fca5a5}
-.input-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-label{font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px}
-input[type=text]{background:#0f172a;border:1px solid var(--border);color:#fff;padding:8px 12px;border-radius:6px;font-size:13px}
-input[type=text]:focus{outline:none;border-color:var(--primary)}
-button{cursor:pointer;background:var(--primary);color:#fff;border:none;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:600;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;gap:8px}
-button:hover{background:var(--primary-hover)}
-button.secondary{background:#334155;color:#cbd5e1}
-button.secondary:hover{background:#475569}
-button:disabled{opacity:0.5;cursor:not-allowed}
-pre.console{background:#050b14;color:#38bdf8;padding:14px;border-radius:8px;font-family:monospace;font-size:11px;height:220px;overflow-y:auto;white-space:pre-wrap;border:1px solid #1e293b}
-.status-pill{font-size:12px;padding:3px 10px;border-radius:12px;background:#334155;color:#fff}
-.status-pill.success{background:#065f46;color:#6ee7b7}
-.status-pill.building{background:#1e3a8a;color:#93c5fd}
-.status-pill.failed{background:#7f1d1d;color:#fca5a5}
-.preset-bar{display:flex;gap:8px;flex-wrap:wrap}
-.endpoint-item{background:#0f172a99;border:1px solid var(--border);border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:12px;transition:all .15s}
-.endpoint-item.disabled{opacity:0.35;background:#060a12;border-style:dashed}
-.method-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;font-family:monospace}
-.method-get{background:#0369a1;color:#bae6fd}
-.method-post{background:#15803d;color:#bbf7d0}
-.ep-path{font-family:monospace;font-size:12px;color:#f1f5f9}
-.ep-status{font-size:10px;padding:2px 8px;border-radius:10px}
-.ep-status.active{background:#065f46;color:#6ee7b7}
-.ep-status.inactive{background:#334155;color:#94a3b8}
-</style>
-</head>
-<body>
-<div class="container">
-  <header>
-    <div class="logo">
-      <div class="logo-badge">&#9881;</div>
-      <div>
-        <h1 style="font-size:18px;font-weight:bold">ESP 固件定制云编译平台</h1>
-        <p style="font-size:11px;color:var(--text-dim)">LuatOS-Style Component Matrix & Fast NAS Pipeline</p>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <span class="status-pill" id="compile-status">空闲</span>
-    </div>
-  </header>
 
-  <!-- Step 1: Chip Selection -->
-  <div class="card">
-    <div class="card-title">
-      <span>1. 选择目标芯片架构 (Target SoC)</span>
-      <span style="font-size:12px;color:var(--text-dim)">选择芯片后，下方功能组件将根据芯片物理硅片能力自动互锁！</span>
-    </div>
-    <div class="chip-grid">
-      <div class="chip-opt active" onclick="selectChip('esp32', this)">
-        <div class="chip-name">ESP32 (经典双核)</div>
-        <div class="chip-sub">支持 DVP 摄像头 / 外部 PSRAM</div>
-      </div>
-      <div class="chip-opt" onclick="selectChip('esp32s3', this)">
-        <div class="chip-name">ESP32-S3 (AI与多媒体)</div>
-        <div class="chip-sub">支持 原生 USB-OTG / 摄像头 / LCD</div>
-      </div>
-      <div class="chip-opt" onclick="selectChip('esp32c3', this)">
-        <div class="chip-name">ESP32-C3 (RISC-V)</div>
-        <div class="chip-sub">极简单核 / 低功耗开关 / 无摄像头与OTG</div>
-      </div>
-      <div class="chip-opt" onclick="selectChip('esp32c2', this)">
-        <div class="chip-name">ESP32-C2 (超轻量)</div>
-        <div class="chip-sub">成本优化型小内存 / 仅基础 GPIO 与 API</div>
-      </div>
-      <div class="chip-opt" onclick="selectChip('esp8266', this)">
-        <div class="chip-name">ESP8266 (经典 WiFi)</div>
-        <div class="chip-sub">80/160MHz Xtensa 单核 / 极简开关继电器 / 低成本</div>
-      </div>
-    </div>
-  </div>
+def get_task_snapshot():
+    with s_lock:
+        return dict(s_current_task)
 
-  <!-- Step 2: Component Customization -->
-  <div class="card">
-    <div class="card-title">
-      <span>2. 定制功能组件矩阵 (自动根据芯片物理硬件动态适配)</span>
-      <div class="preset-bar">
-        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp32_cam')">ESP32-CAM 预设</button>
-        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('c3_relay')">C3 继电器预设</button>
-        <button class="secondary" style="font-size:11px;padding:4px 8px;background:#1e3a8a;color:#93c5fd" onclick="loadPreset('c3_pc_monitor')">💻 C3 副屏监控预设</button>
-        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('s3_dock')">S3 控制坞预设</button>
-        <button class="secondary" style="font-size:11px;padding:4px 8px" onclick="loadPreset('esp8266_switch')">ESP8266 开关预设</button>
-      </div>
-    </div>
-    <div class="feat-grid">
-      <label class="feat-box" id="box_web_ui">
-        <input type="checkbox" id="f_web_ui" checked/>
-        <div class="feat-info">
-          <strong>Web 桌面控制台 (Web UI) <span class="feat-badge supported" id="badge_web_ui">全芯片支持</span></strong>
-          <p>嵌入自适应 HTML5 控制面板（取消勾选则为无头纯 API 固件，省 Flash）</p>
-        </div>
-      </label>
 
-      <label class="feat-box" id="box_rest_api">
-        <input type="checkbox" id="f_rest_api" checked/>
-        <div class="feat-info">
-          <strong>HTTP REST 配置接口 (REST API) <span class="feat-badge supported" id="badge_rest_api">全芯片支持</span></strong>
-          <p>提供 /api/system/*、/api/gpio/*、/api/config 供网络调用</p>
-        </div>
-      </label>
+def list_profiles_data():
+    import yaml
+    items = []
+    if os.path.isdir(PROFILES_DIR):
+        for fn in sorted(os.listdir(PROFILES_DIR)):
+            if not fn.endswith(".yaml"):
+                continue
+            fp = os.path.join(PROFILES_DIR, fn)
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                items.append({
+                    "id": fn[:-5],
+                    "file": fn,
+                    "name": data.get("name", fn[:-5]),
+                    "target": data.get("target", "esp32"),
+                    "description": data.get("description", ""),
+                    "features": data.get("features", {}),
+                    "hardware": data.get("hardware", {}),
+                    "defaults": data.get("defaults", {}),
+                })
+            except Exception:
+                pass
+    return items
 
-      <label class="feat-box" id="box_ota">
-        <input type="checkbox" id="f_ota" checked/>
-        <div class="feat-info">
-          <strong>双分区无线 OTA (Wireless OTA) <span class="feat-badge supported" id="badge_ota">全芯片支持</span></strong>
-          <p>双 1.75MB A/B 分区空中升级，支持坏固件自动回滚</p>
-        </div>
-      </label>
 
-      <label class="feat-box" id="box_camera">
-        <input type="checkbox" id="f_camera" checked/>
-        <div class="feat-info">
-          <strong>摄像头模块 (OV2640 / OV5640) <span class="feat-badge supported" id="badge_camera">仅 ESP32 / S3</span></strong>
-          <p>含底层 SCCB 驱动、双 PSRAM 帧缓冲与实时 MJPEG 串流</p>
-        </div>
-      </label>
+def list_serial_ports():
+    import serial.tools.list_ports
+    ports = []
+    for p in serial.tools.list_ports.comports():
+        if "BTHENUM" in p.hwid or "PNP0501" in p.hwid:
+            continue
+        ports.append({"port": p.device, "desc": p.description})
+    return ports
 
-      <label class="feat-box" id="box_gpio_ctrl">
-        <input type="checkbox" id="f_gpio_ctrl" checked/>
-        <div class="feat-info">
-          <strong>GPIO 开关与 PWM 调光 (GPIO Control) <span class="feat-badge supported" id="badge_gpio_ctrl">全芯片支持</span></strong>
-          <p>动态引脚电平控制、PWM 渐变调光与状态查询矩阵</p>
-        </div>
-      </label>
 
-      <label class="feat-box" id="box_spiram">
-        <input type="checkbox" id="f_spiram" checked/>
-        <div class="feat-info">
-          <strong>外部伪静态内存 (PSRAM / SPIRAM) <span class="feat-badge supported" id="badge_spiram">仅 ESP32 / S3</span></strong>
-          <p>使能外部 2MB~8MB RAM，摄像头与大型任务必备</p>
-        </div>
-      </label>
-
-      <label class="feat-box" id="box_usb_otg">
-        <input type="checkbox" id="f_usb_otg"/>
-        <div class="feat-info">
-          <strong>原生 USB-OTG (虚拟键鼠注入) <span class="feat-badge unsupported" id="badge_usb_otg">仅 ESP32-S2/S3</span></strong>
-          <p>TinyUSB 免驱 HID 注入（硬件需原生 USB 控制器）</p>
-        </div>
-      </label>
-
-      <label class="feat-box" id="box_display">
-        <input type="checkbox" id="f_display"/>
-        <div class="feat-info">
-          <strong>屏幕图形引擎 (LCD / E-Paper) <span class="feat-badge supported" id="badge_display">支持</span></strong>
-          <p>ST7789 IPS 屏或 SSD1680 水墨屏驱动</p>
-        </div>
-      </label>
-
-      <label class="feat-box" id="box_storage">
-        <input type="checkbox" id="f_storage"/>
-        <div class="feat-info">
-          <strong>文件系统 (SPIFFS / SD Card) <span class="feat-badge supported" id="badge_storage">支持</span></strong>
-          <p>片上 Flash 存储挂载或 MicroSD 卡文件读写</p>
-        </div>
-      </label>
-
-      <label class="feat-box" id="box_pc_monitor">
-        <input type="checkbox" id="f_pc_monitor"/>
-        <div class="feat-info">
-          <strong>Air101 ST7735 竖屏硬件监控 <span class="feat-badge supported" id="badge_pc_monitor">ESP32-C3 特色</span></strong>
-          <p>80×160 竖屏实时 CPU/RAM/网速监控看板与 /api/monitor/push REST 推流</p>
-        </div>
-      </label>
-
-      <label class="feat-box" id="box_joystick">
-        <input type="checkbox" id="f_joystick"/>
-        <div class="feat-info">
-          <strong>5 向导航摇杆矩阵 (Joystick) <span class="feat-badge supported" id="badge_joystick">ESP32-C3 特色</span></strong>
-          <p>Air101 板载 5 向微动开关 (GPIO 4/5/8/9/13)，支持多媒体控制与事件上报</p>
-        </div>
-      </label>
-    </div>
-  </div>
-
-  <!-- Step 3: Dynamic REST API Endpoints Preview -->
-  <div class="card">
-    <div class="card-title">
-      <span>3. 生成固件的 HTTP REST 接口清单 (随芯片与功能选择动态增减)</span>
-      <span style="font-size:12px;color:var(--text-dim)">未开启的功能不会注册对应 URI 路由，客户端访问直接返回 404，不占用任何 Flash/RAM</span>
-    </div>
-    <div id="endpoint-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:8px"></div>
-  </div>
-
-  <!-- Step 4: Default Network Identity -->
-  <div class="card">
-    <div class="card-title">
-      <span>4. 预设网络与设备身份 (固化在 Flash 中，亦可在运行时在线配置修改)</span>
-    </div>
-    <div class="input-grid">
-      <label>默认 WiFi SSID:
-        <input type="text" id="wifi_ssid" value="1"/>
-      </label>
-      <label>默认 WiFi 密码:
-        <input type="text" id="wifi_pass" value="11111111"/>
-      </label>
-      <label>设备名称 (Device ID):
-        <input type="text" id="device_id" value="esp32_node"/>
-      </label>
-      <label>mDNS 本地域名:
-        <input type="text" id="mdns_host" value="esp-node"/>
-      </label>
-    </div>
-  </div>
-
-  <!-- Step 5: Build & Deployment -->
-  <div class="card">
-    <div class="card-title">
-      <span>5. 执行构建与部署 (飞牛 NAS 多核极速编译器)</span>
-      <div style="display:flex;gap:8px">
-        <button id="btn-build" onclick="triggerBuild()">⚡ 立即生成定制固件</button>
-      </div>
-    </div>
-    <pre class="console" id="log-box">[System Ready] 等待配置构建请求...</pre>
-    
-    <!-- 固件烧录与部署控制台 (串口/OTA 双模式) -->
-    <div id="result-box" style="display:none;background:#0d1527;padding:16px;border-radius:8px;border:1px solid #10b981;flex-direction:column;gap:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;border-bottom:1px solid #1e293b;padding-bottom:12px">
-        <div>
-          <strong style="color:#10b981;font-size:15px">🎉 固件定制编译成功: </strong>
-          <span id="res-filename" style="color:#fff;font-family:monospace;font-size:14px">firmware.bin</span>
-          <span id="res-filesize" style="font-size:12px;color:var(--text-dim)">(0 KB)</span>
-        </div>
-        <button class="secondary" style="font-size:12px;padding:6px 14px" onclick="downloadFirmware()">⬇️ 下载固件文件 (.bin)</button>
-      </div>
-
-      <!-- 选择串口烧录或无线 OTA -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:14px">
-        
-        <!-- 方式 A: 串口线直接烧录 -->
-        <div style="background:#131e33;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <strong style="color:#38bdf8;font-size:13px;display:flex;align-items:center;gap:6px">
-              🔌 方式 A：USB 串口线直接烧录 (Serial Flash)
-            </strong>
-            <button class="secondary" style="font-size:11px;padding:2px 8px" onclick="refreshComPorts()">🔄 刷新串口</button>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 110px;gap:8px">
-            <label style="font-size:11px">目标串口:
-              <select id="flash-port-select" style="background:#0b1120;color:#fff;border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:12px;outline:none"></select>
-            </label>
-            <label style="font-size:11px">波特率:
-              <select id="flash-baud-select" style="background:#0b1120;color:#fff;border:1px solid #334155;border-radius:4px;padding:6px 8px;font-size:12px;outline:none">
-                <option value="921600" selected>921600 (极速)</option>
-                <option value="460800">460800 (稳定)</option>
-                <option value="115200">115200 (标准)</option>
-              </select>
-            </label>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
-            <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="flash-full-image" checked style="accent-color:var(--primary)"/>
-              <span>全量完整刷写 (含 Bootloader 与双分区表)</span>
-            </label>
-            <button id="btn-flash-serial" style="background:#0284c7;font-size:12px;padding:6px 14px" onclick="triggerSerialFlash()">⚡ 一键串口烧录</button>
-          </div>
-        </div>
-
-        <!-- 方式 B: 局域网无线 OTA 推送 -->
-        <div style="background:#131e33;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
-          <strong style="color:#34d399;font-size:13px;display:flex;align-items:center;gap:6px">
-            📡 方式 B：局域网无线 OTA 极速推送 (Wireless OTA)
-          </strong>
-          <div>
-            <label style="font-size:11px">设备局域网 IP 地址:
-              <input type="text" id="ota-target-ip" value="192.168.68.178" placeholder="例如 192.168.68.178" style="margin-top:4px"/>
-            </label>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto">
-            <span style="font-size:11px;color:var(--text-dim)">设备需已在局域网内运行且开启 OTA</span>
-            <button id="btn-push-ota" style="background:#059669;font-size:12px;padding:6px 14px" onclick="triggerOtaPush()">🚀 推送无线升级</button>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-let selectedChip = "esp32";
-let pollTimer = null;
-let currentArtifact = "";
-
-// 核心硬件互锁规则表
-const SOC_SPECS = {
-  esp32: {
-    name: "ESP32 (经典双核)",
-    unsupported: {
-      usb_otg: "芯片无原生 USB-OTG 控制器 (仅支持外部串口芯片)"
-    },
-    default_freq: 160
-  },
-  esp32s3: {
-    name: "ESP32-S3 (AI与矢量)",
-    unsupported: {},
-    default_freq: 240
-  },
-  esp32c3: {
-    name: "ESP32-C3 (RISC-V)",
-    unsupported: {
-      camera: "C3 芯片无 8-bit 并行 DVP 摄像头硬件控制器",
-      spiram: "C3 芯片无片外 PSRAM 内存总线接口",
-      usb_otg: "C3 仅支持基础 USB-Serial-JTAG，不支持原生 USB-OTG 协议栈"
-    },
-    default_freq: 160
-  },
-  esp32c2: {
-    name: "ESP32-C2 (超轻量)",
-    unsupported: {
-      camera: "C2 芯片无摄像头硬件接口",
-      spiram: "C2 芯片无片外 PSRAM 支持",
-      storage: "C2 Flash 容量有限，不适宜挂载 SPIFFS 分区",
-      display: "C2 内存受限 (~272KB)，不适宜挂载图形渲染驱动",
-      usb_otg: "C2 芯片无原生 USB-OTG 控制器"
-    },
-    default_freq: 120
-  },
-  esp8266: {
-    name: "ESP8266 (经典 WiFi SoC)",
-    unsupported: {
-      camera: "ESP8266 芯片无 8-bit 并行 DVP 摄像头控制器",
-      spiram: "ESP8266 芯片无片外 PSRAM 内存总线接口",
-      usb_otg: "ESP8266 芯片无原生 USB-OTG 控制器 (仅支持外部串口)",
-      display: "ESP8266 内存受限 (~80KB RAM)，不适宜驱动大型液晶图形屏",
-      pc_monitor: "ESP8266 引脚不足且内存有限，不支持 Air101 监控屏方案",
-      joystick: "ESP8266 仅少数 GPIO，不支持 5向摇杆矩阵"
-    },
-    default_freq: 80
-  }
-};
-
-function selectChip(chip, el) {
-  selectedChip = chip;
-  document.querySelectorAll(".chip-opt").forEach(c => c.classList.remove("active"));
-  el.classList.add("active");
-
-  const spec = SOC_SPECS[chip] || SOC_SPECS.esp32;
-  const allFeats = ["web_ui", "rest_api", "ota", "camera", "gpio_ctrl", "spiram", "storage", "display", "usb_otg", "pc_monitor", "joystick"];
-
-  allFeats.forEach(f => {
-    const box = document.getElementById("box_" + f);
-    const input = document.getElementById("f_" + f);
-    const badge = document.getElementById("badge_" + f);
-
-    if (spec.unsupported && spec.unsupported[f]) {
-      // 硬件不支持：强制取消勾选并禁用，提示原因
-      input.checked = false;
-      input.disabled = true;
-      box.classList.add("disabled");
-      badge.textContent = "硬件不支持: " + spec.unsupported[f];
-      badge.className = "feat-badge unsupported";
-    } else {
-      // 硬件支持：解开禁用状态
-      input.disabled = false;
-      box.classList.remove("disabled");
-      badge.textContent = "硬件支持";
-      badge.className = "feat-badge supported";
-    }
-  });
-  updateEndpointsPreview();
-}
-
-const API_ENDPOINTS = [
-  { method: "GET",  path: "/",                     feat: "web_ui",    desc: "Web 控制台响应式首页仪表盘" },
-  { method: "GET",  path: "/index.html",            feat: "web_ui",    desc: "Web 控制台首页别名" },
-  { method: "GET",  path: "/api/system/capabilities", feat: "rest_api", desc: "芯片能力与可用接口动态发现 (JSON)" },
-  { method: "GET",  path: "/api/system/status",       feat: "rest_api", desc: "心跳、系统运行时间与内存/WiFi 监控" },
-  { method: "GET",  path: "/api/system/config",       feat: "rest_api", desc: "读取当前 Flash NVS 固化配置" },
-  { method: "POST", path: "/api/system/config",       feat: "rest_api", desc: "热更新配置并写入 Flash NVS" },
-  { method: "GET",  path: "/api/system/logs",         feat: "rest_api", desc: "实时抓取环形日志缓冲区 (RAM Log)" },
-  { method: "POST", path: "/api/system/reboot",       feat: "rest_api", desc: "触发芯片安全延迟软重启" },
-  { method: "POST", path: "/api/ota/upload",          feat: "ota",      desc: "双分区无线 OTA 固件流式刷写与提交" },
-  { method: "GET",  path: "/api/gpio/pins",           feat: "gpio_ctrl",desc: "枚举全部可用 GPIO 模式与当前电平" },
-  { method: "POST", path: "/api/gpio/set",            feat: "gpio_ctrl",desc: "设置 GPIO 高低电平或 PWM 调光" },
-  { method: "GET",  path: "/stream",                  feat: "camera",   desc: "25fps MJPEG 实时摄像头视频流" },
-  { method: "GET",  path: "/capture",                 feat: "camera",   desc: "单张高清 JPEG 静态快照抓取" },
-  { method: "POST", path: "/api/camera/flash",        feat: "camera",   desc: "板载大功率补光灯 PWM 渐变调光" },
-  { method: "POST", path: "/api/monitor/push",        feat: "pc_monitor",desc: "推送电脑 CPU/RAM/网速指标刷新副屏 (HTTP推流)" },
-  { method: "GET",  path: "/api/joystick/state",      feat: "joystick",  desc: "读取5向导航微动按键最新状态 (媒体控制)" }
-];
-
-function updateEndpointsPreview() {
-  const container = document.getElementById("endpoint-grid");
-  if (!container) return;
-  container.innerHTML = "";
-
-  API_ENDPOINTS.forEach(ep => {
-    const featEl = document.getElementById("f_" + ep.feat);
-    const isEnabled = featEl && featEl.checked && !featEl.disabled;
-
-    const div = document.createElement("div");
-    div.className = "endpoint-item" + (isEnabled ? "" : " disabled");
-    div.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px">
-        <span class="method-badge method-${ep.method.toLowerCase()}">${ep.method}</span>
-        <span class="ep-path" style="${isEnabled ? '' : 'text-decoration:line-through;color:var(--text-dim)'}">${ep.path}</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:11px;color:var(--text-dim)">${ep.desc}</span>
-        <span class="ep-status ${isEnabled ? 'active' : 'inactive'}">${isEnabled ? '● 200 OK (已编译)' : '○ 404 (未编译)'}</span>
-      </div>
-    `;
-    container.appendChild(div);
-  });
-}
-
-function loadPreset(type) {
-  if (type === "esp32_cam") {
-    selectChip("esp32", document.querySelectorAll(".chip-opt")[0]);
-    document.getElementById("f_web_ui").checked = true;
-    document.getElementById("f_rest_api").checked = true;
-    document.getElementById("f_ota").checked = true;
-    document.getElementById("f_camera").checked = true;
-    document.getElementById("f_gpio_ctrl").checked = true;
-    document.getElementById("f_spiram").checked = true;
-    document.getElementById("f_storage").checked = false;
-    document.getElementById("f_display").checked = false;
-    document.getElementById("device_id").value = "esp32_cam_node";
-    document.getElementById("mdns_host").value = "esp-cam";
-  } else if (type === "c3_relay") {
-    selectChip("esp32c3", document.querySelectorAll(".chip-opt")[2]);
-    document.getElementById("f_web_ui").checked = true;
-    document.getElementById("f_rest_api").checked = true;
-    document.getElementById("f_ota").checked = true;
-    document.getElementById("f_gpio_ctrl").checked = true;
-    document.getElementById("f_storage").checked = false;
-    document.getElementById("f_display").checked = false;
-    document.getElementById("device_id").value = "esp32c3_relay";
-    document.getElementById("mdns_host").value = "c3-relay";
-  } else if (type === "c3_pc_monitor") {
-    selectChip("esp32c3", document.querySelectorAll(".chip-opt")[2]);
-    document.getElementById("f_web_ui").checked = true;
-    document.getElementById("f_rest_api").checked = true;
-    document.getElementById("f_ota").checked = true;
-    document.getElementById("f_pc_monitor").checked = true;
-    document.getElementById("f_joystick").checked = true;
-    document.getElementById("f_gpio_ctrl").checked = true;
-    document.getElementById("f_storage").checked = false;
-    document.getElementById("f_display").checked = false;
-    document.getElementById("device_id").value = "esp32c3_monitor";
-    document.getElementById("mdns_host").value = "c3-monitor";
-  } else if (type === "s3_dock") {
-    selectChip("esp32s3", document.querySelectorAll(".chip-opt")[1]);
-    document.getElementById("f_web_ui").checked = true;
-    document.getElementById("f_rest_api").checked = true;
-    document.getElementById("f_ota").checked = true;
-    document.getElementById("f_gpio_ctrl").checked = true;
-    document.getElementById("f_display").checked = true;
-    document.getElementById("f_usb_otg").checked = true;
-    document.getElementById("f_spiram").checked = true;
-    document.getElementById("device_id").value = "esp32s3_dock";
-    document.getElementById("mdns_host").value = "s3-dock";
-  } else if (type === "esp8266_switch") {
-    selectChip("esp8266", document.querySelectorAll(".chip-opt")[4]);
-    document.getElementById("f_web_ui").checked = true;
-    document.getElementById("f_rest_api").checked = true;
-    document.getElementById("f_ota").checked = true;
-    document.getElementById("f_gpio_ctrl").checked = true;
-    document.getElementById("f_storage").checked = false;
-    document.getElementById("f_display").checked = false;
-    document.getElementById("f_spiram").checked = false;
-    document.getElementById("f_camera").checked = false;
-    document.getElementById("device_id").value = "esp8266_switch";
-    document.getElementById("mdns_host").value = "esp8266-node";
-  }
-  updateEndpointsPreview();
-}
-
-async function triggerBuild() {
-  const btn = document.getElementById("btn-build");
-  btn.disabled = true;
-  document.getElementById("result-box").style.display = "none";
-  document.getElementById("compile-status").textContent = "正在构建...";
-  document.getElementById("compile-status").className = "status-pill building";
-
-  const payload = {
-    name: document.getElementById("device_id").value || "custom_node",
-    target: selectedChip,
-    features: {
-      http_server: true,
-      web_ui: document.getElementById("f_web_ui").checked,
-      rest_api: document.getElementById("f_rest_api").checked,
-      ota: document.getElementById("f_ota").checked,
-      camera: document.getElementById("f_camera").checked,
-      gpio_ctrl: document.getElementById("f_gpio_ctrl").checked,
-      storage: document.getElementById("f_storage").checked,
-      display: document.getElementById("f_display").checked,
-      usb_otg: document.getElementById("f_usb_otg").checked,
-      pc_monitor: document.getElementById("f_pc_monitor") ? document.getElementById("f_pc_monitor").checked : false,
-      joystick: document.getElementById("f_joystick") ? document.getElementById("f_joystick").checked : false
-    },
-    hardware: {
-      cpu_freq_mhz: (selectedChip === "esp32s3") ? 240 : 160,
-      spiram: document.getElementById("f_spiram").checked,
-      flash_size: "4MB"
-    },
-    defaults: {
-      wifi_ssid: document.getElementById("wifi_ssid").value,
-      wifi_pass: document.getElementById("wifi_pass").value,
-      device_id: document.getElementById("device_id").value,
-      mdns_host: document.getElementById("mdns_host").value
-    }
-  };
-
-  try {
-    const res = await fetch("/api/build", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      alert("❌ 参数互锁校验未通过: " + data.error);
-      btn.disabled = false;
-      document.getElementById("compile-status").textContent = "校验拒绝";
-      document.getElementById("compile-status").className = "status-pill failed";
-      return;
-    }
-    pollStatus();
-  } catch(e) {
-    alert("请求失败: " + e);
-    btn.disabled = false;
-  }
-}
-
-function pollStatus() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    try {
-      const res = await fetch("/api/status");
-      const st = await res.json();
-      const box = document.getElementById("log-box");
-      box.textContent = st.log || "编译中...";
-      box.scrollTop = box.scrollHeight;
-
-      if (st.status === "success") {
-        clearInterval(pollTimer);
-        document.getElementById("btn-build").disabled = false;
-        const btnFlash = document.getElementById("btn-flash-serial");
-        if (btnFlash) btnFlash.disabled = false;
-        const btnOta = document.getElementById("btn-push-ota");
-        if (btnOta) btnOta.disabled = false;
-        document.getElementById("compile-status").textContent = "构建成功";
-        document.getElementById("compile-status").className = "status-pill success";
-        currentArtifact = st.artifact_name;
-        document.getElementById("res-filename").textContent = st.artifact_name;
-        document.getElementById("res-filesize").textContent = "(" + (st.artifact_size/1024).toFixed(1) + " KB)";
-        document.getElementById("result-box").style.display = "flex";
-        refreshComPorts();
-      } else if (st.status === "flashing") {
-        document.getElementById("compile-status").textContent = "正在串口烧录...";
-        document.getElementById("compile-status").className = "status-pill building";
-      } else if (st.status === "failed") {
-        clearInterval(pollTimer);
-        document.getElementById("btn-build").disabled = false;
-        const btnFlash = document.getElementById("btn-flash-serial");
-        if (btnFlash) btnFlash.disabled = false;
-        const btnOta = document.getElementById("btn-push-ota");
-        if (btnOta) btnOta.disabled = false;
-        document.getElementById("compile-status").textContent = "任务失败";
-        document.getElementById("compile-status").className = "status-pill failed";
-      }
-    } catch(e) {}
-  }, 1000);
-}
-
-function downloadFirmware() {
-  if (currentArtifact) {
-    window.location.href = "/api/download?file=" + encodeURIComponent(currentArtifact);
-  }
-}
-
-async function refreshComPorts() {
-  try {
-    const res = await fetch("/api/ports");
-    const data = await res.json();
-    const sel = document.getElementById("flash-port-select");
-    if (!sel) return;
-    sel.innerHTML = "";
-    if (!data.ports || data.ports.length === 0) {
-      sel.innerHTML = "<option value=''>未检测到在线串口</option>";
-      return;
-    }
-    data.ports.forEach(p => {
-      const opt = document.createElement("option");
-      opt.value = p.port;
-      opt.textContent = `${p.port} (${p.desc})`;
-      if (p.port === "COM11") opt.selected = true;
-      sel.appendChild(opt);
-    });
-  } catch(e) {}
-}
-
-async function triggerSerialFlash() {
-  const port = document.getElementById("flash-port-select").value;
-  if (!port) {
-    alert("请先选择要烧录的目标串口！");
-    return;
-  }
-  const baud = document.getElementById("flash-baud-select").value;
-  const full = document.getElementById("flash-full-image").checked;
-  const btn = document.getElementById("btn-flash-serial");
-  btn.disabled = true;
-
-  document.getElementById("compile-status").textContent = "正在串口烧录...";
-  document.getElementById("compile-status").className = "status-pill building";
-
-  try {
-    const res = await fetch("/api/flash_serial", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        port: port,
-        baud: baud,
-        file: currentArtifact,
-        target: selectedChip,
-        full: full
-      })
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      alert("启动烧录失败: " + data.error);
-      btn.disabled = false;
-      return;
-    }
-    pollStatus();
-  } catch(e) {
-    alert("请求异常: " + e);
-    btn.disabled = false;
-  }
-}
-
-async function triggerOtaPush() {
-  const ip = document.getElementById("ota-target-ip").value.trim();
-  if (!ip) {
-    alert("请输入目标设备 IP 地址！");
-    return;
-  }
-  const btn = document.getElementById("btn-push-ota");
-  btn.disabled = true;
-
-  document.getElementById("compile-status").textContent = "正在推送 OTA...";
-  document.getElementById("compile-status").className = "status-pill building";
-
-  const box = document.getElementById("log-box");
-  box.textContent += `\n>>> 正在向 http://${ip}/api/ota/upload 推送固件 [${currentArtifact}]...\n`;
-  box.scrollTop = box.scrollHeight;
-
-  try {
-    const res = await fetch("/api/push_ota?ip=" + encodeURIComponent(ip) + "&file=" + encodeURIComponent(currentArtifact));
-    const data = await res.json();
-    if (data.ok) {
-      box.textContent += `🎉 [OTA 成功] 固件上传完成！设备正在重启切换新固件！\n`;
-      document.getElementById("compile-status").textContent = "OTA 成功";
-      document.getElementById("compile-status").className = "status-pill success";
-    } else {
-      box.textContent += `❌ [OTA 失败] ${data.error}\n`;
-      document.getElementById("compile-status").textContent = "OTA 失败";
-      document.getElementById("compile-status").className = "status-pill failed";
-    }
-    box.scrollTop = box.scrollHeight;
-  } catch(e) {
-    box.textContent += `❌ 请求异常: ${e}\n`;
-  }
-  btn.disabled = false;
-}
-
-// 页面加载默认初始化
-window.onload = function() {
-  selectChip("esp32", document.querySelectorAll(".chip-opt")[0]);
-  document.querySelectorAll(".feat-box input[type=checkbox]").forEach(cb => {
-    cb.addEventListener("change", updateEndpointsPreview);
-  });
-  updateEndpointsPreview();
-  refreshComPorts();
-};
-</script>
-</body>
-</html>
-"""
-
-def run_build_task(payload):
+def run_build_task(payload, hub_port=None):
     global s_current_task
+    eff_port = int(hub_port or SERVER_PORT)
     with s_lock:
         s_current_task["status"] = "building"
         s_current_task["log"] = ">>> [Cloud Compiler] Validating SoC capabilities and initializing job...\n"
@@ -748,10 +99,8 @@ def run_build_task(payload):
         features = payload.get("features", {})
         hardware = payload.get("hardware", {})
 
-        # Validation
         build_flavor.validate_soc_compatibility(target, features, hardware)
 
-        # Save temp profile
         profile_name = payload.get("name", "custom_build")
         profile_path = os.path.join(PROFILES_DIR, f"{profile_name}.yaml")
         os.makedirs(PROFILES_DIR, exist_ok=True)
@@ -762,43 +111,123 @@ def run_build_task(payload):
         with s_lock:
             s_current_task["log"] += f"✅ SoC compatibility validated for [{target}]\n"
             s_current_task["log"] += f"Saved profile to {profile_path}\n"
-            s_current_task["log"] += "Invoking build_flavor on Feiniu NAS pipeline...\n"
 
-        # Generate sdkconfig.defaults
+        # Branch A: ESP8266 PlatformIO lightweight build
+        if target == "esp8266":
+            with s_lock:
+                s_current_task["log"] += (
+                    "\n===========================================================================\n"
+                    "ℹ️ [ESP8266 专属轻量内核流水线] 目标架构: Xtensa L106 (32-bit 单核)\n"
+                    "===========================================================================\n"
+                )
+            pio_dir = os.path.join(PROJECT_ROOT, "esp8266_port")
+            pio_exe = os.path.join(os.path.expanduser("~"), ".platformio", "penv", "Scripts", "pio.exe")
+            built_8266 = None
+
+            if os.path.isdir(pio_dir) and os.path.isfile(pio_exe):
+                flags = []
+                if features.get("web_ui", True): flags.append("-DFEATURE_WEB_UI=1")
+                if features.get("rest_api", True): flags.append("-DFEATURE_REST_API=1")
+                if features.get("gpio_ctrl", True): flags.append("-DFEATURE_GPIO_CTRL=1")
+                if features.get("ota", True): flags.append("-DFEATURE_OTA=1")
+                if features.get("fleet_agent", True): flags.append("-DFEATURE_FLEET_AGENT=1")
+                defs = payload.get("defaults", {})
+                wifi_s = defs.get("wifi_ssid", "1")
+                wifi_p = defs.get("wifi_pass", "11111111")
+                flags.append(f'-DDEFAULT_WIFI_SSID=\\"{wifi_s}\\"')
+                flags.append(f'-DDEFAULT_WIFI_PASS=\\"{wifi_p}\\"')
+                if defs.get("mdns_host"):
+                    flags.append(f'-DDEFAULT_MDNS_HOST=\\"{defs["mdns_host"]}\\"')
+                hub_u = defs.get("hub_url") or f"http://{mdns_advertiser.get_lan_ip()}:{eff_port}"
+                flags.append(f'-DDEFAULT_HUB_URL=\\"{hub_u}\\"')
+
+                env = os.environ.copy()
+                env["PLATFORMIO_BUILD_FLAGS"] = " ".join(flags)
+                proc = subprocess.Popen(
+                    [pio_exe, "run", "-d", pio_dir],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", env=env
+                )
+                for line in iter(proc.stdout.readline, ""):
+                    with s_lock:
+                        s_current_task["log"] += line
+                proc.wait()
+                if proc.returncode == 0:
+                    cand = os.path.join(pio_dir, ".pio", "build", "esp8266_unified", "firmware.bin")
+                    if os.path.isfile(cand):
+                        built_8266 = cand
+
+            if not built_8266:
+                src_8266 = os.path.join(DIST_DIR, "esp8266_smart_switch.bin")
+                if not os.path.isfile(src_8266):
+                    src_tester = os.path.abspath(os.path.join(PROJECT_ROOT, "..", "..", "esp8266-batch-tester", "firmware.bin"))
+                    if os.path.isfile(src_tester):
+                        os.makedirs(DIST_DIR, exist_ok=True)
+                        shutil.copyfile(src_tester, src_8266)
+                if os.path.isfile(src_8266):
+                    built_8266 = src_8266
+
+            if built_8266:
+                meta = build_flavor.archive_build_artifacts(profile_name, payload, built_8266)
+                with s_lock:
+                    s_current_task["status"] = "success"
+                    s_current_task["artifact_name"] = f"{profile_name}.bin"
+                    s_current_task["artifact_size"] = meta["size"]
+                    s_current_task["log"] += f"\n🎉 [ESP8266 构建完成] {profile_name}.bin ({meta['size']/1024:.1f} KB)\n"
+                return
+            else:
+                with s_lock:
+                    s_current_task["status"] = "failed"
+                    s_current_task["log"] += "\n❌ 未能产出 ESP8266 固件产物！\n"
+                return
+
+        # Branch B: Modern ESP-IDF chips (ESP32 / S3 / C3 / C2)
+        pipeline_path = os.path.join(PROJECT_ROOT, "pipeline.yaml")
+        pipeline_data = {
+            "name": f"esp_unified_{profile_name}",
+            "target": target,
+            "flash": {"port": "COM11", "baud": 921600, "auto_flash": False},
+        }
+        with open(pipeline_path, "w", encoding="utf-8") as f:
+            import yaml
+            yaml.dump(pipeline_data, f)
+
+        with s_lock:
+            s_current_task["log"] += f"Invoking build_flavor on Feiniu NAS pipeline (target={target})...\n"
+
         cfg = build_flavor.generate_sdkconfig_defaults(payload)
         with open(os.path.join(PROJECT_ROOT, "sdkconfig.defaults"), "w", encoding="utf-8") as f:
             f.write(cfg)
+        build_flavor.clean_stale_sdkconfig()
 
-        # Trigger idf-build
         proc = subprocess.Popen(
-            ["idf-build"],
+            ["idf-build", "-t", target],
             cwd=PROJECT_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             shell=True,
             text=True,
-            bufsize=1
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
         )
-
-        for line in iter(proc.stdout.readline, ''):
+        for line in iter(proc.stdout.readline, ""):
             with s_lock:
                 s_current_task["log"] += line
-
         proc.wait()
 
         if proc.returncode == 0:
-            os.makedirs(DIST_DIR, exist_ok=True)
             built_bin = os.path.join(PROJECT_ROOT, "build", "esp_unified_framework.bin")
-            dist_bin = os.path.join(DIST_DIR, f"{profile_name}.bin")
             if os.path.isfile(built_bin):
-                import shutil
-                shutil.copyfile(built_bin, dist_bin)
-                size = os.path.getsize(dist_bin)
+                meta = build_flavor.archive_build_artifacts(profile_name, payload, built_bin)
                 with s_lock:
                     s_current_task["status"] = "success"
                     s_current_task["artifact_name"] = f"{profile_name}.bin"
-                    s_current_task["artifact_size"] = size
-                    s_current_task["log"] += f"\n🎉 Build Finished! Bespoke firmware ready: {profile_name}.bin ({size/1024:.1f} KB)\n"
+                    s_current_task["artifact_size"] = meta["size"]
+                    s_current_task["log"] += (
+                        f"\n🎉 Build Finished! {profile_name}.bin ({meta['size']/1024:.1f} KB)\n"
+                        f"   Target={meta['target']} | Board={meta['board']} | Flash={meta['flash_size']} | SHA256={meta['sha256'][:16]}...\n"
+                    )
             else:
                 with s_lock:
                     s_current_task["status"] = "failed"
@@ -807,14 +236,17 @@ def run_build_task(payload):
             with s_lock:
                 s_current_task["status"] = "failed"
                 s_current_task["log"] += f"\n❌ Pipeline failed with exit code {proc.returncode}\n"
-
     except Exception as e:
         with s_lock:
             s_current_task["status"] = "failed"
             s_current_task["log"] += f"\n❌ Exception: {e}\n"
 
-def run_serial_flash_task(port, baud, file_name, target, full_flash=True):
+
+def run_serial_flash_task(port, baud, file_name, target, full_flash=True,
+                          auto_provision=True, wifi_ssid="1", wifi_pass="11111111", mdns_host="esp-node",
+                          hub_port=None):
     global s_current_task
+    eff_port = int(hub_port or SERVER_PORT)
     with s_lock:
         s_current_task["status"] = "flashing"
         s_current_task["log"] += f"\n===========================================================================\n"
@@ -828,73 +260,191 @@ def run_serial_flash_task(port, baud, file_name, target, full_flash=True):
             s_current_task["log"] += f"❌ 固件文件不存在: {dist_bin}\n"
         return
 
-    cmd = [sys.executable, "-m", "esptool", "--port", port, "--baud", str(baud)]
-    if target and target != "generic":
-        cmd += ["--chip", target.lower().replace("-", "")]
+    with s_lock:
+        s_current_task["log"] += f"🔍 [预检] 正在探测目标串口硬件 ({port})...\n"
 
-    if target == "esp8266":
-        cmd += ["write-flash", "0x0", dist_bin]
+    detected_chip = ""
+    detected_mac = ""
+    detected_flash_mb = None
+
+    probe_cmd = [sys.executable, "-m", "esptool", "--port", port, "--baud", "115200", "flash-id"]
+    try:
+        probe_res = subprocess.run(
+            probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=10, encoding="utf-8", errors="replace"
+        )
+        probe_output = probe_res.stdout
+        for line in probe_output.splitlines():
+            if "Chip type:" in line or "Chip is" in line:
+                detected_chip = line.split(":")[-1].strip() if ":" in line else line.strip()
+            if "MAC:" in line:
+                m_mac = re.search(r"MAC:\s*([0-9a-fA-F:]{17})", line)
+                if m_mac:
+                    detected_mac = m_mac.group(1).upper()
+            if "Detected flash size:" in line:
+                size_str = line.split(":")[-1].strip()
+                if "MB" in size_str:
+                    try:
+                        detected_flash_mb = float(size_str.replace("MB", "").strip())
+                    except ValueError:
+                        pass
+
+        if detected_chip:
+            with s_lock:
+                s_current_task["log"] += f"  ↳ 硬件在线: {detected_chip} | MAC={detected_mac} | Flash={detected_flash_mb or '?'}MB\n"
+
+            meta = build_flavor.load_artifact_meta(file_name)
+            fw_target = meta["target"].lower() if meta and meta.get("target") else target.lower()
+
+            phys_norm = detected_chip.upper().replace("-", "")
+            if "ESP8266" in phys_norm:
+                expected_family = "ESP8266"
+            elif "ESP32S3" in phys_norm:
+                expected_family = "ESP32S3"
+            elif "ESP32C3" in phys_norm:
+                expected_family = "ESP32C3"
+            elif "ESP32C2" in phys_norm:
+                expected_family = "ESP32C2"
+            elif "ESP32S2" in phys_norm:
+                expected_family = "ESP32S2"
+            else:
+                expected_family = "ESP32"
+
+            fw_norm = fw_target.upper().replace("-", "")
+            if fw_norm != expected_family and not ("ESP8266" in file_name.lower() and expected_family == "ESP8266"):
+                with s_lock:
+                    s_current_task["status"] = "failed"
+                    s_current_task["log"] += (
+                        f"\n⛔ [安全拦截] 芯片架构与固件严重错配！\n"
+                        f"  - 端口 {port} 物理芯片: {detected_chip} ({expected_family})\n"
+                        f"  - 所选固件目标架构: {fw_norm}\n"
+                    )
+                return
+
+            fw_bytes = os.path.getsize(dist_bin)
+            if detected_flash_mb:
+                max_bytes = int(detected_flash_mb * 1024 * 1024)
+                if fw_bytes > max_bytes:
+                    with s_lock:
+                        s_current_task["status"] = "failed"
+                        s_current_task["log"] += f"\n⛔ [安全拦截] 固件大小 ({fw_bytes/1024:.1f}KB) 超过物理 Flash ({detected_flash_mb}MB)！\n"
+                    return
+    except Exception as pe:
         with s_lock:
-            s_current_task["log"] += f"芯片类型: ESP8266 (烧录地址 @ 0x0)\n"
+            s_current_task["log"] += f"  ↳ 硬件探测警告 ({pe})，继续烧录...\n"
+
+    meta = build_flavor.load_artifact_meta(file_name)
+    effective_target = meta["target"].lower() if meta and meta.get("target") else target.lower()
+
+    # Auto pre-provisioning: generate NVS image + register in Fleet Hub DB
+    nvs_prov_path = None
+    prov_dev_id = None
+    if auto_provision and detected_mac:
+        mac_tail = detected_mac.replace(":", "").lower()[-6:]
+        prov_dev_id = f"{effective_target}-{mac_tail}"
+        dev_secret = "" if effective_target == "esp8266" else secrets.token_hex(16)
+        lan_ip = mdns_advertiser.get_lan_ip()
+        hub_url = f"http://{lan_ip}:{eff_port}"
+
+        hub_db.provision_device(
+            device_id=prov_dev_id,
+            mac=detected_mac,
+            chip=detected_chip or effective_target.upper(),
+            flash_mb=int(detected_flash_mb or 4),
+            board=meta.get("board", "auto") if meta else "auto",
+            device_secret=dev_secret,
+            hub_url=hub_url,
+            allow_empty_secret=(effective_target == "esp8266"),
+        )
+
+        if effective_target != "esp8266":
+            prov_dir = os.path.join(PROJECT_ROOT, "data", "nvs_prov")
+            nvs_prov_path = os.path.join(prov_dir, f"{prov_dev_id}.bin")
+            nvs_gen.generate_nvs_provision_bin(nvs_prov_path, {
+                "wifi_ssid": wifi_ssid,
+                "wifi_pass": wifi_pass,
+                "device_id": prov_dev_id,
+                "mdns_host": f"{effective_target}-{mac_tail}",
+                "hub_url": hub_url,
+                "device_secret": dev_secret,
+                "web_port": 80,
+                "config_ver": 1,
+            })
+        with s_lock:
+            s_current_task["log"] += f"🪪 [出厂预置] 已生成唯一身份 {prov_dev_id} 并预注册至 Fleet Hub ({hub_url})\n"
+
+    cmd = [sys.executable, "-m", "esptool", "--port", port, "--baud", str(baud)]
+    if effective_target and effective_target != "generic":
+        cmd += ["--chip", effective_target.replace("-", "")]
+
+    if effective_target == "esp8266":
+        cmd += ["write-flash", "0x0", dist_bin]
     else:
-        build_dir = os.path.join(PROJECT_ROOT, "build")
-        bootloader_bin = os.path.join(build_dir, "bootloader", "bootloader.bin")
+        base_name = file_name[:-4] if file_name.endswith(".bin") else file_name
+        bundle_dir = os.path.join(DIST_DIR, "bundles", base_name)
+        build_dir = bundle_dir if os.path.isdir(bundle_dir) else os.path.join(PROJECT_ROOT, "build")
+
+        bootloader_bin = os.path.join(build_dir, "bootloader.bin")
         if not os.path.isfile(bootloader_bin):
-            bootloader_bin = os.path.join(build_dir, "bootloader.bin")
-        pt_bin = os.path.join(build_dir, "partition_table", "partition-table.bin")
+            bootloader_bin = os.path.join(build_dir, "bootloader", "bootloader.bin")
+        pt_bin = os.path.join(build_dir, "partition-table.bin")
         if not os.path.isfile(pt_bin):
-            pt_bin = os.path.join(build_dir, "partition-table.bin")
+            pt_bin = os.path.join(build_dir, "partition_table", "partition-table.bin")
         ota_data = os.path.join(build_dir, "ota_data_initial.bin")
+        bl_offset = "0x0" if effective_target in ["esp32c3", "esp32s3", "esp32c2"] else "0x1000"
 
-        bl_offset = "0x0" if target in ["esp32c3", "esp32s3", "esp32c2"] else "0x1000"
-
+        flash_items = []
         if full_flash and os.path.isfile(bootloader_bin) and os.path.isfile(pt_bin):
-            flash_items = [
-                bl_offset, bootloader_bin,
-                "0x8000", pt_bin,
-                "0x10000", dist_bin
-            ]
+            flash_items.extend([bl_offset, bootloader_bin, "0x8000", pt_bin])
             if os.path.isfile(ota_data):
                 flash_items.extend(["0xd000", ota_data])
-            cmd += ["write-flash"] + flash_items
+            if nvs_prov_path and os.path.isfile(nvs_prov_path):
+                flash_items.extend(["0x9000", nvs_prov_path])
+            flash_items.extend(["0x10000", dist_bin])
             with s_lock:
-                s_current_task["log"] += f"模式: 全量完整刷写 (Bootloader@{bl_offset} + 双分区表@0x8000 + 固件@0x10000)\n"
+                s_current_task["log"] += f"模式: 全量刷写 (BL@{bl_offset} + NVS预置 + PT@0x8000 + App@0x10000)\n"
         else:
-            cmd += ["write-flash", "0x10000", dist_bin]
+            if nvs_prov_path and os.path.isfile(nvs_prov_path):
+                flash_items.extend(["0x9000", nvs_prov_path])
+            flash_items.extend(["0x10000", dist_bin])
             with s_lock:
-                s_current_task["log"] += f"模式: 仅更新应用固件 (固件@0x10000)\n"
+                s_current_task["log"] += f"模式: 仅更新应用固件 + NVS预置\n"
+
+        cmd += ["write-flash"] + flash_items
 
     try:
         proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding="utf-8",
-            errors="replace"
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, encoding="utf-8", errors="replace"
         )
-        for line in iter(proc.stdout.readline, ''):
+        for line in iter(proc.stdout.readline, ""):
             with s_lock:
                 s_current_task["log"] += line
-
         proc.wait()
         if proc.returncode == 0:
             with s_lock:
                 s_current_task["status"] = "success"
-                s_current_task["log"] += f"\n🎉 [烧录成功] 芯片已通过 RTS/DTR 自动硬复位！固件启动运行中！\n"
+                s_current_task["log"] += f"\n🎉 [烧录成功] 芯片已硬复位！设备 {prov_dev_id or ''} 上电后将自动接入设备大盘！\n"
         else:
             with s_lock:
                 s_current_task["status"] = "failed"
-                s_current_task["log"] += f"\n❌ [烧录失败] 退出代码: {proc.returncode}\n提示：若转接板无自动下载电路（如 ESP32-CAM），请长按 IO0 键并点按 RST 键进入下载模式！\n"
+                s_current_task["log"] += f"\n❌ [烧录失败] Exit={proc.returncode}\n"
     except Exception as e:
         with s_lock:
             s_current_task["status"] = "failed"
             s_current_task["log"] += f"\n❌ 烧录进程异常: {e}\n"
 
+
 class CompilerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+        self.end_headers()
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -903,6 +453,9 @@ class CompilerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(HTML_PAGE.encode("utf-8"))
+        elif parsed.path.startswith("/api/fleet/"):
+            if not fleet_router.handle_get(self, parsed):
+                self.send_error(404)
         elif parsed.path == "/api/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -950,13 +503,19 @@ class CompilerHandler(BaseHTTPRequestHandler):
             try:
                 with open(fp, "rb") as f:
                     bin_data = f.read()
+                sha256 = build_flavor.compute_sha256(fp)
                 req = urllib.request.Request(
                     f"http://{ip}/api/ota/upload",
                     data=bin_data,
-                    headers={"Content-Type": "application/octet-stream", "Content-Length": str(len(bin_data))}
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(len(bin_data)),
+                        "X-Firmware-SHA256": sha256,
+                    },
                 )
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    res_body = r.read().decode("utf-8")
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(req, timeout=60) as r:
+                    r.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -970,15 +529,23 @@ class CompilerHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/api/build":
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len).decode("utf-8")
-            payload = json.loads(body)
+        content_len = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_len).decode("utf-8", "replace") if content_len > 0 else "{}"
+        try:
+            payload = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self.send_error(400, "Invalid JSON")
+            return
 
+        if self.path.startswith("/api/fleet/"):
+            if not fleet_router.handle_post(self, self.path, payload, server_port=SERVER_PORT):
+                self.send_error(404)
+            return
+
+        if self.path == "/api/build":
             target = payload.get("target", "esp32")
             features = payload.get("features", {})
             hardware = payload.get("hardware", {})
-
             try:
                 build_flavor.validate_soc_compatibility(target, features, hardware)
             except ValueError as val_err:
@@ -988,8 +555,7 @@ class CompilerHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": False, "error": str(val_err)}).encode("utf-8"))
                 return
 
-            t = threading.Thread(target=run_build_task, args=(payload,))
-            t.daemon = True
+            t = threading.Thread(target=run_build_task, args=(payload,), daemon=True)
             t.start()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -997,17 +563,21 @@ class CompilerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"ok":true,"message":"Build task launched"}')
         elif self.path == "/api/flash_serial":
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len).decode("utf-8")
-            payload = json.loads(body)
-            port = payload.get("port", "COM11")
-            baud = int(payload.get("baud", 921600))
-            file_name = payload.get("file", "")
-            target = payload.get("target", "esp32")
-            full_flash = payload.get("full", True)
-
-            t = threading.Thread(target=run_serial_flash_task, args=(port, baud, file_name, target, full_flash))
-            t.daemon = True
+            t = threading.Thread(
+                target=run_serial_flash_task,
+                args=(
+                    payload.get("port", "COM11"),
+                    int(payload.get("baud", 921600)),
+                    payload.get("file", ""),
+                    payload.get("target", "esp32"),
+                    payload.get("full", True),
+                    payload.get("auto_provision", True),
+                    payload.get("wifi_ssid", "1"),
+                    payload.get("wifi_pass", "11111111"),
+                    payload.get("mdns_host", "esp-node"),
+                ),
+                daemon=True,
+            )
             t.start()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1015,18 +585,28 @@ class CompilerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"ok":true,"message":"Serial flash started"}')
 
+
 def start_server(port=8088):
-    server = HTTPServer(("0.0.0.0", port), CompilerHandler)
+    global SERVER_PORT
+    SERVER_PORT = port
+    hub_db.init_db()
+    adv = mdns_advertiser.MdnsHubAdvertiser(port=port)
+    adv.start()
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), CompilerHandler)
+    lan_ip = mdns_advertiser.get_lan_ip()
     print("===========================================================================")
-    print(f"🚀 LuatOS-Style Visual Web Compiler Running at:")
+    print(f"🚀 ESP Unified Fleet Hub & Cloud Compiler Running:")
     print(f"   Local:   http://localhost:{port}")
-    print(f"   LAN:     http://0.0.0.0:{port}")
+    print(f"   LAN/Hub: http://{lan_ip}:{port}  (mDNS: _esp-hub._tcp)")
     print("===========================================================================")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        adv.stop()
         print("\nShutting down server.")
 
+
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8088
-    start_server(port)
+    p = int(sys.argv[1]) if len(sys.argv) > 1 else 8088
+    start_server(p)

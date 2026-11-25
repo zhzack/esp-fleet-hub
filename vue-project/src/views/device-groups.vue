@@ -24,7 +24,7 @@ const DISPATCH_PRESETS = [
   { id: 'enter', label: '敲击 Enter 回车', payload: { type: 'keyboard_tap', key: 'KEY_ENTER', need_ack: true } },
   { id: 'win_d', label: '切换桌面 (Win+D)', payload: { type: 'keyboard_tap', key: 'KEY_GUI_D', need_ack: true } },
   { id: 'space', label: '敲击 Space 空格', payload: { type: 'keyboard_tap', key: 'KEY_SPACE', need_ack: true } },
-  { id: 'text', label: '广播问候文本', payload: { type: 'text', content: 'Broadcast from HID Gateway', interval_ms: 10, need_ack: true } },
+  { id: 'text', label: '广播问候文本', payload: { type: 'text', content: 'Broadcast from ESP Fleet Hub', interval_ms: 10, need_ack: true } },
   { id: 'click', label: '模拟鼠标左键', payload: { type: 'mouse_click', button: 1, need_ack: true } },
   { id: 'custom', label: '自定义 JSON', payload: { type: 'custom', data: {} } },
 ]

@@ -12,6 +12,7 @@
 
 #if CONFIG_FEATURE_PC_MONITOR
 
+#include "cJSON.h"
 #include "hal_st7735.h"
 #include "hal_joystick.h"
 
@@ -43,6 +44,7 @@ static portMUX_TYPE s_metrics_mux = portMUX_INITIALIZER_UNLOCKED;
 static char s_action_badge[16] = "";
 static int64_t s_action_badge_until_ms = 0;
 static char s_last_key_name[16] = "NONE";
+static uint32_t s_joystick_seq = 0;
 static bool s_need_full_redraw = true;
 
 static void parse_packet(const char *buf) {
@@ -54,78 +56,90 @@ static void parse_packet(const char *buf) {
     char uptime[16] = {0};
     char time_str[16] = {0};
 
-    // 1. JSON Format Support: {"cpu": 25, "ram": 60, ...}
-    const char *p_cpu = strstr(buf, "\"cpu\":");
-    if (p_cpu) cpu = strtof(p_cpu + 6, NULL);
+    // 1. Standard JSON Format via cJSON: {"cpu": 25, "ram": 60, "down": "2MB/s", ...}
+    cJSON *root = cJSON_Parse(buf);
+    if (root && cJSON_IsObject(root)) {
+        const cJSON *j_cpu = cJSON_GetObjectItem(root, "cpu");
+        const cJSON *j_ram = cJSON_GetObjectItem(root, "ram");
+        const cJSON *j_disk = cJSON_GetObjectItem(root, "disk");
+        const cJSON *j_dl = cJSON_GetObjectItem(root, "down");
+        const cJSON *j_ul = cJSON_GetObjectItem(root, "up");
+        const cJSON *j_up = cJSON_GetObjectItem(root, "uptime");
+        const cJSON *j_t = cJSON_GetObjectItem(root, "time");
 
-    const char *p_ram = strstr(buf, "\"ram\":");
-    if (p_ram) ram = strtof(p_ram + 6, NULL);
+        if (cJSON_IsNumber(j_cpu)) cpu = (float)j_cpu->valuedouble;
+        if (cJSON_IsNumber(j_ram)) ram = (float)j_ram->valuedouble;
+        if (cJSON_IsNumber(j_disk)) disk = (float)j_disk->valuedouble;
+        if (cJSON_IsString(j_dl)) strlcpy(down, j_dl->valuestring, sizeof(down));
+        if (cJSON_IsString(j_ul)) strlcpy(up, j_ul->valuestring, sizeof(up));
+        if (cJSON_IsString(j_up)) strlcpy(uptime, j_up->valuestring, sizeof(uptime));
+        if (cJSON_IsString(j_t)) strlcpy(time_str, j_t->valuestring, sizeof(time_str));
+        cJSON_Delete(root);
+    } else {
+        if (root) cJSON_Delete(root);
+        // 2. Compact Stream Format Support: C:22,R:60,DL:...,UL:...,D:...,UP:...,T:...
+        const char *p = strstr(buf, "C:");
+        if (p) cpu = strtof(p + 2, NULL);
 
-    const char *p_disk = strstr(buf, "\"disk\":");
-    if (p_disk) disk = strtof(p_disk + 7, NULL);
+        p = strstr(buf, "R:");
+        if (p) ram = strtof(p + 2, NULL);
 
-    // 2. Compact Stream Format Support (from pc_agent.py): C:22,R:60,DL:...,UL:...,D:...
-    const char *p = strstr(buf, "C:");
-    if (p && !p_cpu) cpu = strtof(p + 2, NULL);
-
-    p = strstr(buf, "R:");
-    if (p && !p_ram) ram = strtof(p + 2, NULL);
-
-    p = strstr(buf, "DL:");
-    if (p) {
-        p += 3;
-        const char *end = strchr(p, ',');
-        int l = end ? (end - p) : strlen(p);
-        if (l > 15) l = 15;
-        strncpy(down, p, l);
-        down[l] = '\0';
-    }
-
-    p = strstr(buf, "UL:");
-    if (p) {
-        p += 3;
-        const char *end = strchr(p, ',');
-        int l = end ? (end - p) : strlen(p);
-        if (l > 15) l = 15;
-        strncpy(up, p, l);
-        up[l] = '\0';
-    }
-
-    p = strstr(buf, "D:");
-    if (p && *(p-1) != 'L' && !p_disk) disk = strtof(p + 2, NULL);
-
-    p = strstr(buf, "UP:");
-    if (p) {
-        p += 3;
-        const char *end = strchr(p, ',');
-        int l = end ? (end - p) : strlen(p);
-        if (l > 15) l = 15;
-        strncpy(uptime, p, l);
-        uptime[l] = '\0';
-    }
-
-    p = buf;
-    while ((p = strstr(p, "T:")) != NULL) {
-        if (p == buf || *(p - 1) == ',') {
-            p += 2;
+        p = strstr(buf, "DL:");
+        if (p) {
+            p += 3;
             const char *end = strchr(p, ',');
             int l = end ? (end - p) : strlen(p);
             if (l > 15) l = 15;
-            strncpy(time_str, p, l);
-            time_str[l] = '\0';
-            break;
+            strncpy(down, p, l);
+            down[l] = '\0';
         }
-        p += 2;
+
+        p = strstr(buf, "UL:");
+        if (p) {
+            p += 3;
+            const char *end = strchr(p, ',');
+            int l = end ? (end - p) : strlen(p);
+            if (l > 15) l = 15;
+            strncpy(up, p, l);
+            up[l] = '\0';
+        }
+
+        p = strstr(buf, "D:");
+        if (p && (p == buf || *(p - 1) == ',')) disk = strtof(p + 2, NULL);
+
+        p = strstr(buf, "UP:");
+        if (p) {
+            p += 3;
+            const char *end = strchr(p, ',');
+            int l = end ? (end - p) : strlen(p);
+            if (l > 15) l = 15;
+            strncpy(uptime, p, l);
+            uptime[l] = '\0';
+        }
+
+        p = buf;
+        while ((p = strstr(p, "T:")) != NULL) {
+            if (p == buf || *(p - 1) == ',') {
+                p += 2;
+                const char *end = strchr(p, ',');
+                int l = end ? (end - p) : strlen(p);
+                if (l > 15) l = 15;
+                strncpy(time_str, p, l);
+                time_str[l] = '\0';
+                break;
+            }
+            p += 2;
+        }
     }
 
     portENTER_CRITICAL(&s_metrics_mux);
     if (!isnan(cpu)) s_metrics.cpu = cpu;
     if (!isnan(ram)) s_metrics.ram = ram;
     if (!isnan(disk)) s_metrics.disk = disk;
-    if (down[0]) strncpy(s_metrics.down, down, sizeof(s_metrics.down));
-    if (up[0]) strncpy(s_metrics.up, up, sizeof(s_metrics.up));
-    if (uptime[0]) strncpy(s_metrics.uptime, uptime, sizeof(s_metrics.uptime));
-    if (time_str[0]) strncpy(s_metrics.time_str, time_str, sizeof(s_metrics.time_str));
+    if (down[0]) strlcpy(s_metrics.down, down, sizeof(s_metrics.down));
+    if (up[0]) strlcpy(s_metrics.up, up, sizeof(s_metrics.up));
+    if (uptime[0]) strlcpy(s_metrics.uptime, uptime, sizeof(s_metrics.uptime));
+    if (time_str[0]) strlcpy(s_metrics.time_str, time_str, sizeof(s_metrics.time_str));
     s_metrics.last_update_ms = esp_timer_get_time() / 1000;
     portEXIT_CRITICAL(&s_metrics_mux);
 }
@@ -142,10 +156,13 @@ static void on_joystick_event(joystick_key_t key) {
     }
 
     if (badge) {
-        strncpy(s_last_key_name, badge, sizeof(s_last_key_name) - 1);
-        strncpy(s_action_badge, badge, sizeof(s_action_badge) - 1);
+        portENTER_CRITICAL(&s_metrics_mux);
+        s_joystick_seq++;
+        strlcpy(s_last_key_name, badge, sizeof(s_last_key_name));
+        strlcpy(s_action_badge, badge, sizeof(s_action_badge));
         s_action_badge_until_ms = (esp_timer_get_time() / 1000) + 700;
-        ESP_LOGI(TAG, "Joystick Action Triggered: %s", badge);
+        portEXIT_CRITICAL(&s_metrics_mux);
+        ESP_LOGI(TAG, "Joystick Action #%lu Triggered: %s", (unsigned long)s_joystick_seq, badge);
     }
 }
 
@@ -244,8 +261,16 @@ static esp_err_t monitor_push_post_handler(httpd_req_t *req) {
 }
 
 static esp_err_t joystick_state_get_handler(httpd_req_t *req) {
-    char resp[128];
-    snprintf(resp, sizeof(resp), "{\"ok\":true,\"last_key\":\"%s\"}", s_last_key_name);
+    char key_copy[16];
+    uint32_t seq_copy = 0;
+    portENTER_CRITICAL(&s_metrics_mux);
+    strlcpy(key_copy, s_last_key_name, sizeof(key_copy));
+    seq_copy = s_joystick_seq;
+    portEXIT_CRITICAL(&s_metrics_mux);
+
+    char resp[160];
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"seq\":%lu,\"last_key\":\"%s\"}",
+             (unsigned long)seq_copy, key_copy);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, resp);

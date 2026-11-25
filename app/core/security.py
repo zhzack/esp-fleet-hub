@@ -83,6 +83,24 @@ async def get_current_user(
     return user
 
 
+async def get_optional_user(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Return authenticated active user if Bearer token is valid, else None."""
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+        user_id = int(payload.get("sub"))
+    except (JWTError, ValueError, TypeError):
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        return None
+    return user
+
+
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin only")

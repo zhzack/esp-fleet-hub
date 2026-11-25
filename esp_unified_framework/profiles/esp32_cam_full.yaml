@@ -11,6 +11,7 @@ features:
   storage: false
   display: false
   usb_otg: false
+  ws_gateway: true
 hardware:
   cpu_freq_mhz: 160
   spiram: true

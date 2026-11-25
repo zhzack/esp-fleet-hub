@@ -1,6 +1,0 @@
-flash:
-  auto_flash: false
-  baud: 921600
-  port: COM11
-name: esp_unified_esp32_cam_headless
-target: esp32

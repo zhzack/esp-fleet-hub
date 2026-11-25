@@ -1,0 +1,12 @@
+defaults:
+  device_id: esp8266_switch
+features:
+  gpio_ctrl: true
+  ota: true
+  rest_api: true
+  web_ui: true
+hardware:
+  cpu_freq_mhz: 80
+  spiram: false
+name: esp8266_switch
+target: esp8266

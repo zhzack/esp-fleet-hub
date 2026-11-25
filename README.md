@@ -1,9 +1,11 @@
-# HID Gateway Platform
+# ESP Fleet Hub
 
-A scalable, multi-client, multi-device network HID (Human Interface Device) forwarding platform.
+A unified multi-chip IoT device hub, cloud firmware compiler, OTA orchestrator, and wireless HID (Human Interface Device) control platform (`ESP32` / `ESP32-S3` / `ESP32-C3` / `ESP8266`).
 
 ```text
-Client (Web UI / REST / WS) ──> Gateway Server (FastAPI) ──> ESP32-S3 ──> HID Output (USB / BLE)
+Client (Web UI / REST / WS) ──> ESP Fleet Hub (FastAPI) ──> Multi-Chip Fleet (ESP32-S3 / C3 / CAM / 8266)
+                                                              ├── USB/BLE HID Control (/ws/device V2)
+                                                              └── Fleet Provisioning, Shadow Config & Pull OTA (/api/fleet/*)
 ```
 
 ---

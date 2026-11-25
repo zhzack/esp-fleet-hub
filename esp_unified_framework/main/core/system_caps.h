@@ -10,7 +10,9 @@ extern "C" {
 #endif
 
 typedef struct {
-    char chip_name[32];
+    char chip_name[48];
+    char board_name[40];
+    char fw_version[32];
     uint32_t cpu_freq_mhz;
     uint32_t flash_size_mb;
     uint32_t total_heap;
@@ -33,27 +35,15 @@ typedef struct {
     bool feat_display;
     bool feat_usb_otg;
     bool feat_ota;
+    bool feat_pc_monitor;
+    bool feat_joystick;
+    bool feat_fleet_agent;
+    bool feat_serial_cli;
 } system_caps_t;
 
-/**
- * @brief Initialize capabilities query engine
- */
 esp_err_t system_caps_init(void);
-
-/**
- * @brief Snapshot current system state & capabilities
- */
 void system_caps_get(system_caps_t *out_caps);
-
-/**
- * @brief Generate JSON payload describing static & dynamic hardware capabilities
- * @return String length written to dst
- */
 size_t system_caps_to_json(char *dst, size_t max_len);
-
-/**
- * @brief Generate JSON payload describing live performance status (RAM, PSRAM, Uptime, WiFi)
- */
 size_t system_status_to_json(char *dst, size_t max_len);
 
 #ifdef __cplusplus

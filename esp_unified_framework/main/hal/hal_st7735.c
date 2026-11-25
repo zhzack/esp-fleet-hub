@@ -1,5 +1,6 @@
 #include "hal_st7735.h"
 #include "font8x16.h"
+#include "board_pins.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -11,12 +12,12 @@
 #define TAG "ST7735"
 
 #define LCD_HOST        SPI2_HOST
-#define PIN_NUM_MOSI    3
-#define PIN_NUM_CLK     2
-#define PIN_NUM_CS      7
-#define PIN_NUM_DC      6
-#define PIN_NUM_RST     10
-#define PIN_NUM_BCKL    11
+#define PIN_NUM_MOSI    BOARD_ST7735_MOSI
+#define PIN_NUM_CLK     BOARD_ST7735_CLK
+#define PIN_NUM_CS      BOARD_ST7735_CS
+#define PIN_NUM_DC      BOARD_ST7735_DC
+#define PIN_NUM_RST     BOARD_ST7735_RST
+#define PIN_NUM_BCKL    BOARD_ST7735_BCKL
 
 // Commands
 #define ST7735_SWRESET  0x01

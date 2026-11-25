@@ -1,0 +1,23 @@
+defaults:
+  device_id: esp8266_node
+  mdns_host: esp8266-node
+  wifi_pass: '11111111'
+  wifi_ssid: '1'
+features:
+  camera: false
+  display: false
+  gpio_ctrl: true
+  http_server: true
+  joystick: false
+  ota: true
+  pc_monitor: false
+  rest_api: true
+  storage: false
+  usb_otg: false
+  web_ui: true
+hardware:
+  cpu_freq_mhz: 160
+  flash_size: 4MB
+  spiram: false
+name: esp8266_node
+target: esp8266

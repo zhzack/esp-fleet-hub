@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   House, Cpu, VideoCamera, MagicStick, DocumentCopy, SwitchButton, Grid,
-  Aim, Fold, Expand, UserFilled, Lock, Check, SetUp,
+  Aim, Fold, Expand, UserFilled, Lock, Check, SetUp, Connection,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -26,6 +26,7 @@ const menus = [
   { path: '/console', title: '动作控制台', icon: VideoCamera },
   { path: '/macros', title: '宏编排库', icon: MagicStick },
   { path: '/firmware', title: '固件与 OTA', icon: SetUp },
+  { path: '/unified', title: '统一芯片中心', icon: Connection },
   { path: '/logs', title: '动作审计日志', icon: DocumentCopy },
 ]
 
@@ -117,7 +118,7 @@ onBeforeUnmount(() => {
       <div class="aside-brand">
         <div class="brand-logo-wrap">
           <span class="status-dot online"></span>
-          <span v-if="!isCollapse" class="brand-text">HID Gateway</span>
+          <span v-if="!isCollapse" class="brand-text">ESP Fleet Hub</span>
         </div>
       </div>
 

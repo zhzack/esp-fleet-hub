@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "driver/ledc.h"
+#include "cJSON.h"
+#include "board_pins.h"
+#include "app_config.h"
 
 static const char *TAG = "hal_gpio";
 
@@ -11,19 +14,13 @@ static const char *TAG = "hal_gpio";
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
 #define LEDC_DUTY_RES           LEDC_TIMER_8_BIT // 0-255
 #define LEDC_FREQUENCY          5000             // 5 kHz
+#define MAX_MANAGED_PINS        12
 
-// Exposed pins definition
-static gpio_pin_desc_t s_pins[] = {
-    { .pin_num = 33, .label = "LED_STATUS",   .role = GPIO_PIN_ROLE_LED_IND,   .is_output = true,  .supports_pwm = false, .current_val = 1, .current_duty = 0 },
-    { .pin_num = 4,  .label = "FLASH_PWM",    .role = GPIO_PIN_ROLE_FLASH_PWM, .is_output = true,  .supports_pwm = true,  .current_val = 0, .current_duty = 0 },
-    { .pin_num = 12, .label = "GPIO_12",      .role = GPIO_PIN_ROLE_GENERIC,   .is_output = true,  .supports_pwm = false, .current_val = 0, .current_duty = 0 },
-    { .pin_num = 13, .label = "GPIO_13",      .role = GPIO_PIN_ROLE_GENERIC,   .is_output = true,  .supports_pwm = false, .current_val = 0, .current_duty = 0 },
-    { .pin_num = 14, .label = "GPIO_14",      .role = GPIO_PIN_ROLE_GENERIC,   .is_output = true,  .supports_pwm = false, .current_val = 0, .current_duty = 0 },
-    { .pin_num = 15, .label = "GPIO_15",      .role = GPIO_PIN_ROLE_GENERIC,   .is_output = true,  .supports_pwm = false, .current_val = 0, .current_duty = 0 },
-};
-#define NUM_PINS (sizeof(s_pins) / sizeof(s_pins[0]))
-
+static gpio_pin_desc_t s_pins[MAX_MANAGED_PINS];
+static size_t s_num_pins = 0;
 static bool s_ledc_init_done = false;
+static uint8_t s_next_ledc_ch = 0;
+static int s_pwm_channel_map[MAX_MANAGED_PINS];
 
 static void ensure_ledc_init(void)
 {
@@ -41,23 +38,37 @@ static void ensure_ledc_init(void)
 
 esp_err_t hal_gpio_init(void)
 {
-    ESP_LOGI(TAG, "Initializing HAL GPIO subsystem (%d registered pins)...", NUM_PINS);
+    s_num_pins = board_pins_populate_gpio(s_pins, MAX_MANAGED_PINS);
+    s_next_ledc_ch = 0;
 
-    for (size_t i = 0; i < NUM_PINS; i++) {
+    ESP_LOGI(TAG, "Initializing HAL GPIO for board [%s] (%d safe pins)...",
+             board_pins_get_name(), (int)s_num_pins);
+
+    for (size_t i = 0; i < s_num_pins; i++) {
         gpio_pin_desc_t *p = &s_pins[i];
+        s_pwm_channel_map[i] = -1;
 
-        if (p->supports_pwm) {
+        if (!GPIO_IS_VALID_GPIO(p->pin_num)) {
+            ESP_LOGW(TAG, "Skipping invalid GPIO %d on current SoC", p->pin_num);
+            continue;
+        }
+
+        if (p->supports_pwm && s_next_ledc_ch < 4) {
             ensure_ledc_init();
+            ledc_channel_t ch = (ledc_channel_t)(LEDC_CHANNEL_0 + s_next_ledc_ch);
             ledc_channel_config_t ledc_channel = {
                 .speed_mode     = LEDC_MODE,
-                .channel        = LEDC_CHANNEL_0,
+                .channel        = ch,
                 .timer_sel      = LEDC_TIMER,
                 .intr_type      = LEDC_INTR_DISABLE,
                 .gpio_num       = p->pin_num,
                 .duty           = 0,
                 .hpoint         = 0
             };
-            ledc_channel_config(&ledc_channel);
+            if (ledc_channel_config(&ledc_channel) == ESP_OK) {
+                s_pwm_channel_map[i] = (int)ch;
+                s_next_ledc_ch++;
+            }
         } else {
             gpio_config_t io_conf = {
                 .pin_bit_mask = (1ULL << p->pin_num),
@@ -67,30 +78,37 @@ esp_err_t hal_gpio_init(void)
                 .intr_type = GPIO_INTR_DISABLE,
             };
             gpio_config(&io_conf);
-            // Default level: pin 33 is active low (1 is off)
-            if (p->pin_num == 33) {
-                gpio_set_level(33, 1);
+            if (p->is_output) {
+                gpio_set_level(p->pin_num, p->current_val ? 1 : 0);
             }
         }
     }
+
+    // Apply NVS saved pin labels & default levels if present
+    app_config_t cfg;
+    app_config_get(&cfg);
+    if (cfg.gpio_cfg_json[0] == '[') {
+        hal_gpio_apply_config_json(cfg.gpio_cfg_json, false);
+    }
+
     return ESP_OK;
 }
 
-static gpio_pin_desc_t *find_pin(int pin)
+static int find_pin_index(int pin)
 {
-    for (size_t i = 0; i < NUM_PINS; i++) {
-        if (s_pins[i].pin_num == pin) return &s_pins[i];
+    for (size_t i = 0; i < s_num_pins; i++) {
+        if (s_pins[i].pin_num == pin) return (int)i;
     }
-    return NULL;
+    return -1;
 }
 
 esp_err_t hal_gpio_write(int pin, int level)
 {
-    gpio_pin_desc_t *p = find_pin(pin);
-    if (!p) return ESP_ERR_NOT_FOUND;
+    int idx = find_pin_index(pin);
+    if (idx < 0) return ESP_ERR_NOT_FOUND;
+    gpio_pin_desc_t *p = &s_pins[idx];
 
-    if (p->supports_pwm) {
-        // Map 0 to 0% duty, 1 to 10% duty (safe brightness)
+    if (p->supports_pwm && s_pwm_channel_map[idx] >= 0) {
         return hal_gpio_set_pwm(pin, level ? 10 : 0);
     }
 
@@ -103,9 +121,10 @@ esp_err_t hal_gpio_write(int pin, int level)
 
 int hal_gpio_read(int pin)
 {
-    gpio_pin_desc_t *p = find_pin(pin);
-    if (!p) return -1;
-    if (p->supports_pwm) {
+    int idx = find_pin_index(pin);
+    if (idx < 0) return -1;
+    gpio_pin_desc_t *p = &s_pins[idx];
+    if (p->supports_pwm && s_pwm_channel_map[idx] >= 0) {
         return (p->current_duty > 0) ? 1 : 0;
     }
     p->current_val = gpio_get_level(pin);
@@ -114,21 +133,95 @@ int hal_gpio_read(int pin)
 
 esp_err_t hal_gpio_set_pwm(int pin, uint8_t duty_percent)
 {
-    gpio_pin_desc_t *p = find_pin(pin);
-    if (!p || !p->supports_pwm) return ESP_ERR_INVALID_ARG;
+    int idx = find_pin_index(pin);
+    if (idx < 0 || !s_pins[idx].supports_pwm || s_pwm_channel_map[idx] < 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gpio_pin_desc_t *p = &s_pins[idx];
 
-    // Safety clamp: Flashlight on pin 4 must not exceed 25% duty (~70mA max) on USB power
-    if (pin == 4 && duty_percent > 25) {
-        ESP_LOGW(TAG, "Duty %d%% clamped to 25%% for safety against voltage drop", duty_percent);
+    // Safety clamp on Camera Flash LED to avoid USB brownout
+    if (p->role == GPIO_PIN_ROLE_FLASH_PWM && duty_percent > 25) {
+        ESP_LOGW(TAG, "Flash PWM %d%% clamped to 25%% for power safety", duty_percent);
         duty_percent = 25;
+    } else if (duty_percent > 100) {
+        duty_percent = 100;
     }
 
     uint32_t duty_val = (duty_percent * 255) / 100;
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, duty_val);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+    ledc_channel_t ch = (ledc_channel_t)s_pwm_channel_map[idx];
+    ledc_set_duty(LEDC_MODE, ch, duty_val);
+    ledc_update_duty(LEDC_MODE, ch);
 
     p->current_duty = duty_percent;
     p->current_val = (duty_percent > 0) ? 1 : 0;
+    return ESP_OK;
+}
+
+size_t hal_gpio_get_count(void)
+{
+    return s_num_pins;
+}
+
+const gpio_pin_desc_t *hal_gpio_get_pins(size_t *out_count)
+{
+    if (out_count) *out_count = s_num_pins;
+    return s_pins;
+}
+
+esp_err_t hal_gpio_set_label(int pin, const char *label)
+{
+    if (!label) return ESP_ERR_INVALID_ARG;
+    int idx = find_pin_index(pin);
+    if (idx < 0) return ESP_ERR_NOT_FOUND;
+    strlcpy(s_pins[idx].label, label, sizeof(s_pins[idx].label));
+    return ESP_OK;
+}
+
+esp_err_t hal_gpio_apply_config_json(const char *json_str, bool persist)
+{
+    if (!json_str) return ESP_ERR_INVALID_ARG;
+    cJSON *arr = cJSON_Parse(json_str);
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, arr) {
+        if (!cJSON_IsObject(item)) continue;
+        const cJSON *j_pin = cJSON_GetObjectItem(item, "pin");
+        if (!cJSON_IsNumber(j_pin)) continue;
+        int idx = find_pin_index(j_pin->valueint);
+        if (idx < 0) continue;
+
+        const cJSON *j_lbl = cJSON_GetObjectItem(item, "label");
+        if (cJSON_IsString(j_lbl) && j_lbl->valuestring[0]) {
+            strlcpy(s_pins[idx].label, j_lbl->valuestring, sizeof(s_pins[idx].label));
+        }
+        const cJSON *j_def = cJSON_GetObjectItem(item, "default_val");
+        if (cJSON_IsNumber(j_def) && s_pins[idx].is_output) {
+            hal_gpio_write(s_pins[idx].pin_num, j_def->valueint ? 1 : 0);
+        }
+    }
+    cJSON_Delete(arr);
+
+    if (persist) {
+        // Re-serialize normalized overrides (label + current state) to NVS
+        cJSON *save_arr = cJSON_CreateArray();
+        for (size_t i = 0; i < s_num_pins; i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "pin", s_pins[i].pin_num);
+            cJSON_AddStringToObject(o, "label", s_pins[i].label);
+            cJSON_AddNumberToObject(o, "default_val", s_pins[i].current_val);
+            cJSON_AddItemToArray(save_arr, o);
+        }
+        char *printed = cJSON_PrintUnformatted(save_arr);
+        cJSON_Delete(save_arr);
+        if (printed) {
+            app_config_save_gpio_json(printed);
+            cJSON_free(printed);
+        }
+    }
     return ESP_OK;
 }
 
@@ -136,26 +229,35 @@ size_t hal_gpio_pins_to_json(char *dst, size_t max_len)
 {
     if (!dst || max_len < 32) return 0;
 
-    size_t offset = 0;
-    offset += snprintf(dst + offset, max_len - offset, "{\"ok\":true,\"pins\":[");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "board", board_pins_get_name());
+    cJSON *arr = cJSON_AddArrayToObject(root, "pins");
 
-    for (size_t i = 0; i < NUM_PINS; i++) {
-        if (offset >= max_len - 128) break;
+    for (size_t i = 0; i < s_num_pins; i++) {
         gpio_pin_desc_t *p = &s_pins[i];
-        if (!p->supports_pwm) {
+        if (!(p->supports_pwm && s_pwm_channel_map[i] >= 0)) {
             p->current_val = gpio_get_level(p->pin_num);
         }
-
-        offset += snprintf(dst + offset, max_len - offset,
-            "%s{\"pin\":%d,\"label\":\"%s\",\"role\":%d,\"output\":%s,\"pwm\":%s,\"val\":%d,\"duty\":%d}",
-            (i == 0) ? "" : ",",
-            p->pin_num, p->label, (int)p->role,
-            p->is_output ? "true" : "false",
-            p->supports_pwm ? "true" : "false",
-            p->current_val,
-            p->current_duty);
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddNumberToObject(item, "pin", p->pin_num);
+        cJSON_AddStringToObject(item, "label", p->label);
+        cJSON_AddNumberToObject(item, "role", (int)p->role);
+        cJSON_AddBoolToObject(item, "output", p->is_output);
+        cJSON_AddBoolToObject(item, "pwm", p->supports_pwm);
+        cJSON_AddBoolToObject(item, "active_low", p->active_low);
+        cJSON_AddNumberToObject(item, "val", p->current_val);
+        cJSON_AddNumberToObject(item, "duty", p->current_duty);
+        cJSON_AddItemToArray(arr, item);
     }
 
-    offset += snprintf(dst + offset, max_len - offset, "]}");
-    return offset;
+    char *printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
+        dst[0] = '\0';
+        return 0;
+    }
+    size_t len = strlcpy(dst, printed, max_len);
+    cJSON_free(printed);
+    return (len < max_len) ? len : (max_len - 1);
 }

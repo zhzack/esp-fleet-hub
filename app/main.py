@@ -1,3 +1,5 @@
+import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -6,10 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.fleet_compat import router as fleet_compat_router
 from app.api.router import api_router
 from app.api.ws import ws_router
 from app.core.config.config import settings
 from app.core.logger.logger import logger
+from app.services import unified_bridge
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,11 +22,16 @@ async def lifespan(app: FastAPI):
     from app.database.base import Base  # noqa: F401 — 拉齐所有 model
     from app.database.session import engine
     Base.metadata.create_all(bind=engine)
+    if "pytest" not in sys.modules:
+        unified_port = int(os.environ.get("PORT", "8000") or 8000)
+        unified_bridge.start_mdns_hub(port=unified_port)
     logger.info(
         f"🚀 {settings.PROJECT_NAME} v{settings.VERSION} 启动"
         f" | DB={settings.MYSQL_DB} | Queue={settings.QUEUE_BACKEND}"
     )
     yield
+    if "pytest" not in sys.modules:
+        unified_bridge.stop_mdns_hub()
 
 
 app = FastAPI(
@@ -69,6 +78,9 @@ app.add_middleware(
 
 # REST API
 app.include_router(api_router, prefix="/api")
+
+# 统一 IoT 设备协议与 OTA 下载兼容端点 (/api/fleet/*)
+app.include_router(fleet_compat_router, prefix="/api/fleet", tags=["fleet-compat"])
 
 # WebSocket（与 REST 同根，但不挂 /api 前缀，符合设计文档）
 app.include_router(ws_router)

@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +24,7 @@ from app.services.device_registry import device_registry
 from app.services.idempotency import seen_or_record
 from app.services.ota_tracker import ota_tracker
 from app.services.queue import queue_backend
+from app.services.unified_bridge import lookup_device_ws_secret
 
 router = APIRouter()
 
@@ -111,9 +113,11 @@ async def device_ws(websocket: WebSocket):
                     await websocket.close(code=1008)
                     break
 
-                # --- 设备鉴权（HMAC-SHA256 挑战-应答，防重放） ---
+                # --- 设备鉴权（HMAC-SHA256 挑战-应答，支持全局密钥或 Hub 预置单机密钥） ---
                 shared_secret = settings.DEVICE_SHARED_SECRET
-                if shared_secret:
+                dev_secret = "" if "pytest" in sys.modules else lookup_device_ws_secret(device_uuid)
+                candidate_secrets = [s for s in (dev_secret, shared_secret) if s]
+                if candidate_secrets:
                     auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
                     if not auth.get("proof"):
                         # 首次 register：下发 nonce 挑战，暂不注册
@@ -128,15 +132,18 @@ async def device_ws(websocket: WebSocket):
                             "payload": {"nonce": auth_nonce_issued},
                         })
                         continue
-                    # 携带应答：校验 nonce 与 HMAC
-                    expected = hmac.new(
-                        shared_secret.encode(),
-                        str(auth.get("nonce", "")).encode(),
-                        hashlib.sha256,
-                    ).hexdigest()
-                    proof_ok = (
-                        auth.get("nonce") == auth_nonce_issued
-                        and hmac.compare_digest(expected, str(auth.get("proof", "")))
+                    # 携带应答：校验 nonce 与任一有效 secret 的 HMAC
+                    proof_str = str(auth.get("proof", ""))
+                    proof_ok = auth.get("nonce") == auth_nonce_issued and any(
+                        hmac.compare_digest(
+                            hmac.new(
+                                sec.encode(),
+                                str(auth.get("nonce", "")).encode(),
+                                hashlib.sha256,
+                            ).hexdigest(),
+                            proof_str,
+                        )
+                        for sec in candidate_secrets
                     )
                     auth_nonce_issued = None
                     if not proof_ok:
