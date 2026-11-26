@@ -17,6 +17,7 @@ httpd_handle_t web_server_get_handle(void);
  *        Sends HTTP 401 and returns false if unauthorized.
  */
 bool web_server_check_auth(httpd_req_t *req);
+bool web_server_check_read_auth(httpd_req_t *req);
 
 #ifdef __cplusplus
 }

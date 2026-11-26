@@ -16,6 +16,7 @@ import {
   generateTestPatternRgba,
   quantizeRgbaToEpd,
 } from '../src/utils/epdImage.js'
+import { buildUnifiedConfigPatch, normalizeWsConfigForm } from '../src/utils/wsConfig.js'
 import {
   buildTimerPayload,
   createDefaultTimerForm,
@@ -220,4 +221,38 @@ test('epdImage supports monochrome (bw) and tri-color (bwr) quantization and Pac
   const pBw = buildEpdImagePayload({ ...qBw, width: 122, height: 250, colorMode: 'bw', panel: 'epd_213_bw' })
   assert.equal(pBw.color_mode, 'bw')
   assert.equal(pBw.red_b64, undefined)
+})
+
+test('wsConfig helpers clamp intervals and omit blank optional secrets', () => {
+  const norm = normalizeWsConfigForm({
+    ws_enabled: false,
+    ws_gateway_url: 'ws://192.168.50.9:9000/ws/device',
+    ws_reconnect_ms: 100,
+    ws_heartbeat_ms: 200000,
+    hub_fallback_mdns: false,
+    hb_interval_ms: 1500,
+    auth_strict: true,
+  })
+  assert.equal(norm.ws_enabled, false)
+  assert.equal(norm.ws_reconnect_ms, 500)
+  assert.equal(norm.ws_heartbeat_ms, 120000)
+  assert.equal(norm.hb_interval_ms, 2000)
+  assert.equal(norm.hub_fallback_mdns, false)
+  assert.equal(norm.auth_strict, true)
+
+  const patchBlankSecret = buildUnifiedConfigPatch({
+    ...norm,
+    mdns_host: 'esp32s3-aa68ec',
+    api_token: '',
+    wifi_pass: '',
+  })
+  assert.equal(patchBlankSecret.mdns_host, 'esp32s3-aa68ec')
+  assert.equal('api_token' in patchBlankSecret, false)
+  assert.equal('wifi_pass' in patchBlankSecret, false)
+
+  const patchWithSecret = buildUnifiedConfigPatch({
+    ...norm,
+    api_token: 'secret-key-42',
+  })
+  assert.equal(patchWithSecret.api_token, 'secret-key-42')
 })

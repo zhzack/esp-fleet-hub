@@ -78,6 +78,13 @@ static void apply_defaults(app_config_t *cfg)
     strlcpy(cfg->mdns_host, DEFAULT_MDNS_HOST, sizeof(cfg->mdns_host));
     strlcpy(cfg->hub_url, DEFAULT_HUB_URL, sizeof(cfg->hub_url));
     strlcpy(cfg->ws_gateway_url, DEFAULT_WS_GATEWAY_URL, sizeof(cfg->ws_gateway_url));
+    cfg->ws_enabled = true;
+    cfg->hub_fallback_mdns = true;
+    cfg->auth_strict = false;
+    cfg->ws_reconnect_ms = 5000;
+    cfg->ws_heartbeat_ms = 10000;
+    cfg->hb_interval_ms = 12000;
+    cfg->wifi_ap_fail_threshold = 5;
     cfg->web_port = 80;
     cfg->config_ver = 1;
 
@@ -469,6 +476,15 @@ esp_err_t app_config_load(app_config_t *cfg)
 
     uint8_t u8 = 0;
     int8_t i8 = 0;
+    uint32_t u32 = 0;
+    if (nvs_get_u8(h, "ws_en", &u8) == ESP_OK)       cfg->ws_enabled = (u8 != 0);
+    if (nvs_get_u8(h, "hub_fb_mdns", &u8) == ESP_OK) cfg->hub_fallback_mdns = (u8 != 0);
+    if (nvs_get_u8(h, "auth_strict", &u8) == ESP_OK) cfg->auth_strict = (u8 != 0);
+    if (nvs_get_u8(h, "ap_fail_thr", &u8) == ESP_OK && u8 >= 1 && u8 <= 30) cfg->wifi_ap_fail_threshold = u8;
+    if (nvs_get_u32(h, "ws_reconn_ms", &u32) == ESP_OK && u32 >= 500 && u32 <= 60000) cfg->ws_reconnect_ms = u32;
+    if (nvs_get_u32(h, "ws_hb_ms", &u32) == ESP_OK && u32 >= 2000 && u32 <= 120000) cfg->ws_heartbeat_ms = u32;
+    if (nvs_get_u32(h, "hb_int_ms", &u32) == ESP_OK && u32 >= 2000 && u32 <= 120000) cfg->hb_interval_ms = u32;
+
     if (nvs_get_u8(h, "cam_fs", &u8) == ESP_OK) cfg->cam_framesize = u8;
     if (nvs_get_u8(h, "cam_q", &u8) == ESP_OK && u8 >= 4 && u8 <= 63) cfg->cam_quality = u8;
     if (nvs_get_u8(h, "cam_vflip", &u8) == ESP_OK) cfg->cam_vflip = (u8 != 0);
@@ -522,6 +538,13 @@ esp_err_t app_config_save(const app_config_t *cfg)
     nvs_set_str(h, "gpio_cfg",    cfg->gpio_cfg_json);
     nvs_set_u16(h, "web_port",    cfg->web_port);
     nvs_set_u32(h, "cfg_ver",     cfg->config_ver);
+    nvs_set_u8(h,  "ws_en",       cfg->ws_enabled ? 1 : 0);
+    nvs_set_u8(h,  "hub_fb_mdns", cfg->hub_fallback_mdns ? 1 : 0);
+    nvs_set_u8(h,  "auth_strict", cfg->auth_strict ? 1 : 0);
+    nvs_set_u8(h,  "ap_fail_thr", cfg->wifi_ap_fail_threshold);
+    nvs_set_u32(h, "ws_reconn_ms",cfg->ws_reconnect_ms);
+    nvs_set_u32(h, "ws_hb_ms",    cfg->ws_heartbeat_ms);
+    nvs_set_u32(h, "hb_int_ms",   cfg->hb_interval_ms);
     nvs_set_u8(h,  "cam_fs",      cfg->cam_framesize);
     nvs_set_u8(h,  "cam_q",       cfg->cam_quality);
     nvs_set_u8(h,  "cam_vflip",   cfg->cam_vflip ? 1 : 0);
@@ -574,8 +597,16 @@ size_t app_config_to_json(char *dst, size_t max_len)
     cJSON_AddNumberToObject(root, "web_port", s_cfg.web_port);
     cJSON_AddStringToObject(root, "hub_url", s_cfg.hub_url);
     cJSON_AddStringToObject(root, "ws_gateway_url", s_cfg.ws_gateway_url);
+    cJSON_AddBoolToObject(root, "ws_enabled", s_cfg.ws_enabled);
+    cJSON_AddBoolToObject(root, "hub_fallback_mdns", s_cfg.hub_fallback_mdns);
+    cJSON_AddBoolToObject(root, "auth_strict", s_cfg.auth_strict);
+    cJSON_AddNumberToObject(root, "ws_reconnect_ms", s_cfg.ws_reconnect_ms);
+    cJSON_AddNumberToObject(root, "ws_heartbeat_ms", s_cfg.ws_heartbeat_ms);
+    cJSON_AddNumberToObject(root, "hb_interval_ms", s_cfg.hb_interval_ms);
+    cJSON_AddNumberToObject(root, "wifi_ap_fail_threshold", s_cfg.wifi_ap_fail_threshold);
     cJSON_AddBoolToObject(root, "has_device_secret", s_cfg.device_secret[0] != '\0');
-    cJSON_AddBoolToObject(root, "auth_required", s_cfg.api_token[0] != '\0');
+    cJSON_AddBoolToObject(root, "auth_required",
+                          s_cfg.api_token[0] != '\0' || (s_cfg.auth_strict && s_cfg.device_secret[0] != '\0'));
     cJSON_AddNumberToObject(root, "config_ver", s_cfg.config_ver);
 
     cJSON *cam = cJSON_AddObjectToObject(root, "camera");
@@ -639,7 +670,11 @@ esp_err_t app_config_update_from_json_ex(const char *json_str, app_config_change
     const cJSON *j_dev = cJSON_GetObjectItem(root, "device_id");
     if (cJSON_IsString(j_dev) && j_dev->valuestring[0] != '\0' && strcmp(updated.device_id, j_dev->valuestring) != 0) {
         strlcpy(updated.device_id, j_dev->valuestring, sizeof(updated.device_id));
-        if (out_changes) out_changes->mdns_changed = true;
+        if (out_changes) {
+            out_changes->mdns_changed = true;
+            out_changes->ws_changed = true;
+            out_changes->hub_changed = true;
+        }
         dirty = true;
     }
 
@@ -663,18 +698,97 @@ esp_err_t app_config_update_from_json_ex(const char *json_str, app_config_change
     const cJSON *j_hub = cJSON_GetObjectItem(root, "hub_url");
     if (cJSON_IsString(j_hub) && strcmp(updated.hub_url, j_hub->valuestring) != 0) {
         strlcpy(updated.hub_url, j_hub->valuestring, sizeof(updated.hub_url));
+        if (out_changes) {
+            out_changes->hub_changed = true;
+            out_changes->ws_changed = true;
+        }
         dirty = true;
     }
 
     const cJSON *j_gw = cJSON_GetObjectItem(root, "ws_gateway_url");
     if (cJSON_IsString(j_gw) && strcmp(updated.ws_gateway_url, j_gw->valuestring) != 0) {
         strlcpy(updated.ws_gateway_url, j_gw->valuestring, sizeof(updated.ws_gateway_url));
+        if (out_changes) out_changes->ws_changed = true;
         dirty = true;
+    }
+
+    const cJSON *j_ws_en = cJSON_GetObjectItem(root, "ws_enabled");
+    if (cJSON_IsBool(j_ws_en)) {
+        bool b = cJSON_IsTrue(j_ws_en);
+        if (updated.ws_enabled != b) {
+            updated.ws_enabled = b;
+            if (out_changes) out_changes->ws_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_fb = cJSON_GetObjectItem(root, "hub_fallback_mdns");
+    if (cJSON_IsBool(j_fb)) {
+        bool b = cJSON_IsTrue(j_fb);
+        if (updated.hub_fallback_mdns != b) {
+            updated.hub_fallback_mdns = b;
+            if (out_changes) out_changes->hub_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_strict = cJSON_GetObjectItem(root, "auth_strict");
+    if (cJSON_IsBool(j_strict)) {
+        bool b = cJSON_IsTrue(j_strict);
+        if (updated.auth_strict != b) {
+            updated.auth_strict = b;
+            if (out_changes) out_changes->auth_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_wrec = cJSON_GetObjectItem(root, "ws_reconnect_ms");
+    if (cJSON_IsNumber(j_wrec)) {
+        uint32_t v = (uint32_t)(j_wrec->valueint < 500 ? 500 : (j_wrec->valueint > 60000 ? 60000 : j_wrec->valueint));
+        if (updated.ws_reconnect_ms != v) {
+            updated.ws_reconnect_ms = v;
+            if (out_changes) out_changes->ws_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_whb = cJSON_GetObjectItem(root, "ws_heartbeat_ms");
+    if (cJSON_IsNumber(j_whb)) {
+        uint32_t v = (uint32_t)(j_whb->valueint < 2000 ? 2000 : (j_whb->valueint > 120000 ? 120000 : j_whb->valueint));
+        if (updated.ws_heartbeat_ms != v) {
+            updated.ws_heartbeat_ms = v;
+            if (out_changes) out_changes->ws_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_hbi = cJSON_GetObjectItem(root, "hb_interval_ms");
+    if (cJSON_IsNumber(j_hbi)) {
+        uint32_t v = (uint32_t)(j_hbi->valueint < 2000 ? 2000 : (j_hbi->valueint > 120000 ? 120000 : j_hbi->valueint));
+        if (updated.hb_interval_ms != v) {
+            updated.hb_interval_ms = v;
+            if (out_changes) out_changes->hub_changed = true;
+            dirty = true;
+        }
+    }
+
+    const cJSON *j_apthr = cJSON_GetObjectItem(root, "wifi_ap_fail_threshold");
+    if (cJSON_IsNumber(j_apthr)) {
+        uint8_t v = (uint8_t)(j_apthr->valueint < 1 ? 1 : (j_apthr->valueint > 30 ? 30 : j_apthr->valueint));
+        if (updated.wifi_ap_fail_threshold != v) {
+            updated.wifi_ap_fail_threshold = v;
+            dirty = true;
+        }
     }
 
     const cJSON *j_sec = cJSON_GetObjectItem(root, "device_secret");
     if (cJSON_IsString(j_sec) && strcmp(updated.device_secret, j_sec->valuestring) != 0) {
         strlcpy(updated.device_secret, j_sec->valuestring, sizeof(updated.device_secret));
+        if (out_changes) {
+            out_changes->auth_changed = true;
+            out_changes->ws_changed = true;
+            out_changes->hub_changed = true;
+        }
         dirty = true;
     }
 

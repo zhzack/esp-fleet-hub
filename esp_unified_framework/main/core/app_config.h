@@ -48,11 +48,18 @@ typedef struct {
     char mdns_host[33];
     uint16_t web_port;
 
-    // Fleet Hub Registration & Auth
+    // Fleet Hub Registration, External WS Client & Auth (All Dynamic / No Hardcoding)
     char hub_url[96];
     char ws_gateway_url[96];
     char device_secret[65];
     char api_token[33];
+    bool ws_enabled;
+    bool hub_fallback_mdns;
+    bool auth_strict;
+    uint32_t ws_reconnect_ms;
+    uint32_t ws_heartbeat_ms;
+    uint32_t hb_interval_ms;
+    uint8_t wifi_ap_fail_threshold;
     uint32_t config_ver;
 
     // Camera Runtime Parameters
@@ -77,6 +84,8 @@ typedef struct {
     bool gpio_changed;
     bool auth_changed;
     bool display_changed;
+    bool ws_changed;
+    bool hub_changed;
 } app_config_changes_t;
 
 esp_err_t app_config_init(void);

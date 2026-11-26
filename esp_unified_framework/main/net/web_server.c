@@ -13,6 +13,8 @@
 #include "app_config.h"
 #include "log_capture.h"
 #include "wifi_mgr.h"
+#include "fleet_agent.h"
+#include "ws_gateway.h"
 
 #if CONFIG_FEATURE_OTA
 #include "ota_mgr.h"
@@ -58,34 +60,52 @@ static void set_cors_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization");
 }
 
-bool web_server_check_auth(httpd_req_t *req)
+static bool extract_request_token(httpd_req_t *req, char *out, size_t max_len)
 {
-    app_config_t cfg;
-    app_config_get(&cfg);
-    if (cfg.api_token[0] == '\0') {
-        return true; // Open mode when no api_token is configured
-    }
-
-    char provided[64] = {0};
+    if (!out || max_len == 0) return false;
+    out[0] = '\0';
     if (httpd_req_get_hdr_value_len(req, "X-API-Key") > 0) {
-        httpd_req_get_hdr_value_str(req, "X-API-Key", provided, sizeof(provided));
+        httpd_req_get_hdr_value_str(req, "X-API-Key", out, max_len);
     } else if (httpd_req_get_hdr_value_len(req, "Authorization") > 0) {
-        char auth_hdr[80] = {0};
+        char auth_hdr[96] = {0};
         httpd_req_get_hdr_value_str(req, "Authorization", auth_hdr, sizeof(auth_hdr));
         if (strncasecmp(auth_hdr, "Bearer ", 7) == 0) {
-            strlcpy(provided, auth_hdr + 7, sizeof(provided));
+            strlcpy(out, auth_hdr + 7, max_len);
         }
     } else {
         size_t qlen = httpd_req_get_url_query_len(req);
         if (qlen > 0 && qlen < 192) {
             char qbuf[192] = {0};
             if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK) {
-                httpd_query_key_value(qbuf, "token", provided, sizeof(provided));
+                httpd_query_key_value(qbuf, "token", out, max_len);
             }
         }
     }
+    return out[0] != '\0';
+}
 
-    if (strcmp(provided, cfg.api_token) == 0) {
+static bool verify_key_against_cfg(const app_config_t *cfg, const char *provided)
+{
+    if (cfg->api_token[0] != '\0') {
+        return provided && strcmp(provided, cfg->api_token) == 0;
+    }
+    if (cfg->auth_strict && cfg->device_secret[0] != '\0') {
+        return provided && strcmp(provided, cfg->device_secret) == 0;
+    }
+    return true;
+}
+
+bool web_server_check_auth(httpd_req_t *req)
+{
+    app_config_t cfg;
+    app_config_get(&cfg);
+    if (cfg.api_token[0] == '\0' && !(cfg.auth_strict && cfg.device_secret[0] != '\0')) {
+        return true; // Open mode when no key gating is configured
+    }
+
+    char provided[80] = {0};
+    extract_request_token(req, provided, sizeof(provided));
+    if (verify_key_against_cfg(&cfg, provided)) {
         return true;
     }
 
@@ -94,6 +114,15 @@ bool web_server_check_auth(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"unauthorized\",\"message\":\"Valid X-API-Key or Bearer token required\"}");
     return false;
+}
+
+bool web_server_check_read_auth(httpd_req_t *req)
+{
+    const app_config_t *cfg = app_config_ptr();
+    if (cfg->auth_strict && (cfg->api_token[0] != '\0' || cfg->device_secret[0] != '\0')) {
+        return web_server_check_auth(req);
+    }
+    return true;
 }
 
 #if CONFIG_FEATURE_HTTP_SERVER
@@ -138,15 +167,68 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 #if CONFIG_FEATURE_REST_API
 static esp_err_t caps_get_handler(httpd_req_t *req)
 {
-    char buf[1536];
-    size_t len = system_caps_to_json(buf, sizeof(buf));
+    char *buf = malloc(2048);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    size_t len = system_caps_to_json(buf, 2048);
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, buf, len);
+    esp_err_t err = httpd_resp_send(req, buf, len);
+    free(buf);
+    return err;
+}
+
+static esp_err_t auth_verify_post_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    app_config_t cfg;
+    app_config_get(&cfg);
+
+    char provided[80] = {0};
+    extract_request_token(req, provided, sizeof(provided));
+
+    if (provided[0] == '\0' && req->content_len > 0 && req->content_len <= 256) {
+        char body[257] = {0};
+        int r = httpd_req_recv(req, body, req->content_len);
+        if (r > 0) {
+            body[r] = '\0';
+            cJSON *j = cJSON_Parse(body);
+            if (j) {
+                const cJSON *jk = cJSON_GetObjectItem(j, "key");
+                if (!cJSON_IsString(jk)) jk = cJSON_GetObjectItem(j, "token");
+                if (!cJSON_IsString(jk)) jk = cJSON_GetObjectItem(j, "api_token");
+                if (cJSON_IsString(jk)) strlcpy(provided, jk->valuestring, sizeof(provided));
+                cJSON_Delete(j);
+            }
+        }
+    }
+
+    if (!verify_key_against_cfg(&cfg, provided)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"authenticated\":false,\"error\":\"invalid_key\"}");
+    }
+
+    cJSON *okj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(okj, "ok", true);
+    cJSON_AddBoolToObject(okj, "authenticated", true);
+    cJSON_AddStringToObject(okj, "device_id", cfg.device_id);
+    cJSON_AddBoolToObject(okj, "auth_required", cfg.api_token[0] != '\0' || (cfg.auth_strict && cfg.device_secret[0] != '\0'));
+    cJSON_AddBoolToObject(okj, "auth_strict", cfg.auth_strict);
+    char *out = cJSON_PrintUnformatted(okj);
+    cJSON_Delete(okj);
+    httpd_resp_set_type(req, "application/json");
+    if (!out) return httpd_resp_sendstr(req, "{\"ok\":true}");
+    esp_err_t err = httpd_resp_sendstr(req, out);
+    cJSON_free(out);
+    return err;
 }
 
 static esp_err_t status_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     char buf[512];
     size_t len = system_status_to_json(buf, sizeof(buf));
     set_cors_headers(req);
@@ -156,6 +238,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
 
 static esp_err_t wifi_scan_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     char *buf = malloc(2048);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
@@ -194,17 +277,109 @@ static esp_err_t wifi_ap_post_handler(httpd_req_t *req)
 
 static esp_err_t config_get_handler(httpd_req_t *req)
 {
-    char *buf = malloc(1536);
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
+    char *buf = malloc(2048);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
-    size_t len = app_config_to_json(buf, 1536);
+    size_t len = app_config_to_json(buf, 2048);
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
     esp_err_t err = httpd_resp_send(req, buf, len);
     free(buf);
     return err;
+}
+
+static esp_err_t send_ws_config_json(httpd_req_t *req)
+{
+    app_config_t cfg;
+    app_config_get(&cfg);
+    char active_ws[160] = "";
+    char active_hub[128] = "";
+    ws_gateway_get_active_url(active_ws, sizeof(active_ws));
+    fleet_agent_get_hub_url(active_hub, sizeof(active_hub));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "device_id", cfg.device_id);
+    cJSON_AddStringToObject(root, "ws_role", "client");
+    cJSON_AddBoolToObject(root, "ws_enabled", cfg.ws_enabled);
+    cJSON_AddBoolToObject(root, "ws_connected", ws_gateway_is_online());
+    cJSON_AddStringToObject(root, "ws_gateway_url", cfg.ws_gateway_url);
+    cJSON_AddStringToObject(root, "active_ws_url", active_ws);
+    cJSON_AddStringToObject(root, "hub_url", cfg.hub_url);
+    cJSON_AddStringToObject(root, "active_hub_url", active_hub);
+    cJSON_AddBoolToObject(root, "hub_registered", fleet_agent_is_registered());
+    cJSON_AddBoolToObject(root, "hub_fallback_mdns", cfg.hub_fallback_mdns);
+    cJSON_AddNumberToObject(root, "ws_reconnect_ms", cfg.ws_reconnect_ms);
+    cJSON_AddNumberToObject(root, "ws_heartbeat_ms", cfg.ws_heartbeat_ms);
+    cJSON_AddNumberToObject(root, "hb_interval_ms", cfg.hb_interval_ms);
+    cJSON_AddNumberToObject(root, "wifi_ap_fail_threshold", cfg.wifi_ap_fail_threshold);
+    cJSON_AddBoolToObject(root, "auth_required", cfg.api_token[0] != '\0' || (cfg.auth_strict && cfg.device_secret[0] != '\0'));
+    cJSON_AddBoolToObject(root, "auth_strict", cfg.auth_strict);
+    cJSON_AddBoolToObject(root, "has_device_secret", cfg.device_secret[0] != '\0');
+    cJSON_AddNumberToObject(root, "config_ver", cfg.config_ver);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    if (!out) return httpd_resp_sendstr(req, "{\"ok\":false}");
+    esp_err_t err = httpd_resp_sendstr(req, out);
+    cJSON_free(out);
+    return err;
+}
+
+static esp_err_t ws_config_get_handler(httpd_req_t *req)
+{
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
+    return send_ws_config_json(req);
+}
+
+static esp_err_t ws_config_post_handler(httpd_req_t *req)
+{
+    if (!web_server_check_auth(req)) return ESP_FAIL;
+
+    int len = req->content_len;
+    if (len <= 0 || len > 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return ESP_FAIL;
+    }
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    int r = httpd_req_recv(req, buf, len);
+    if (r <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed");
+        return ESP_FAIL;
+    }
+    buf[r] = '\0';
+
+    app_config_changes_t changes = {0};
+    esp_err_t err = app_config_update_from_json_ex(buf, &changes);
+    free(buf);
+    if (err != ESP_OK) {
+        set_cors_headers(req);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"message\":\"Invalid JSON or NVS save failure\"}");
+    }
+
+    const app_config_t *cfg = app_config_ptr();
+    if (changes.mdns_changed || changes.auth_changed) {
+        wifi_mgr_update_mdns(cfg->mdns_host, cfg->device_id, cfg->web_port);
+    }
+    if (changes.ws_changed) {
+        ws_gateway_apply_config();
+    }
+    if (changes.hub_changed) {
+        fleet_agent_apply_config();
+    }
+    return send_ws_config_json(req);
 }
 
 static void wifi_switch_async_task(void *pvParameters)
@@ -221,7 +396,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     if (!web_server_check_auth(req)) return ESP_FAIL;
 
     int len = req->content_len;
-    if (len <= 0 || len > 1535) {
+    if (len <= 0 || len > 2047) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing payload");
         return ESP_FAIL;
     }
@@ -252,7 +427,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     app_config_t cfg;
     app_config_get(&cfg);
 
-    if (changes.mdns_changed) {
+    if (changes.mdns_changed || changes.auth_changed) {
         wifi_mgr_update_mdns(cfg.mdns_host, cfg.device_id, cfg.web_port);
     }
 #if CONFIG_FEATURE_CAMERA
@@ -269,6 +444,12 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         hal_display_apply_config();
     }
 #endif
+    if (changes.ws_changed) {
+        ws_gateway_apply_config();
+    }
+    if (changes.hub_changed) {
+        fleet_agent_apply_config();
+    }
     if (changes.wifi_changed) {
         xTaskCreate(wifi_switch_async_task, "wifi_sw", 3072, NULL, 5, NULL);
     }
@@ -368,7 +549,7 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = cfg.web_port ? cfg.web_port : 80;
     config.ctrl_port = 32768;
-    config.max_uri_handlers = 42;
+    config.max_uri_handlers = 48;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -392,6 +573,15 @@ esp_err_t web_server_start(void)
 #if CONFIG_FEATURE_REST_API
     httpd_uri_t uri_caps = { .uri = "/api/system/capabilities", .method = HTTP_GET, .handler = caps_get_handler };
     httpd_register_uri_handler(s_server, &uri_caps);
+
+    httpd_uri_t uri_auth = { .uri = "/api/auth/verify", .method = HTTP_POST, .handler = auth_verify_post_handler };
+    httpd_register_uri_handler(s_server, &uri_auth);
+
+    httpd_uri_t uri_ws_get = { .uri = "/api/ws/config", .method = HTTP_GET, .handler = ws_config_get_handler };
+    httpd_register_uri_handler(s_server, &uri_ws_get);
+
+    httpd_uri_t uri_ws_post = { .uri = "/api/ws/config", .method = HTTP_POST, .handler = ws_config_post_handler };
+    httpd_register_uri_handler(s_server, &uri_ws_post);
 
     httpd_uri_t uri_status = { .uri = "/api/system/status", .method = HTTP_GET, .handler = status_get_handler };
     httpd_register_uri_handler(s_server, &uri_status);

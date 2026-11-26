@@ -20,6 +20,9 @@ export const commandsApi = {
   bleScan(uuid, durationMs = 4000)  { return http.post(`${base(uuid)}/ble/scan`,      { duration_ms: durationMs }, { timeout: durationMs + 8000 }) },
 
   usbInfo(uuid)        { return http.get(`${base(uuid)}/usb/info`) },
+  hidAction(uuid, body) { return http.post(`${base(uuid)}/hid/action`, body, { timeout: 12000 }) },
+  wsConfigGet(uuid)    { return http.get(`${base(uuid)}/ws/config`) },
+  wsConfigSet(uuid, body) { return http.post(`${base(uuid)}/ws/config`, body) },
   transportGet(uuid)   { return http.get(`${base(uuid)}/transport`) },
   transportSet(uuid, mode) { return http.post(`${base(uuid)}/transport`, { mode }) },
 

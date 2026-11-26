@@ -17,7 +17,9 @@
 #include "lwip/inet.h"
 #include "mdns.h"
 #include "cJSON.h"
+#include "sdkconfig.h"
 #include "app_config.h"
+#include "board_pins.h"
 
 static const char *TAG = "wifi_mgr";
 
@@ -29,6 +31,7 @@ static esp_netif_t *s_ap_netif = NULL;
 static volatile bool s_connected = false;
 static volatile bool s_ap_active = false;
 static volatile bool s_mdns_inited = false;
+static volatile bool s_mdns_services_added = false;
 static volatile bool s_testing_new_wifi = false;
 static volatile int s_retry_count = 0;
 static char s_current_ip[16] = "0.0.0.0";
@@ -150,24 +153,103 @@ static void wifi_rollback_timer_cb(void *arg)
     }
 }
 
+static void build_mdns_caps_str(char *dst, size_t max_len)
+{
+    dst[0] = '\0';
+    struct { bool on; const char *tag; } items[] = {
+#if CONFIG_FEATURE_USB_OTG
+        { true, "usb_hid" },
+#endif
+#if CONFIG_FEATURE_DISPLAY
+        { true, "display" },
+#endif
+#if CONFIG_FEATURE_PC_MONITOR
+        { true, "pc_monitor" },
+#endif
+#if CONFIG_FEATURE_GPIO_CTRL
+        { true, "gpio" },
+#endif
+#if CONFIG_FEATURE_CAMERA
+        { true, "camera" },
+#endif
+#if CONFIG_FEATURE_STORAGE
+        { true, "storage" },
+#endif
+#if CONFIG_FEATURE_OTA
+        { true, "ota" },
+#endif
+#if CONFIG_FEATURE_WS_GATEWAY
+        { true, "ws_client" },
+#endif
+    };
+    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+        if (!items[i].on) continue;
+        if (dst[0] != '\0') strlcat(dst, ",", max_len);
+        strlcat(dst, items[i].tag, max_len);
+    }
+}
+
 void wifi_mgr_update_mdns(const char *hostname, const char *instance_name, uint16_t port)
 {
+    const app_config_t *cfg = app_config_ptr();
+    uint16_t effective_port = port ? port : (cfg->web_port ? cfg->web_port : 80);
+    const char *eff_host = (hostname && hostname[0]) ? hostname : (cfg->mdns_host[0] ? cfg->mdns_host : "esp-node");
+    const char *eff_inst = (instance_name && instance_name[0]) ? instance_name : (cfg->device_id[0] ? cfg->device_id : eff_host);
+
     if (!s_mdns_inited) {
-        if (mdns_init() == ESP_OK) {
-            s_mdns_inited = true;
-            mdns_service_add(NULL, "_http", "_tcp", port ? port : 80, NULL, 0);
-        } else {
+        esp_err_t err = mdns_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
             return;
         }
+        s_mdns_inited = true;
     }
-    if (hostname && hostname[0]) {
-        mdns_hostname_set(hostname);
+
+    ESP_ERROR_CHECK_WITHOUT_ABORT(mdns_hostname_set(eff_host));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(mdns_instance_name_set(eff_inst));
+
+    char caps_buf[128] = "";
+    char port_buf[8] = "";
+    build_mdns_caps_str(caps_buf, sizeof(caps_buf));
+    snprintf(port_buf, sizeof(port_buf), "%u", (unsigned)effective_port);
+    const char *auth_flag = (cfg->api_token[0] != '\0' || (cfg->auth_strict && cfg->device_secret[0] != '\0')) ? "1" : "0";
+    mdns_txt_item_t txt[] = {
+        { "id", cfg->device_id },
+        { "mdns", cfg->mdns_host },
+        { "slug", board_pins_get_slug() },
+#ifdef CONFIG_APP_FW_VERSION
+        { "fw", CONFIG_APP_FW_VERSION },
+#else
+        { "fw", "1.1.0-unified" },
+#endif
+        { "auth", auth_flag },
+        { "strict", cfg->auth_strict ? "1" : "0" },
+        { "caps", caps_buf },
+        { "port", port_buf },
+    };
+
+    if (!s_mdns_services_added) {
+        esp_err_t e_http = mdns_service_add(eff_inst, "_http", "_tcp", effective_port, NULL, 0);
+        esp_err_t e_uni = mdns_service_add(
+            eff_inst, "_esp-unified", "_tcp", effective_port, txt, sizeof(txt) / sizeof(txt[0]));
+        if (e_http != ESP_OK) {
+            ESP_LOGW(TAG, "mdns _http add failed: %s", esp_err_to_name(e_http));
+        }
+        if (e_uni != ESP_OK) {
+            ESP_LOGW(TAG, "mdns _esp-unified add failed: %s", esp_err_to_name(e_uni));
+        } else {
+            s_mdns_services_added = true;
+        }
+    } else {
+        esp_err_t e_txt = mdns_service_txt_set(
+            "_esp-unified", "_tcp", txt, sizeof(txt) / sizeof(txt[0]));
+        if (e_txt != ESP_OK) {
+            ESP_LOGW(TAG, "mdns _esp-unified txt_set failed: %s", esp_err_to_name(e_txt));
+        }
     }
-    if (instance_name && instance_name[0]) {
-        mdns_instance_name_set(instance_name);
-    }
-    ESP_LOGI(TAG, "mDNS active: http://%s.local (instance='%s')",
-             hostname ? hostname : "esp-node", instance_name ? instance_name : "esp");
+
+    ESP_LOGI(TAG, "mDNS active: http://%s.local (_esp-unified._tcp, auth=%s, caps=%s)",
+             eff_host, auth_flag, caps_buf);
 }
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -182,8 +264,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         s_retry_count++;
         ESP_LOGW(TAG, "WiFi disconnected (attempt %d)...", s_retry_count);
 
-        if (!s_ap_active && !s_testing_new_wifi && s_retry_count >= 5) {
-            ESP_LOGW(TAG, "STA connection failed 5 times — starting SoftAP Captive Portal!");
+        uint8_t thr = app_config_ptr()->wifi_ap_fail_threshold;
+        if (thr < 1) thr = 5;
+        if (!s_ap_active && !s_testing_new_wifi && s_retry_count >= thr) {
+            ESP_LOGW(TAG, "STA connection failed %d times — starting SoftAP Captive Portal!", s_retry_count);
             wifi_mgr_start_softap();
         }
         if (s_reconnect_timer) {

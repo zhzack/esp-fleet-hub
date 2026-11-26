@@ -132,8 +132,12 @@ def send_command_to_device(dev_id, cmd_type, cmd_payload=None):
             "camera_flash": "/api/camera/flash",
             "display_text": "/api/display/text",
             "display_config": "/api/display/config",
+            "display_image": "/api/display/image",
             "hid_text": "/api/hid/text",
             "hid_key": "/api/hid/key",
+            "hid_mouse": "/api/hid/mouse",
+            "hid_action": "/api/hid/action",
+            "ws_config": "/api/ws/config",
             "reboot": "/api/system/reboot",
         }
         if cmd_type in ep_map:

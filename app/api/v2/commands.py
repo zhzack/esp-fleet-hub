@@ -1,9 +1,9 @@
 """V2 device command HTTP endpoints."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.core.security import ensure_device_access, get_current_user
@@ -213,6 +213,83 @@ async def usb_info(
     user: User = Depends(get_current_user),
 ):
     return await _send(db, user, device_uuid, "usb.info")
+
+
+class HidActionIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    steps: list[dict[str, Any]] | None = None
+    need_ack: bool = True
+
+
+@router.post("/{device_uuid}/hid/action")
+async def hid_action(
+    device_uuid: str,
+    body: HidActionIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    payload = body.model_dump(exclude_none=True)
+    if not payload.get("type"):
+        if isinstance(payload.get("steps"), list) and payload["steps"]:
+            payload["type"] = "macro"
+        else:
+            raise HTTPException(400, "action payload requires 'type' or non-empty 'steps'")
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "hid.action",
+        payload=payload,
+        timeout_ms=8000,
+        required_caps=_USB_CAPS | _BLE_CAPS,
+        cap_label="HID 控制",
+    )
+
+
+class WsConfigIn(BaseModel):
+    ws_enabled: bool | None = None
+    ws_gateway_url: str | None = None
+    ws_reconnect_ms: int | None = None
+    ws_heartbeat_ms: int | None = None
+    hub_url: str | None = None
+    hub_fallback_mdns: bool | None = None
+    hb_interval_ms: int | None = None
+    auth_strict: bool | None = None
+
+
+@router.get("/{device_uuid}/ws/config")
+async def ws_config_get(
+    device_uuid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await _send(db, user, device_uuid, "ws.config.get", timeout_ms=4000)
+
+
+@router.post("/{device_uuid}/ws/config")
+async def ws_config_set(
+    device_uuid: str,
+    body: WsConfigIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if body.ws_gateway_url is not None:
+        ws_u = body.ws_gateway_url.strip()
+        if ws_u and not (ws_u.startswith("ws://") or ws_u.startswith("wss://")):
+            raise HTTPException(400, "ws_gateway_url must start with ws:// or wss://")
+    if body.hub_url is not None:
+        hub_u = body.hub_url.strip()
+        if hub_u and not (hub_u.startswith("http://") or hub_u.startswith("https://")):
+            raise HTTPException(400, "hub_url must start with http:// or https://")
+    if body.ws_reconnect_ms is not None and not (500 <= body.ws_reconnect_ms <= 60000):
+        raise HTTPException(400, "ws_reconnect_ms must be between 500 and 60000")
+    if body.ws_heartbeat_ms is not None and not (2000 <= body.ws_heartbeat_ms <= 120000):
+        raise HTTPException(400, "ws_heartbeat_ms must be between 2000 and 120000")
+    if body.hb_interval_ms is not None and not (2000 <= body.hb_interval_ms <= 120000):
+        raise HTTPException(400, "hb_interval_ms must be between 2000 and 120000")
+    payload = body.model_dump(exclude_none=True)
+    return await _send(db, user, device_uuid, "ws.config.set", payload=payload, timeout_ms=5000)
 
 
 @router.get("/{device_uuid}/transport")

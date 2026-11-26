@@ -45,6 +45,7 @@ static bool extract_safe_filename(httpd_req_t *req, char *out_path, size_t max_l
 
 static esp_err_t storage_list_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     send_cors(req);
     size_t total = 0, used = 0;
     bool mounted = hal_storage_is_mounted();
@@ -147,6 +148,7 @@ static esp_err_t storage_upload_post_handler(httpd_req_t *req)
 
 static esp_err_t storage_download_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     send_cors(req);
     if (!hal_storage_is_mounted()) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SPIFFS not mounted");

@@ -7,6 +7,12 @@ export const unifiedApi = {
   claimDevice(deviceId, payload) {
     return http.post(`/v2/unified/devices/${encodeURIComponent(deviceId)}/claim`, payload)
   },
+  discoverLan(payload = {}) {
+    return http.post('/v2/unified/discover', payload, { timeout: 20000 })
+  },
+  adoptDevice(payload) {
+    return http.post('/v2/unified/adopt', payload, { timeout: 15000 })
+  },
   pushConfig(deviceId, config) {
     return http.post(`/v2/unified/devices/${encodeURIComponent(deviceId)}/config`, { config })
   },

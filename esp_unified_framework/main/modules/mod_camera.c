@@ -20,6 +20,7 @@ static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %
 
 static esp_err_t stream_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     if (!hal_camera_is_ready()) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera hardware not initialized");
         return ESP_FAIL;
@@ -64,6 +65,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
 static esp_err_t capture_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     if (!hal_camera_is_ready()) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not ready");
         return ESP_FAIL;
@@ -121,6 +123,7 @@ static esp_err_t flash_post_handler(httpd_req_t *req)
 
 static esp_err_t camera_config_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     app_config_t cfg;
     app_config_get(&cfg);
     char resp[192];

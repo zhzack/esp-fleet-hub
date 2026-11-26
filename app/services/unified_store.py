@@ -466,7 +466,7 @@ class SqlAlchemyHubStore:
             cfg = db.query(UnifiedDeviceConfig).filter(UnifiedDeviceConfig.device_id == device_id).first()
             return _row_to_device_dict(r, cfg, strip_secrets=False)
 
-    def update_device_meta(self, device_id, name=None, claimed=None, api_token=None):
+    def update_device_meta(self, device_id, name=None, claimed=None, api_token=None, device_secret=None):
         with _session_ctx() as db:
             dev = db.query(UnifiedDevice).filter(UnifiedDevice.device_id == device_id).first()
             if not dev:
@@ -476,7 +476,9 @@ class SqlAlchemyHubStore:
             if claimed is not None:
                 dev.claimed = 1 if claimed else 0
             if api_token is not None:
-                dev.api_token = encrypt_field(api_token)
+                dev.api_token = encrypt_field(api_token) if api_token else ""
+            if device_secret is not None:
+                dev.device_secret = encrypt_field(device_secret) if device_secret else ""
             db.commit()
         return self.get_device(device_id)
 

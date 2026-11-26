@@ -12,6 +12,7 @@ static const char *TAG = "mod_gpio";
 
 static esp_err_t gpio_pins_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     char buf[1536];
     size_t len = hal_gpio_pins_to_json(buf, sizeof(buf));
 

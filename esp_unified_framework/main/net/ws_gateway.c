@@ -59,6 +59,9 @@ static esp_websocket_client_handle_t s_ws = NULL;
 static QueueHandle_t s_rx_queue = NULL;
 static volatile bool s_online = false;
 static volatile bool s_connected = false;
+static TaskHandle_t s_mgr_task = NULL;
+static volatile bool s_force_reconnect = false;
+static char s_active_ws_url[160] = "";
 static char s_auth_nonce[65] = "";
 
 #define WS_RX_MAX_FRAME_LEN 65536
@@ -252,6 +255,9 @@ static void send_heartbeat(void)
 
 static bool exec_action_step(const cJSON *step, char *err_code, char *err_msg)
 {
+#if CONFIG_FEATURE_USB_OTG
+    return mod_usb_otg_exec_action(step, err_code, err_msg);
+#else
     const cJSON *jt = cJSON_GetObjectItem(step, "type");
     if (!cJSON_IsString(jt)) {
         strcpy(err_code, "E004");
@@ -273,65 +279,10 @@ static bool exec_action_step(const cJSON *step, char *err_code, char *err_msg)
         }
         return true;
     }
-#if CONFIG_FEATURE_USB_OTG
-    if (!mod_usb_otg_is_mounted()) {
-        strcpy(err_code, "E007");
-        strcpy(err_msg, "USB host not mounted");
-        return false;
-    }
-    if (strcmp(t, "mouse_move") == 0) {
-        int dx = cJSON_IsNumber(cJSON_GetObjectItem(step, "x")) ? cJSON_GetObjectItem(step, "x")->valueint : 0;
-        int dy = cJSON_IsNumber(cJSON_GetObjectItem(step, "y")) ? cJSON_GetObjectItem(step, "y")->valueint : 0;
-        if (dx > 127) dx = 127;
-        if (dx < -127) dx = -127;
-        if (dy > 127) dy = 127;
-        if (dy < -127) dy = -127;
-        return mod_usb_otg_mouse_move((int8_t)dx, (int8_t)dy);
-    }
-    if (strcmp(t, "mouse_scroll") == 0) {
-        int hx = cJSON_IsNumber(cJSON_GetObjectItem(step, "x")) ? cJSON_GetObjectItem(step, "x")->valueint : 0;
-        int vy = cJSON_IsNumber(cJSON_GetObjectItem(step, "y")) ? cJSON_GetObjectItem(step, "y")->valueint : 0;
-        if (hx > 127) hx = 127;
-        if (hx < -127) hx = -127;
-        if (vy > 127) vy = 127;
-        if (vy < -127) vy = -127;
-        return mod_usb_otg_mouse_scroll((int8_t)vy, (int8_t)hx);
-    }
-    if (strcmp(t, "mouse_click") == 0) {
-        int b = cJSON_IsNumber(cJSON_GetObjectItem(step, "button")) ? cJSON_GetObjectItem(step, "button")->valueint : 1;
-        return mod_usb_otg_mouse_click((uint8_t)b);
-    }
-    if (strcmp(t, "mouse_down") == 0) {
-        int b = cJSON_IsNumber(cJSON_GetObjectItem(step, "button")) ? cJSON_GetObjectItem(step, "button")->valueint : 1;
-        return mod_usb_otg_mouse_btn((uint8_t)b, true);
-    }
-    if (strcmp(t, "mouse_up") == 0) {
-        int b = cJSON_IsNumber(cJSON_GetObjectItem(step, "button")) ? cJSON_GetObjectItem(step, "button")->valueint : 1;
-        return mod_usb_otg_mouse_btn((uint8_t)b, false);
-    }
-    if (strcmp(t, "keyboard_tap") == 0) {
-        const cJSON *jk = cJSON_GetObjectItem(step, "key");
-        return cJSON_IsString(jk) && mod_usb_otg_key_tap(jk->valuestring, 0);
-    }
-    if (strcmp(t, "keyboard_down") == 0) {
-        const cJSON *jk = cJSON_GetObjectItem(step, "key");
-        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
-        return cJSON_IsString(jk) && mod_usb_otg_key_down(jk->valuestring, cJSON_IsNumber(jm) ? (uint8_t)jm->valueint : 0);
-    }
-    if (strcmp(t, "keyboard_up") == 0) {
-        const cJSON *jk = cJSON_GetObjectItem(step, "key");
-        return cJSON_IsString(jk) && mod_usb_otg_key_up(jk->valuestring);
-    }
-    if (strcmp(t, "text") == 0 || strcmp(t, "text_input") == 0) {
-        const cJSON *jc = cJSON_GetObjectItem(step, "content");
-        if (!cJSON_IsString(jc)) jc = cJSON_GetObjectItem(step, "text");
-        int interval = cJSON_IsNumber(cJSON_GetObjectItem(step, "interval_ms")) ? cJSON_GetObjectItem(step, "interval_ms")->valueint : 5;
-        return cJSON_IsString(jc) && mod_usb_otg_type_text(jc->valuestring, interval);
-    }
-#endif
     strcpy(err_code, "E004");
     snprintf(err_msg, 64, "unsupported action: %s", t);
     return false;
+#endif
 }
 
 static void ws_worker_task(void *pv)
@@ -442,12 +393,24 @@ static void ws_worker_task(void *pv)
             app_config_changes_t changes = {0};
             esp_err_t cerr = ptxt ? app_config_update_from_json_ex(ptxt, &changes) : ESP_ERR_NO_MEM;
             if (ptxt) cJSON_free(ptxt);
-            if (cerr == ESP_OK && changes.display_changed) {
+            if (cerr == ESP_OK) {
+                const app_config_t *cfg = app_config_ptr();
+                if (changes.mdns_changed || changes.auth_changed) {
+                    wifi_mgr_update_mdns(cfg->mdns_host, cfg->device_id, cfg->web_port);
+                }
+                if (changes.display_changed) {
 #if CONFIG_FEATURE_PC_MONITOR
-                mod_pc_monitor_apply_config();
+                    mod_pc_monitor_apply_config();
 #elif CONFIG_FEATURE_DISPLAY
-                hal_display_apply_config();
+                    hal_display_apply_config();
 #endif
+                }
+                if (changes.ws_changed) {
+                    ws_gateway_apply_config();
+                }
+                if (changes.hub_changed) {
+                    fleet_agent_apply_config();
+                }
             }
             send_ack(msgid, cerr == ESP_OK, 5, "E400", esp_err_to_name(cerr));
         } else if (strcmp(mtype, "ota.start") == 0 && cJSON_IsObject(pl)) {
@@ -478,15 +441,52 @@ static void ws_worker_task(void *pv)
             vTaskDelay(pdMS_TO_TICKS(400));
             esp_restart();
         } else if (strcmp(mtype, "sys.config") == 0) {
-            char *cbuf = malloc(1536);
+            char *cbuf = malloc(2048);
             if (!cbuf) {
                 send_ack(msgid, false, 0, "E500", "oom");
             } else {
-                app_config_to_json(cbuf, 1536);
+                app_config_to_json(cbuf, 2048);
                 cJSON *parsed = cJSON_Parse(cbuf);
                 free(cbuf);
                 send_ack_with_payload(msgid, true, 1, parsed, NULL, NULL);
             }
+        } else if (strcmp(mtype, "ws.config.get") == 0) {
+            app_config_t cfg;
+            app_config_get(&cfg);
+            char active_hub[128] = "";
+            fleet_agent_get_hub_url(active_hub, sizeof(active_hub));
+            cJSON *wc = cJSON_CreateObject();
+            cJSON_AddStringToObject(wc, "ws_role", "client");
+            cJSON_AddBoolToObject(wc, "ws_enabled", cfg.ws_enabled);
+            cJSON_AddBoolToObject(wc, "ws_connected", s_online);
+            cJSON_AddStringToObject(wc, "ws_gateway_url", cfg.ws_gateway_url);
+            cJSON_AddStringToObject(wc, "active_ws_url", s_active_ws_url);
+            cJSON_AddStringToObject(wc, "hub_url", cfg.hub_url);
+            cJSON_AddStringToObject(wc, "active_hub_url", active_hub);
+            cJSON_AddBoolToObject(wc, "hub_registered", fleet_agent_is_registered());
+            cJSON_AddBoolToObject(wc, "hub_fallback_mdns", cfg.hub_fallback_mdns);
+            cJSON_AddNumberToObject(wc, "ws_reconnect_ms", cfg.ws_reconnect_ms);
+            cJSON_AddNumberToObject(wc, "ws_heartbeat_ms", cfg.ws_heartbeat_ms);
+            cJSON_AddNumberToObject(wc, "hb_interval_ms", cfg.hb_interval_ms);
+            cJSON_AddNumberToObject(wc, "wifi_ap_fail_threshold", cfg.wifi_ap_fail_threshold);
+            cJSON_AddBoolToObject(wc, "auth_required", cfg.api_token[0] != '\0' || (cfg.auth_strict && cfg.device_secret[0] != '\0'));
+            cJSON_AddBoolToObject(wc, "auth_strict", cfg.auth_strict);
+            cJSON_AddBoolToObject(wc, "has_device_secret", cfg.device_secret[0] != '\0');
+            send_ack_with_payload(msgid, true, 1, wc, NULL, NULL);
+        } else if (strcmp(mtype, "ws.config.set") == 0 && cJSON_IsObject(pl)) {
+            char *ptxt = cJSON_PrintUnformatted(pl);
+            app_config_changes_t changes = {0};
+            esp_err_t cerr = ptxt ? app_config_update_from_json_ex(ptxt, &changes) : ESP_ERR_NO_MEM;
+            if (ptxt) cJSON_free(ptxt);
+            if (cerr == ESP_OK) {
+                const app_config_t *cfg = app_config_ptr();
+                if (changes.mdns_changed || changes.auth_changed) {
+                    wifi_mgr_update_mdns(cfg->mdns_host, cfg->device_id, cfg->web_port);
+                }
+                if (changes.ws_changed) ws_gateway_apply_config();
+                if (changes.hub_changed) fleet_agent_apply_config();
+            }
+            send_ack(msgid, cerr == ESP_OK, 5, "E400", esp_err_to_name(cerr));
         } else if (strcmp(mtype, "gpio.pins") == 0) {
 #if CONFIG_FEATURE_GPIO_CTRL
             char *gbuf = malloc(1536);
@@ -764,15 +764,18 @@ static void on_ws_event(void *handler_args, esp_event_base_t base, int32_t event
 static bool resolve_ws_url(char *dst, size_t max_len)
 {
     const app_config_t *cfg = app_config_ptr();
+    if (!cfg->ws_enabled) {
+        dst[0] = '\0';
+        return false;
+    }
     if (cfg->ws_gateway_url[0] != '\0') {
         strlcpy(dst, cfg->ws_gateway_url, max_len);
         return true;
     }
     char hub[128] = "";
-    if (cfg->hub_url[0] != '\0') {
+    fleet_agent_get_hub_url(hub, sizeof(hub));
+    if (hub[0] == '\0' && cfg->hub_url[0] != '\0') {
         strlcpy(hub, cfg->hub_url, sizeof(hub));
-    } else {
-        fleet_agent_get_hub_url(hub, sizeof(hub));
     }
     if (strncmp(hub, "http://", 7) == 0) {
         snprintf(dst, max_len, "ws://%s/ws/device", hub + 7);
@@ -782,34 +785,54 @@ static bool resolve_ws_url(char *dst, size_t max_len)
         snprintf(dst, max_len, "wss://%s/ws/device", hub + 8);
         return true;
     }
+    dst[0] = '\0';
     return false;
 }
 
 static void ws_mgr_task(void *pv)
 {
     char url[160] = "";
-    char active_url[160] = "";
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    uint32_t last_reconn_ms = 0;
+    vTaskDelay(pdMS_TO_TICKS(2500));
 
     while (1) {
-        if (!wifi_mgr_connected()) {
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            continue;
-        }
-        if (!resolve_ws_url(url, sizeof(url))) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            continue;
-        }
-        if (!s_ws || strcmp(url, active_url) != 0) {
+        const app_config_t *cfg = app_config_ptr();
+        uint32_t hb_ms = cfg->ws_heartbeat_ms;
+        if (hb_ms < 2000) hb_ms = 2000;
+        if (hb_ms > 120000) hb_ms = 120000;
+        uint32_t reconn_ms = cfg->ws_reconnect_ms;
+        if (reconn_ms < 500) reconn_ms = 500;
+        if (reconn_ms > 60000) reconn_ms = 60000;
+
+        bool do_reload = s_force_reconnect;
+        s_force_reconnect = false;
+
+        if (!wifi_mgr_connected() || !resolve_ws_url(url, sizeof(url))) {
             if (s_ws) {
                 esp_websocket_client_stop(s_ws);
                 esp_websocket_client_destroy(s_ws);
                 s_ws = NULL;
+                s_connected = false;
+                s_online = false;
+                s_active_ws_url[0] = '\0';
             }
-            strlcpy(active_url, url, sizeof(active_url));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000));
+            continue;
+        }
+
+        if (!s_ws || do_reload || strcmp(url, s_active_ws_url) != 0 || reconn_ms != last_reconn_ms) {
+            if (s_ws) {
+                esp_websocket_client_stop(s_ws);
+                esp_websocket_client_destroy(s_ws);
+                s_ws = NULL;
+                s_connected = false;
+                s_online = false;
+            }
+            strlcpy(s_active_ws_url, url, sizeof(s_active_ws_url));
+            last_reconn_ms = reconn_ms;
             esp_websocket_client_config_t wcfg = {
-                .uri = active_url,
-                .reconnect_timeout_ms = 5000,
+                .uri = s_active_ws_url,
+                .reconnect_timeout_ms = (int)reconn_ms,
                 .network_timeout_ms = 8000,
                 .task_stack = 6144,
 #ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -820,13 +843,13 @@ static void ws_mgr_task(void *pv)
             if (s_ws) {
                 esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, on_ws_event, NULL);
                 esp_websocket_client_start(s_ws);
-                ESP_LOGI(TAG, "Starting py_web WebSocket client -> %s", active_url);
+                ESP_LOGI(TAG, "Starting WebSocket client -> %s (reconnect=%lums)",
+                         s_active_ws_url, (unsigned long)reconn_ms);
             }
-        }
-        if (s_connected && s_online) {
+        } else if (s_connected && s_online) {
             send_heartbeat();
         }
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(hb_ms));
     }
 }
 
@@ -837,7 +860,7 @@ esp_err_t ws_gateway_init(void)
 #endif
     s_rx_queue = xQueueCreate(64, sizeof(char *));
     xTaskCreate(ws_worker_task, "ws_worker", 6144, NULL, 5, NULL);
-    xTaskCreate(ws_mgr_task, "ws_mgr", 4096, NULL, 3, NULL);
+    xTaskCreate(ws_mgr_task, "ws_mgr", 4096, NULL, 3, &s_mgr_task);
     return ESP_OK;
 }
 
@@ -846,7 +869,23 @@ bool ws_gateway_is_online(void)
     return s_online;
 }
 
+void ws_gateway_apply_config(void)
+{
+    s_force_reconnect = true;
+    if (s_mgr_task) {
+        xTaskNotifyGive(s_mgr_task);
+    }
+}
+
+void ws_gateway_get_active_url(char *dst, size_t max_len)
+{
+    if (!dst || max_len == 0) return;
+    strlcpy(dst, s_active_ws_url, max_len);
+}
+
 #else
 esp_err_t ws_gateway_init(void) { return ESP_OK; }
 bool ws_gateway_is_online(void) { return false; }
+void ws_gateway_apply_config(void) {}
+void ws_gateway_get_active_url(char *dst, size_t max_len) { if (dst && max_len) dst[0] = '\0'; }
 #endif

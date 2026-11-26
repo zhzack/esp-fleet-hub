@@ -18,15 +18,29 @@ from app.services import unified_bridge as ub
 
 _HTTP_GET_ROUTES: dict[str, str] = {
     "get_status": "/api/system/status",
+    "sys.config": "/api/system/config",
+    "ws.config.get": "/api/ws/config",
     "gpio.pins": "/api/gpio/pins",
     "display.status": "/api/display/status",
+    "usb.info": "/api/hid/status",
+    "hid.status": "/api/hid/status",
+    "ota.status": "/api/ota/status",
 }
 
 _HTTP_POST_ROUTES: dict[str, str] = {
+    "config.set": "/api/system/config",
+    "ws.config.set": "/api/ws/config",
     "gpio.set": "/api/gpio/set",
     "display.config": "/api/display/config",
     "display.text": "/api/display/text",
     "display.image": "/api/display/image",
+    "hid.text": "/api/hid/text",
+    "hid.key": "/api/hid/key",
+    "hid.mouse": "/api/hid/mouse",
+    "hid.action": "/api/hid/action",
+    "action": "/api/hid/action",
+    "camera.config": "/api/camera/config",
+    "camera.flash": "/api/camera/flash",
     "reboot": "/api/system/reboot",
 }
 
@@ -61,11 +75,17 @@ async def execute_device_command(
     """Dispatch command via WebSocket if online, falling back to direct HTTP on LAN unified nodes."""
     req_payload = dict(payload or {})
     if device_registry.is_online(device_uuid):
+        ws_cmd = "action" if cmd_type in ("action", "hid.action") else cmd_type
+        ws_payload = dict(req_payload)
+        if ws_cmd == "action":
+            ws_payload.setdefault("need_ack", True)
+            if "steps" in ws_payload and "type" not in ws_payload:
+                ws_payload["type"] = "macro"
         return await dispatcher.deliver_command(
             db,
             device_uuid=device_uuid,
-            cmd_type=cmd_type,
-            payload=req_payload,
+            cmd_type=ws_cmd,
+            payload=ws_payload,
             user_id=user_id,
             timeout_ms=timeout_ms,
         )

@@ -33,6 +33,9 @@
 #if CONFIG_FEATURE_OTA
 #include "ota_mgr.h"
 #endif
+#if CONFIG_FEATURE_WS_GATEWAY
+#include "ws_gateway.h"
+#endif
 
 static const char *TAG = "fleet_agent";
 
@@ -40,6 +43,11 @@ static const char *TAG = "fleet_agent";
 
 static volatile bool s_registered = false;
 static char s_active_hub_url[128] = "";
+static char s_last_pinned_hub[96] = "";
+static char s_mdns_hub_url[128] = "";
+static int s_pinned_fail_count = 0;
+static volatile bool s_force_reload = false;
+static TaskHandle_t s_agent_task = NULL;
 
 typedef struct {
     char *buf;
@@ -93,20 +101,10 @@ static int http_request_json(const char *url, esp_http_client_method_t method,
     return status;
 }
 
-static bool resolve_hub_url(char *dst, size_t max_len)
+static bool query_mdns_hub_url(char *dst, size_t max_len)
 {
-    const app_config_t *cfg = app_config_ptr();
-    if (cfg->hub_url[0] != '\0') {
-        strlcpy(dst, cfg->hub_url, max_len);
-        // Trim trailing slash
-        size_t l = strlen(dst);
-        while (l > 0 && dst[l - 1] == '/') dst[--l] = '\0';
-        return true;
-    }
-
-    // Zero-Config mDNS lookup for _esp-hub._tcp
     mdns_result_t *results = NULL;
-    esp_err_t err = mdns_query_ptr("_esp-hub", "_tcp", 2500, 2, &results);
+    esp_err_t err = mdns_query_ptr("_esp-hub", "_tcp", 2000, 2, &results);
     if (err == ESP_OK && results) {
         mdns_result_t *r = results;
         while (r) {
@@ -123,6 +121,42 @@ static bool resolve_hub_url(char *dst, size_t max_len)
         mdns_query_results_free(results);
     }
     return false;
+}
+
+static bool resolve_hub_url(char *dst, size_t max_len)
+{
+    const app_config_t *cfg = app_config_ptr();
+    if (strcmp(s_last_pinned_hub, cfg->hub_url) != 0) {
+        strlcpy(s_last_pinned_hub, cfg->hub_url, sizeof(s_last_pinned_hub));
+        s_pinned_fail_count = 0;
+        s_mdns_hub_url[0] = '\0';
+        s_registered = false;
+    }
+
+    if (cfg->hub_url[0] != '\0') {
+        if (!cfg->hub_fallback_mdns || s_pinned_fail_count < 2) {
+            strlcpy(dst, cfg->hub_url, max_len);
+            size_t l = strlen(dst);
+            while (l > 0 && dst[l - 1] == '/') dst[--l] = '\0';
+            return true;
+        }
+        if (s_mdns_hub_url[0] == '\0') {
+            if (query_mdns_hub_url(s_mdns_hub_url, sizeof(s_mdns_hub_url))) {
+                ESP_LOGI(TAG, "Pinned Hub unreachable — auto-discovered LAN Hub via mDNS: %s", s_mdns_hub_url);
+            }
+        }
+        if (s_mdns_hub_url[0] != '\0') {
+            strlcpy(dst, s_mdns_hub_url, max_len);
+            return true;
+        }
+        // Still try pinned hub if no mDNS hub responded in new LAN
+        strlcpy(dst, cfg->hub_url, max_len);
+        size_t l = strlen(dst);
+        while (l > 0 && dst[l - 1] == '/') dst[--l] = '\0';
+        return true;
+    }
+
+    return query_mdns_hub_url(dst, max_len);
 }
 
 static void compute_hmac_hex(const char *secret, const char *nonce, char out_hex[65])
@@ -177,8 +211,8 @@ static bool register_with_hub(const char *hub_base)
     }
 
     // 2. Compose comprehensive capabilities + config snapshot payload
-    char *caps_raw = malloc(1536);
-    char *cfg_raw  = malloc(1536);
+    char *caps_raw = malloc(2048);
+    char *cfg_raw  = malloc(2048);
     if (!caps_raw || !cfg_raw) {
         free(caps_raw);
         free(cfg_raw);
@@ -186,8 +220,8 @@ static bool register_with_hub(const char *hub_base)
         free(resp);
         return false;
     }
-    system_caps_to_json(caps_raw, 1536);
-    app_config_to_json(cfg_raw, 1536);
+    system_caps_to_json(caps_raw, 2048);
+    app_config_to_json(cfg_raw, 2048);
 
     cJSON *reg = cJSON_Parse(caps_raw);
     cJSON *cfg_obj = cJSON_Parse(cfg_raw);
@@ -261,8 +295,19 @@ static void apply_shadow_sync(cJSON *sync_cfg)
             hal_display_apply_config();
         }
 #endif
+        if (changes.auth_changed) {
+            wifi_mgr_update_mdns(cfg->mdns_host, cfg->device_id, cfg->web_port);
+        }
+#if CONFIG_FEATURE_WS_GATEWAY
+        if (changes.ws_changed) {
+            ws_gateway_apply_config();
+        }
+#endif
         if (changes.wifi_changed) {
             wifi_mgr_apply_new_sta(cfg->wifi_ssid, cfg->wifi_pass);
+        }
+        if (changes.hub_changed) {
+            fleet_agent_apply_config();
         }
     }
     cJSON_free(cfg_str);
@@ -324,35 +369,56 @@ static void execute_queued_command(const char *hub_base, const char *dev_id, cJS
 
 static void fleet_agent_task(void *pvParameters)
 {
-    vTaskDelay(pdMS_TO_TICKS(2500));
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     while (1) {
+        if (s_force_reload) {
+            s_force_reload = false;
+            s_registered = false;
+            s_pinned_fail_count = 0;
+            s_mdns_hub_url[0] = '\0';
+        }
+
         if (!wifi_mgr_connected()) {
             s_registered = false;
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000));
             continue;
         }
 
         if (!resolve_hub_url(s_active_hub_url, sizeof(s_active_hub_url))) {
             s_registered = false;
-            vTaskDelay(pdMS_TO_TICKS(10000));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(6000));
             continue;
         }
+
+        const app_config_t *cfg = app_config_ptr();
+        uint32_t hb_ms = cfg->hb_interval_ms;
+        if (hb_ms < 2000) hb_ms = 2000;
+        if (hb_ms > 120000) hb_ms = 120000;
 
         if (!s_registered) {
             if (register_with_hub(s_active_hub_url)) {
                 s_registered = true;
+                s_pinned_fail_count = 0;
+#if CONFIG_FEATURE_WS_GATEWAY
+                ws_gateway_apply_config();
+#endif
             } else {
-                vTaskDelay(pdMS_TO_TICKS(8000));
+                if (cfg->hub_url[0] && strncmp(s_active_hub_url, cfg->hub_url, strlen(s_active_hub_url)) == 0) {
+                    s_pinned_fail_count++;
+                } else {
+                    s_mdns_hub_url[0] = '\0';
+                }
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(hb_ms < 6000 ? hb_ms : 6000));
                 continue;
             }
         }
 
         // Send periodic Heartbeat + poll shadow/commands
-        const app_config_t *cfg = app_config_ptr();
+        cfg = app_config_ptr();
         system_caps_t *sc = malloc(sizeof(system_caps_t));
         if (!sc) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
             continue;
         }
         system_caps_get(sc);
@@ -379,6 +445,7 @@ static void fleet_agent_task(void *pvParameters)
             cJSON_free(hb_str);
 
             if (code == 200 && resp) {
+                s_pinned_fail_count = 0;
                 cJSON *r = cJSON_Parse(resp);
                 if (r) {
                     const cJSON *rereg = cJSON_GetObjectItem(r, "reregister");
@@ -400,19 +467,26 @@ static void fleet_agent_task(void *pvParameters)
                 }
             } else {
                 ESP_LOGW(TAG, "Heartbeat error HTTP %d", code);
-                if (code < 0) s_registered = false;
+                if (code < 0) {
+                    s_registered = false;
+                    if (cfg->hub_url[0] && strncmp(s_active_hub_url, cfg->hub_url, strlen(s_active_hub_url)) == 0) {
+                        s_pinned_fail_count++;
+                    } else {
+                        s_mdns_hub_url[0] = '\0';
+                    }
+                }
             }
             free(url);
             free(resp);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(12000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(hb_ms));
     }
 }
 
 esp_err_t fleet_agent_init(void)
 {
-    BaseType_t ok = xTaskCreate(fleet_agent_task, "fleet_agent", 9216, NULL, 3, NULL);
+    BaseType_t ok = xTaskCreate(fleet_agent_task, "fleet_agent", 9216, NULL, 3, &s_agent_task);
     return (ok == pdPASS) ? ESP_OK : ESP_FAIL;
 }
 
@@ -427,8 +501,17 @@ void fleet_agent_get_hub_url(char *dst, size_t max_len)
     strlcpy(dst, s_active_hub_url, max_len);
 }
 
+void fleet_agent_apply_config(void)
+{
+    s_force_reload = true;
+    if (s_agent_task) {
+        xTaskNotifyGive(s_agent_task);
+    }
+}
+
 #else
 esp_err_t fleet_agent_init(void) { return ESP_OK; }
 bool fleet_agent_is_registered(void) { return false; }
 void fleet_agent_get_hub_url(char *dst, size_t max_len) { if (dst && max_len) dst[0] = '\0'; }
+void fleet_agent_apply_config(void) {}
 #endif

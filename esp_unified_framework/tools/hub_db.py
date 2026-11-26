@@ -479,9 +479,11 @@ def get_device(device_id):
     return d
 
 
-def update_device_meta(device_id, name=None, claimed=None, api_token=None):
+def update_device_meta(device_id, name=None, claimed=None, api_token=None, device_secret=None):
     if _EXTERNAL_BACKEND is not None:
-        return _EXTERNAL_BACKEND.update_device_meta(device_id, name=name, claimed=claimed, api_token=api_token)
+        return _EXTERNAL_BACKEND.update_device_meta(
+            device_id, name=name, claimed=claimed, api_token=api_token, device_secret=device_secret
+        )
     ensure_init()
     with _db_lock:
         dev = _CONN.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
@@ -493,6 +495,8 @@ def update_device_meta(device_id, name=None, claimed=None, api_token=None):
             _CONN.execute("UPDATE devices SET claimed=? WHERE device_id=?", (1 if claimed else 0, device_id))
         if api_token is not None:
             _CONN.execute("UPDATE devices SET api_token=? WHERE device_id=?", (api_token, device_id))
+        if device_secret is not None:
+            _CONN.execute("UPDATE devices SET device_secret=? WHERE device_id=?", (device_secret, device_id))
         _CONN.commit()
     return get_device(device_id)
 

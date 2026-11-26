@@ -28,6 +28,7 @@ if str(TOOLS_DIR) not in sys.path:
 import build_flavor  # noqa: E402
 import fleet_router  # noqa: E402
 import hub_db  # noqa: E402
+import lan_discovery  # noqa: E402
 import mdns_advertiser  # noqa: E402
 import web_compiler  # noqa: E402
 

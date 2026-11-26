@@ -504,6 +504,7 @@ void mod_pc_monitor_show_status(const char *title, const char *sub)
 // REST API Handlers
 static esp_err_t monitor_push_post_handler(httpd_req_t *req)
 {
+    if (!web_server_check_auth(req)) return ESP_FAIL;
     char buf[512];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -521,6 +522,7 @@ static esp_err_t monitor_push_post_handler(httpd_req_t *req)
 
 static esp_err_t joystick_state_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     char key_copy[16];
     uint32_t seq_copy = 0;
     portENTER_CRITICAL(&s_metrics_mux);
@@ -539,6 +541,7 @@ static esp_err_t joystick_state_get_handler(httpd_req_t *req)
 #if !CONFIG_FEATURE_DISPLAY
 static esp_err_t pcmon_display_status_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_type(req, "application/json");
     cJSON *root = mod_pc_monitor_build_status_json();

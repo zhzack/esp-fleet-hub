@@ -19,6 +19,9 @@
 #if CONFIG_FEATURE_DISPLAY
 #include "hal_epd.h"
 #endif
+#if CONFIG_FEATURE_USB_OTG
+#include "mod_usb_otg.h"
+#endif
 
 #ifdef CONFIG_APP_FW_VERSION
 #define FW_VERSION_STR CONFIG_APP_FW_VERSION
@@ -148,10 +151,13 @@ size_t system_caps_to_json(char *dst, size_t max_len)
     cJSON_AddStringToObject(root, "mac", c.mac_addr);
     cJSON_AddStringToObject(root, "ip", c.ip_addr);
     cJSON_AddNumberToObject(root, "web_port", cfg.web_port);
-    cJSON_AddBoolToObject(root, "auth_required", cfg.api_token[0] != '\0');
+    cJSON_AddBoolToObject(root, "auth_required",
+                          cfg.api_token[0] != '\0' || (cfg.auth_strict && cfg.device_secret[0] != '\0'));
+    cJSON_AddBoolToObject(root, "auth_strict", cfg.auth_strict);
     cJSON_AddBoolToObject(root, "ap_active", wifi_mgr_is_ap_active());
     cJSON_AddNumberToObject(root, "config_ver", cfg.config_ver);
     cJSON_AddStringToObject(root, "hub_url", cfg.hub_url);
+    cJSON_AddBoolToObject(root, "hub_fallback_mdns", cfg.hub_fallback_mdns);
 
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
     cJSON_AddStringToObject(wifi, "ssid", c.wifi_ssid);
@@ -202,7 +208,11 @@ size_t system_caps_to_json(char *dst, size_t max_len)
         cJSON_AddNumberToObject(disp, "height", 240);
     }
 #endif
-    cJSON_AddBoolToObject(cJSON_AddObjectToObject(caps, "usb_otg"), "enabled", c.feat_usb_otg);
+    cJSON *u_otg = cJSON_AddObjectToObject(caps, "usb_otg");
+    cJSON_AddBoolToObject(u_otg, "enabled", c.feat_usb_otg);
+#if CONFIG_FEATURE_USB_OTG
+    cJSON_AddBoolToObject(u_otg, "mounted", mod_usb_otg_is_mounted());
+#endif
 
     cJSON *pcmon = cJSON_AddObjectToObject(caps, "pc_monitor");
     cJSON_AddBoolToObject(pcmon, "enabled", c.feat_pc_monitor);
@@ -227,11 +237,17 @@ size_t system_caps_to_json(char *dst, size_t max_len)
 
     cJSON *wsg = cJSON_AddObjectToObject(caps, "ws_gateway");
 #if CONFIG_FEATURE_WS_GATEWAY
-    cJSON_AddBoolToObject(wsg, "enabled", true);
+    cJSON_AddBoolToObject(wsg, "enabled", cfg.ws_enabled);
     cJSON_AddBoolToObject(wsg, "connected", ws_gateway_is_online());
+    cJSON_AddStringToObject(wsg, "configured_url", cfg.ws_gateway_url);
+    char active_ws_buf[160] = "";
+    ws_gateway_get_active_url(active_ws_buf, sizeof(active_ws_buf));
+    cJSON_AddStringToObject(wsg, "active_url", active_ws_buf);
+    cJSON_AddStringToObject(wsg, "role", "client");
 #else
     cJSON_AddBoolToObject(wsg, "enabled", false);
     cJSON_AddBoolToObject(wsg, "connected", false);
+    cJSON_AddStringToObject(wsg, "role", "disabled");
 #endif
 
     char *printed = cJSON_PrintUnformatted(root);

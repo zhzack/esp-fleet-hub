@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "cJSON.h"
@@ -292,24 +293,30 @@ static void send_cors(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 }
 
-static esp_err_t read_json_body(httpd_req_t *req, cJSON **out_root)
+static esp_err_t read_json_body(httpd_req_t *req, size_t max_body, cJSON **out_root)
 {
     int len = req->content_len;
-    if (len <= 0 || len > 1024) {
+    if (len <= 0 || (size_t)len > max_body) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
         return ESP_FAIL;
     }
-    char *buf = calloc(1, len + 1);
+    char *buf = calloc(1, (size_t)len + 1);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
-    int n = httpd_req_recv(req, buf, len);
-    if (n <= 0) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
-        return ESP_FAIL;
+    int received = 0;
+    while (received < len) {
+        int n = httpd_req_recv(req, buf + received, len - received);
+        if (n <= 0) {
+            if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
+            return ESP_FAIL;
+        }
+        received += n;
     }
+    buf[received] = '\0';
     *out_root = cJSON_Parse(buf);
     free(buf);
     if (!*out_root) {
@@ -319,8 +326,132 @@ static esp_err_t read_json_body(httpd_req_t *req, cJSON **out_root)
     return ESP_OK;
 }
 
+static uint8_t parse_mouse_button_cjson(const cJSON *item, uint8_t def_btn)
+{
+    if (cJSON_IsNumber(item)) {
+        return (uint8_t)item->valueint;
+    }
+    if (cJSON_IsString(item)) {
+        if (strcasecmp(item->valuestring, "right") == 0) return 2;
+        if (strcasecmp(item->valuestring, "middle") == 0) return 3;
+        return 1;
+    }
+    return def_btn;
+}
+
+static bool exec_action_internal(const cJSON *step, char *err_code, char *err_msg, int depth)
+{
+    if (!step || !cJSON_IsObject(step)) {
+        strcpy(err_code, "E004");
+        strcpy(err_msg, "action must be JSON object");
+        return false;
+    }
+    if (depth > 4) {
+        strcpy(err_code, "E004");
+        strcpy(err_msg, "macro nesting too deep");
+        return false;
+    }
+    const cJSON *jt = cJSON_GetObjectItem(step, "type");
+    if (!cJSON_IsString(jt)) {
+        strcpy(err_code, "E004");
+        strcpy(err_msg, "missing action.type");
+        return false;
+    }
+    const char *t = jt->valuestring;
+    if (strcmp(t, "delay") == 0) {
+        int ms = cJSON_IsNumber(cJSON_GetObjectItem(step, "delay_ms")) ? cJSON_GetObjectItem(step, "delay_ms")->valueint : 0;
+        if (ms > 30000) ms = 30000;
+        if (ms > 0) vTaskDelay(pdMS_TO_TICKS(ms));
+        return true;
+    }
+    if (strcmp(t, "macro") == 0) {
+        const cJSON *steps = cJSON_GetObjectItem(step, "steps");
+        if (!cJSON_IsArray(steps)) {
+            strcpy(err_code, "E004");
+            strcpy(err_msg, "macro requires steps array");
+            return false;
+        }
+        const cJSON *sub = NULL;
+        cJSON_ArrayForEach(sub, steps) {
+            if (!exec_action_internal(sub, err_code, err_msg, depth + 1)) return false;
+        }
+        return true;
+    }
+    if (!mod_usb_otg_is_mounted()) {
+        strcpy(err_code, "E007");
+        strcpy(err_msg, "USB host not mounted");
+        return false;
+    }
+    if (strcmp(t, "mouse_move") == 0) {
+        int dx = cJSON_IsNumber(cJSON_GetObjectItem(step, "x")) ? cJSON_GetObjectItem(step, "x")->valueint :
+                 (cJSON_IsNumber(cJSON_GetObjectItem(step, "dx")) ? cJSON_GetObjectItem(step, "dx")->valueint : 0);
+        int dy = cJSON_IsNumber(cJSON_GetObjectItem(step, "y")) ? cJSON_GetObjectItem(step, "y")->valueint :
+                 (cJSON_IsNumber(cJSON_GetObjectItem(step, "dy")) ? cJSON_GetObjectItem(step, "dy")->valueint : 0);
+        if (dx > 127) dx = 127;
+        if (dx < -127) dx = -127;
+        if (dy > 127) dy = 127;
+        if (dy < -127) dy = -127;
+        return mod_usb_otg_mouse_move((int8_t)dx, (int8_t)dy);
+    }
+    if (strcmp(t, "mouse_scroll") == 0) {
+        int hx = cJSON_IsNumber(cJSON_GetObjectItem(step, "x")) ? cJSON_GetObjectItem(step, "x")->valueint :
+                 (cJSON_IsNumber(cJSON_GetObjectItem(step, "hx")) ? cJSON_GetObjectItem(step, "hx")->valueint : 0);
+        int vy = cJSON_IsNumber(cJSON_GetObjectItem(step, "y")) ? cJSON_GetObjectItem(step, "y")->valueint :
+                 (cJSON_IsNumber(cJSON_GetObjectItem(step, "vy")) ? cJSON_GetObjectItem(step, "vy")->valueint : 0);
+        if (hx > 127) hx = 127;
+        if (hx < -127) hx = -127;
+        if (vy > 127) vy = 127;
+        if (vy < -127) vy = -127;
+        return mod_usb_otg_mouse_scroll((int8_t)vy, (int8_t)hx);
+    }
+    if (strcmp(t, "mouse_click") == 0) {
+        return mod_usb_otg_mouse_click(parse_mouse_button_cjson(cJSON_GetObjectItem(step, "button"), 1));
+    }
+    if (strcmp(t, "mouse_down") == 0) {
+        return mod_usb_otg_mouse_btn(parse_mouse_button_cjson(cJSON_GetObjectItem(step, "button"), 1), true);
+    }
+    if (strcmp(t, "mouse_up") == 0) {
+        return mod_usb_otg_mouse_btn(parse_mouse_button_cjson(cJSON_GetObjectItem(step, "button"), 1), false);
+    }
+    if (strcmp(t, "keyboard_tap") == 0) {
+        const cJSON *jk = cJSON_GetObjectItem(step, "key");
+        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
+        return cJSON_IsString(jk) && mod_usb_otg_key_tap(jk->valuestring, cJSON_IsNumber(jm) ? (uint8_t)jm->valueint : 0);
+    }
+    if (strcmp(t, "keyboard_down") == 0) {
+        const cJSON *jk = cJSON_GetObjectItem(step, "key");
+        const cJSON *jm = cJSON_GetObjectItem(step, "modifiers");
+        return cJSON_IsString(jk) && mod_usb_otg_key_down(jk->valuestring, cJSON_IsNumber(jm) ? (uint8_t)jm->valueint : 0);
+    }
+    if (strcmp(t, "keyboard_up") == 0) {
+        const cJSON *jk = cJSON_GetObjectItem(step, "key");
+        return cJSON_IsString(jk) && mod_usb_otg_key_up(jk->valuestring);
+    }
+    if (strcmp(t, "text") == 0 || strcmp(t, "text_input") == 0) {
+        const cJSON *jc = cJSON_GetObjectItem(step, "content");
+        if (!cJSON_IsString(jc)) jc = cJSON_GetObjectItem(step, "text");
+        int interval = cJSON_IsNumber(cJSON_GetObjectItem(step, "interval_ms")) ? cJSON_GetObjectItem(step, "interval_ms")->valueint : 5;
+        if (interval < 0) interval = 0;
+        if (interval > 100) interval = 100;
+        return cJSON_IsString(jc) && mod_usb_otg_type_text(jc->valuestring, interval);
+    }
+    strcpy(err_code, "E004");
+    snprintf(err_msg, 64, "unsupported action: %.40s", t);
+    return false;
+}
+
+bool mod_usb_otg_exec_action(const void *cjson_step, char *err_code, char *err_msg)
+{
+    char ec_tmp[12] = "E500";
+    char em_tmp[64] = "exec failed";
+    char *ec = err_code ? err_code : ec_tmp;
+    char *em = err_msg ? err_msg : em_tmp;
+    return exec_action_internal((const cJSON *)cjson_step, ec, em, 0);
+}
+
 static esp_err_t hid_status_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     send_cors(req);
     char resp[160];
     snprintf(resp, sizeof(resp),
@@ -336,9 +467,14 @@ static esp_err_t hid_text_post_handler(httpd_req_t *req)
     send_cors(req);
 
     cJSON *root = NULL;
-    if (read_json_body(req, &root) != ESP_OK) return ESP_FAIL;
+    if (read_json_body(req, 2048, &root) != ESP_OK) return ESP_FAIL;
     const cJSON *j_txt = cJSON_GetObjectItem(root, "text");
-    bool ok = cJSON_IsString(j_txt) && mod_usb_otg_type_text(j_txt->valuestring, 6);
+    if (!cJSON_IsString(j_txt)) j_txt = cJSON_GetObjectItem(root, "content");
+    const cJSON *j_int = cJSON_GetObjectItem(root, "interval_ms");
+    int interval = cJSON_IsNumber(j_int) ? j_int->valueint : 6;
+    if (interval < 0) interval = 0;
+    if (interval > 100) interval = 100;
+    bool ok = cJSON_IsString(j_txt) && mod_usb_otg_type_text(j_txt->valuestring, interval);
     cJSON_Delete(root);
 
     char resp[128];
@@ -354,16 +490,26 @@ static esp_err_t hid_key_post_handler(httpd_req_t *req)
     send_cors(req);
 
     cJSON *root = NULL;
-    if (read_json_body(req, &root) != ESP_OK) return ESP_FAIL;
+    if (read_json_body(req, 1024, &root) != ESP_OK) return ESP_FAIL;
 
     uint8_t mod = 0;
     const cJSON *j_mod = cJSON_GetObjectItem(root, "mod");
+    if (!cJSON_IsNumber(j_mod)) j_mod = cJSON_GetObjectItem(root, "modifiers");
     if (cJSON_IsNumber(j_mod)) mod = (uint8_t)j_mod->valueint;
     const cJSON *j_code = cJSON_GetObjectItem(root, "keycode");
     const cJSON *j_key = cJSON_GetObjectItem(root, "key");
+    const cJSON *j_op = cJSON_GetObjectItem(root, "op");
+    const char *op = cJSON_IsString(j_op) ? j_op->valuestring : "tap";
     bool sent = false;
-    if (cJSON_IsNumber(j_code)) sent = send_kbd_tap(mod, (uint8_t)j_code->valueint);
-    else if (cJSON_IsString(j_key)) sent = mod_usb_otg_key_tap(j_key->valuestring, mod);
+    if (cJSON_IsNumber(j_code)) {
+        if (strcasecmp(op, "down") == 0) sent = send_kbd_report(mod, (uint8_t)j_code->valueint);
+        else if (strcasecmp(op, "up") == 0) sent = send_kbd_report(0, 0);
+        else sent = send_kbd_tap(mod, (uint8_t)j_code->valueint);
+    } else if (cJSON_IsString(j_key)) {
+        if (strcasecmp(op, "down") == 0) sent = mod_usb_otg_key_down(j_key->valuestring, mod);
+        else if (strcasecmp(op, "up") == 0) sent = mod_usb_otg_key_up(j_key->valuestring);
+        else sent = mod_usb_otg_key_tap(j_key->valuestring, mod);
+    }
     cJSON_Delete(root);
 
     char resp[128];
@@ -379,21 +525,39 @@ static esp_err_t hid_mouse_post_handler(httpd_req_t *req)
     send_cors(req);
 
     cJSON *root = NULL;
-    if (read_json_body(req, &root) != ESP_OK) return ESP_FAIL;
-    int8_t dx = (int8_t)(cJSON_IsNumber(cJSON_GetObjectItem(root, "dx")) ? cJSON_GetObjectItem(root, "dx")->valueint : 0);
-    int8_t dy = (int8_t)(cJSON_IsNumber(cJSON_GetObjectItem(root, "dy")) ? cJSON_GetObjectItem(root, "dy")->valueint : 0);
-    int8_t wh = (int8_t)(cJSON_IsNumber(cJSON_GetObjectItem(root, "wheel")) ? cJSON_GetObjectItem(root, "wheel")->valueint : 0);
+    if (read_json_body(req, 1024, &root) != ESP_OK) return ESP_FAIL;
+    int dx = cJSON_IsNumber(cJSON_GetObjectItem(root, "dx")) ? cJSON_GetObjectItem(root, "dx")->valueint : 0;
+    int dy = cJSON_IsNumber(cJSON_GetObjectItem(root, "dy")) ? cJSON_GetObjectItem(root, "dy")->valueint : 0;
+    int vy = cJSON_IsNumber(cJSON_GetObjectItem(root, "wheel")) ? cJSON_GetObjectItem(root, "wheel")->valueint :
+             (cJSON_IsNumber(cJSON_GetObjectItem(root, "vy")) ? cJSON_GetObjectItem(root, "vy")->valueint : 0);
+    int hx = cJSON_IsNumber(cJSON_GetObjectItem(root, "hx")) ? cJSON_GetObjectItem(root, "hx")->valueint : 0;
+    const cJSON *j_op = cJSON_GetObjectItem(root, "op");
     const cJSON *j_clk = cJSON_GetObjectItem(root, "click");
+    const cJSON *j_btn = cJSON_GetObjectItem(root, "button");
+    const char *op = cJSON_IsString(j_op) ? j_op->valuestring : "";
+
+    if (dx > 127) dx = 127;
+    if (dx < -127) dx = -127;
+    if (dy > 127) dy = 127;
+    if (dy < -127) dy = -127;
+    if (vy > 127) vy = 127;
+    if (vy < -127) vy = -127;
+    if (hx > 127) hx = 127;
+    if (hx < -127) hx = -127;
+
     bool sent = false;
-    if (cJSON_IsString(j_clk)) {
-        uint8_t b = 1;
-        if (strcasecmp(j_clk->valuestring, "right") == 0) b = 2;
-        else if (strcasecmp(j_clk->valuestring, "middle") == 0) b = 3;
-        sent = mod_usb_otg_mouse_click(b);
-    } else if (wh != 0) {
-        sent = mod_usb_otg_mouse_scroll(wh, 0);
+    if (strcasecmp(op, "down") == 0) {
+        sent = mod_usb_otg_mouse_btn(parse_mouse_button_cjson(j_btn, 1), true);
+    } else if (strcasecmp(op, "up") == 0) {
+        sent = mod_usb_otg_mouse_btn(parse_mouse_button_cjson(j_btn, 1), false);
+    } else if (strcasecmp(op, "click") == 0) {
+        sent = mod_usb_otg_mouse_click(parse_mouse_button_cjson(j_btn ? j_btn : j_clk, 1));
+    } else if (cJSON_IsString(j_clk)) {
+        sent = mod_usb_otg_mouse_click(parse_mouse_button_cjson(j_clk, 1));
+    } else if (vy != 0 || hx != 0) {
+        sent = mod_usb_otg_mouse_scroll((int8_t)vy, (int8_t)hx);
     } else if (dx != 0 || dy != 0) {
-        sent = mod_usb_otg_mouse_move(dx, dy);
+        sent = mod_usb_otg_mouse_move((int8_t)dx, (int8_t)dy);
     }
     cJSON_Delete(root);
 
@@ -402,6 +566,38 @@ static esp_err_t hid_mouse_post_handler(httpd_req_t *req)
              s_usb_mounted ? "true" : "false", sent ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, resp);
+}
+
+static esp_err_t hid_action_post_handler(httpd_req_t *req)
+{
+    if (!web_server_check_auth(req)) return ESP_FAIL;
+    send_cors(req);
+
+    cJSON *root = NULL;
+    if (read_json_body(req, 8192, &root) != ESP_OK) return ESP_FAIL;
+
+    int64_t t0 = esp_timer_get_time();
+    char ec[12] = "E500", em[64] = "exec failed";
+    bool ok = mod_usb_otg_exec_action(root, ec, em);
+    int ms = (int)((esp_timer_get_time() - t0) / 1000LL);
+    cJSON_Delete(root);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", ok);
+    cJSON_AddBoolToObject(resp, "mounted", s_usb_mounted);
+    cJSON_AddNumberToObject(resp, "exec_time_ms", ms);
+    if (!ok) {
+        cJSON_AddStringToObject(resp, "error_code", ec);
+        cJSON_AddStringToObject(resp, "error_message", em);
+        httpd_resp_set_status(req, strcmp(ec, "E007") == 0 ? "409 Conflict" : "400 Bad Request");
+    }
+    char *txt = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    httpd_resp_set_type(req, "application/json");
+    if (!txt) return httpd_resp_sendstr(req, "{\"ok\":false}");
+    esp_err_t err = httpd_resp_sendstr(req, txt);
+    cJSON_free(txt);
+    return err;
 }
 
 esp_err_t mod_usb_otg_init(void)
@@ -433,11 +629,13 @@ esp_err_t mod_usb_otg_register_routes(httpd_handle_t server)
     httpd_uri_t u_txt = { .uri = "/api/hid/text",   .method = HTTP_POST, .handler = hid_text_post_handler };
     httpd_uri_t u_key = { .uri = "/api/hid/key",    .method = HTTP_POST, .handler = hid_key_post_handler };
     httpd_uri_t u_mse = { .uri = "/api/hid/mouse",  .method = HTTP_POST, .handler = hid_mouse_post_handler };
+    httpd_uri_t u_act = { .uri = "/api/hid/action", .method = HTTP_POST, .handler = hid_action_post_handler };
     httpd_register_uri_handler(server, &u_st);
     httpd_register_uri_handler(server, &u_txt);
     httpd_register_uri_handler(server, &u_key);
     httpd_register_uri_handler(server, &u_mse);
-    ESP_LOGI(TAG, "USB OTG HID routes registered (/api/hid/status, text, key, mouse)");
+    httpd_register_uri_handler(server, &u_act);
+    ESP_LOGI(TAG, "USB OTG HID routes registered (/api/hid/status, text, key, mouse, action)");
     return ESP_OK;
 }
 
@@ -456,5 +654,6 @@ bool mod_usb_otg_mouse_move(int8_t dx, int8_t dy) { (void)dx;(void)dy; return fa
 bool mod_usb_otg_mouse_scroll(int8_t v, int8_t h) { (void)v;(void)h; return false; }
 bool mod_usb_otg_mouse_click(uint8_t b) { (void)b; return false; }
 bool mod_usb_otg_mouse_btn(uint8_t b, bool d) { (void)b;(void)d; return false; }
+bool mod_usb_otg_exec_action(const void *s, char *ec, char *em) { (void)s;(void)ec;(void)em; return false; }
 
 #endif

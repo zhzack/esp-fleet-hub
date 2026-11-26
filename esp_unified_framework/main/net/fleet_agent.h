@@ -11,6 +11,7 @@ extern "C" {
 esp_err_t fleet_agent_init(void);
 bool fleet_agent_is_registered(void);
 void fleet_agent_get_hub_url(char *dst, size_t max_len);
+void fleet_agent_apply_config(void);
 
 #ifdef __cplusplus
 }

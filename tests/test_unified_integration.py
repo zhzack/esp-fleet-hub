@@ -333,3 +333,174 @@ def test_multi_task_queue_external_env_and_public_url(client, tmp_path, monkeypa
     )
     assert ota.status_code == 200
     assert ota.json()["url"].startswith("https://hub.example.org:8443/api/fleet/download?file=")
+
+
+def test_lan_discover_and_key_adopt_flow(client, monkeypatch):
+    """Verify LAN HTTP probe, key auth verify (401/200), mDNS parser, adopt & cross-user guard."""
+    import json
+    import socket
+    import struct
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from app.services import unified_bridge as ub
+
+    ub.init_unified_hub()
+    mock_cfg = {
+        "hub_url": "http://old-hub:8000",
+        "ws_gateway_url": "ws://old-hub:8000/ws/device",
+        "ws_enabled": True,
+        "auth_strict": True,
+    }
+    valid_key = "secret-adopt-99"
+
+    class _MockEsp(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def _send(self, code, data):
+            raw = json.dumps(data).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            if self.path == "/api/system/capabilities":
+                self._send(200, {
+                    "ok": True,
+                    "device_id": "esp32s3-roam01",
+                    "mdns_host": "roam-s3",
+                    "chip": "ESP32-S3",
+                    "board": "esp32s3_display_hid",
+                    "fw_version": "1.1.0-unified",
+                    "mac": "AA:BB:CC:DD:EE:01",
+                    "flash_mb": 8,
+                    "ip": "127.0.0.1",
+                    "web_port": self.server.server_port,
+                    "auth_required": True,
+                    "auth_strict": True,
+                    "hub_url": mock_cfg["hub_url"],
+                    "capabilities": {"usb_otg": {"enabled": True}, "gpio": {"enabled": True}},
+                })
+                return
+            self._send(404, {"ok": False})
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", "0") or "0")
+            body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            hdr_key = self.headers.get("X-API-Key", "")
+            cand = hdr_key or str(body.get("key", ""))
+            if self.path == "/api/auth/verify":
+                if cand != valid_key:
+                    self._send(401, {"ok": False, "error": "Unauthorized"})
+                else:
+                    self._send(200, {"ok": True, "authenticated": True, "device_id": "esp32s3-roam01"})
+                return
+            if self.path == "/api/system/config":
+                if hdr_key != valid_key:
+                    self._send(401, {"ok": False, "error": "Unauthorized"})
+                    return
+                mock_cfg.update({k: v for k, v in body.items() if v is not None})
+                self._send(200, {"ok": True, "config_ver": 3, **mock_cfg})
+                return
+            self._send(404, {"ok": False})
+
+    # mDNS TXT/SRV/PTR packet parsing smoke check
+    txt_items = [b"id=esp32s3-roam01", b"mdns=roam-s3", b"auth=1", b"strict=1", b"port=8080"]
+    txt_rdata = b"".join(bytes([len(x)]) + x for x in txt_items)
+    svc_name = ub.mdns_advertiser._encode_name("_esp-unified._tcp.local")
+    inst_name = ub.mdns_advertiser._encode_name("esp32s3-roam01._esp-unified._tcp.local")
+    host_name = ub.mdns_advertiser._encode_name("roam-s3.local")
+    pkt = (
+        struct.pack(">HHHHHH", 0, 0x8400, 0, 4, 0, 0)
+        + svc_name + struct.pack(">HHIH", ub.mdns_advertiser.DNS_TYPE_PTR, 1, 120, len(inst_name)) + inst_name
+        + inst_name + struct.pack(">HHIH", ub.mdns_advertiser.DNS_TYPE_SRV, 1, 120, 6 + len(host_name))
+        + struct.pack(">HHH", 0, 0, 8080) + host_name
+        + inst_name + struct.pack(">HHIH", ub.mdns_advertiser.DNS_TYPE_TXT, 1, 120, len(txt_rdata)) + txt_rdata
+        + host_name + struct.pack(">HHIH", ub.mdns_advertiser.DNS_TYPE_A, 1, 120, 4) + socket.inet_aton("192.168.50.77")
+    )
+    parsed = ub.lan_discovery._parse_dns_packet(pkt)
+    assert parsed["txts"]["esp32s3-roam01._esp-unified._tcp.local"]["strict"] == "1"
+    assert parsed["addrs"]["roam-s3.local"] == "192.168.50.77"
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _MockEsp)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        hdrs = _admin_headers(client)
+        client.post(
+            "/api/v1/auth/register",
+            headers=hdrs,
+            json={"username": "other_user", "password": "Password123", "role": "user"},
+        )
+        u2_tok = client.post(
+            "/api/v1/auth/login",
+            json={"username": "other_user", "password": "Password123"},
+        ).json()["access_token"]
+        u2_hdrs = {"Authorization": f"Bearer {u2_tok}"}
+
+        # Invalid CIDR validation
+        assert client.post(
+            "/api/v2/unified/discover",
+            json={"subnet": "10.0.0.0/8"},
+            headers=hdrs,
+        ).status_code == 400
+
+        # HTTP scan detects loopback mock ESP device
+        disc = client.post(
+            "/api/v2/unified/discover",
+            json={"subnet": "127.0.0.1/32", "ports": [srv.server_port], "use_mdns": False, "use_http_scan": True},
+            headers=hdrs,
+        )
+        assert disc.status_code == 200
+        devs = disc.json()["devices"]
+        assert len(devs) == 1
+        assert devs[0]["device_id"] == "esp32s3-roam01"
+        assert devs[0]["auth_strict"] is True
+
+        # Wrong key rejected with 401 before modifying device
+        bad_adopt = client.post(
+            "/api/v2/unified/adopt",
+            json={"ip": "127.0.0.1", "port": srv.server_port, "api_token": "wrong-key"},
+            headers=hdrs,
+        )
+        assert bad_adopt.status_code == 401
+
+        # Correct key verifies, pushes Hub/WS URLs, and registers device with encrypted token
+        good_adopt = client.post(
+            "/api/v2/unified/adopt",
+            json={
+                "ip": "127.0.0.1",
+                "port": srv.server_port,
+                "api_token": valid_key,
+                "name": "Office Roaming S3",
+                "set_hub_url": True,
+                "set_ws_gateway": True,
+                "ws_enabled": True,
+                "config_patch": {"ws_reconnect_ms": 3000},
+            },
+            headers=hdrs,
+        )
+        assert good_adopt.status_code == 200
+        body = good_adopt.json()
+        assert body["ok"] is True
+        assert body["config_applied"]["ws_reconnect_ms"] == 3000
+        assert body["config_applied"]["ws_gateway_url"].endswith("/ws/device")
+        assert mock_cfg["ws_gateway_url"].endswith("/ws/device")
+
+        stored = ub.hub_db.get_device("esp32s3-roam01")
+        assert stored["claimed"] == 1
+        assert stored["api_token"] == valid_key
+        assert stored["device_secret"] == valid_key
+
+        # Another non-admin user cannot hijack already-claimed device
+        hijack = client.post(
+            "/api/v2/unified/adopt",
+            json={"ip": "127.0.0.1", "port": srv.server_port, "api_token": valid_key},
+            headers=u2_hdrs,
+        )
+        assert hijack.status_code == 403
+    finally:
+        srv.shutdown()
+        srv.server_close()

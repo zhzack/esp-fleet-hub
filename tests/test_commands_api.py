@@ -438,3 +438,137 @@ def test_c3_display_config_and_text_e2e(client):
                 ).status_code == 400
     finally:
         device_registry._live.clear()
+
+
+def test_ws_config_and_hid_action_routes(client, monkeypatch):
+    """Verify /ws/config (GET/POST) validation & /hid/action WS envelope + HTTP fallback."""
+    monkeypatch.setattr("app.api.ws.device.SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr("app.database.session.engine", test_engine)
+    monkeypatch.setattr("app.services.device_executor.SessionLocal", TestingSessionLocal)
+
+    from app.services import unified_bridge as ub
+
+    ub.init_unified_hub()
+    received_frames = []
+
+    try:
+        with client as tc:
+            hdrs = _reg_login(tc, "ws_hid_user")
+            assert tc.post(
+                "/api/v1/devices",
+                headers=hdrs,
+                json={
+                    "device_uuid": "esp32s3_ctrl_e2e",
+                    "name": "S3 Controller",
+                    "capabilities": ["usb_keyboard", "usb_mouse", "gpio"],
+                },
+            ).status_code == 201
+
+            with tc.websocket_connect("/ws/device") as ws:
+                ws.send_json({
+                    "header": {"msg_id": str(uuid.uuid4()), "type": "register", "timestamp": 0},
+                    "routing": {},
+                    "payload": {
+                        "device_id": "esp32s3_ctrl_e2e",
+                        "name": "S3 Controller",
+                        "capabilities": ["usb_keyboard", "usb_mouse", "gpio"],
+                    },
+                })
+                assert ws.receive_json()["payload"]["status"] == "ok"
+
+                def _dev_loop():
+                    while True:
+                        try:
+                            msg = ws.receive_json()
+                        except Exception:
+                            break
+                        received_frames.append(msg)
+                        mt = msg["header"]["type"]
+                        mid = msg["header"]["msg_id"]
+                        pl = msg.get("payload") or {}
+                        if mt == "ws.config.get":
+                            ws.send_json({
+                                "header": {"msg_id": str(uuid.uuid4()), "ref_msg_id": mid, "type": "ack", "timestamp": 0},
+                                "routing": {},
+                                "payload": {
+                                    "ok": True,
+                                    "ws_enabled": True,
+                                    "ws_gateway_url": "ws://192.168.1.10:8000/ws/device",
+                                    "ws_reconnect_ms": 5000,
+                                },
+                            })
+                        elif mt == "ws.config.set":
+                            ws.send_json({
+                                "header": {"msg_id": str(uuid.uuid4()), "ref_msg_id": mid, "type": "ack", "timestamp": 0},
+                                "routing": {},
+                                "payload": {"ok": True, "reloaded": True, **pl},
+                            })
+                        elif mt == "action":
+                            ws.send_json({
+                                "header": {"msg_id": str(uuid.uuid4()), "ref_msg_id": mid, "type": "ack", "timestamp": 0},
+                                "routing": {},
+                                "payload": {"ok": True, "status": "ok", "type": pl.get("type")},
+                            })
+
+                t = threading.Thread(target=_dev_loop, daemon=True)
+                t.start()
+
+                r_get = tc.get("/api/v2/devices/esp32s3_ctrl_e2e/ws/config", headers=hdrs)
+                assert r_get.status_code == 200
+                assert r_get.json()["result"]["ws_reconnect_ms"] == 5000
+
+                # Validation checks
+                assert tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/ws/config",
+                    headers=hdrs,
+                    json={"ws_gateway_url": "http://wrong-scheme"},
+                ).status_code == 400
+                assert tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/ws/config",
+                    headers=hdrs,
+                    json={"ws_reconnect_ms": 100},
+                ).status_code == 400
+
+                r_set = tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/ws/config",
+                    headers=hdrs,
+                    json={
+                        "ws_enabled": True,
+                        "ws_gateway_url": "wss://new-hub.local:8443/ws/device",
+                        "ws_reconnect_ms": 2500,
+                        "auth_strict": True,
+                    },
+                )
+                assert r_set.status_code == 200
+                assert r_set.json()["result"]["ws_reconnect_ms"] == 2500
+
+                # HID action invalid payload rejected
+                assert tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/hid/action",
+                    headers=hdrs,
+                    json={},
+                ).status_code == 400
+
+                # HID single step + macro shorthand both deliver header.type="action" with need_ack=True
+                r_act1 = tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/hid/action",
+                    headers=hdrs,
+                    json={"type": "keyboard_tap", "key": "enter", "modifiers": ["ctrl"]},
+                )
+                assert r_act1.status_code == 200
+                assert r_act1.json()["status"] == "acked"
+
+                r_act2 = tc.post(
+                    "/api/v2/devices/esp32s3_ctrl_e2e/hid/action",
+                    headers=hdrs,
+                    json={"steps": [{"type": "text", "content": "ok"}, {"type": "delay", "ms": 20}]},
+                )
+                assert r_act2.status_code == 200
+                assert r_act2.json()["status"] == "acked"
+
+                act_frames = [f for f in received_frames if f["header"]["type"] == "action"]
+                assert len(act_frames) == 2
+                assert act_frames[0]["payload"]["need_ack"] is True
+                assert act_frames[1]["payload"]["type"] == "macro"
+    finally:
+        device_registry._live.clear()

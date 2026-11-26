@@ -94,6 +94,7 @@ static void send_cors(httpd_req_t *req)
 
 static esp_err_t display_status_get_handler(httpd_req_t *req)
 {
+    if (!web_server_check_read_auth(req)) return ESP_FAIL;
     send_cors(req);
     cJSON *root = mod_display_build_status_json();
     char *out = root ? cJSON_PrintUnformatted(root) : NULL;

@@ -11,6 +11,7 @@ import {
 import { unifiedApi } from '@/api/unified'
 import DisplayConfigPanel from '@/components/DisplayConfigPanel.vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildUnifiedConfigPatch, normalizeWsConfigForm } from '@/utils/wsConfig'
 
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
@@ -99,6 +100,13 @@ const inspect = reactive({
     mdns_host: '',
     hub_url: '',
     ws_gateway_url: '',
+    ws_enabled: true,
+    ws_reconnect_ms: 5000,
+    ws_heartbeat_ms: 10000,
+    hub_fallback_mdns: true,
+    hb_interval_ms: 12000,
+    auth_strict: false,
+    api_token: '',
   },
 })
 
@@ -116,6 +124,24 @@ const otaDialog = reactive({
   file: '',
   selectedIds: [],
   submitting: false,
+})
+
+// LAN Scan & Key Adoption Modal
+const scanDialog = reactive({
+  visible: false,
+  scanning: false,
+  subnet: '',
+  use_mdns: true,
+  use_http_scan: true,
+  results: [],
+  adoptingIp: '',
+  apiKey: '',
+  setHubUrl: true,
+  setWsGateway: true,
+  wsGatewayUrl: '',
+  wsEnabled: true,
+  manualIp: '',
+  manualPort: 80,
 })
 
 const onlineCount = computed(() => devices.value.filter((d) => d.status === 'online').length)
@@ -251,14 +277,23 @@ async function openInspect(dev) {
   inspect.cfgForm.mdns_host = dev.mdns_host || ''
   inspect.cfgForm.wifi_ssid = dev.capabilities?.wifi?.ssid || '1'
   inspect.cfgForm.wifi_pass = ''
-  inspect.cfgForm.hub_url = dev.capabilities?.fleet_agent?.active_hub || ''
-  inspect.cfgForm.ws_gateway_url = ''
+  inspect.cfgForm.api_token = ''
+  Object.assign(
+    inspect.cfgForm,
+    normalizeWsConfigForm({
+      hub_url: dev.capabilities?.fleet_agent?.active_hub || '',
+      hub_fallback_mdns: dev.capabilities?.hub_fallback_mdns,
+      ws_enabled: dev.capabilities?.ws_gateway?.enabled,
+      ws_gateway_url:
+        dev.capabilities?.ws_gateway?.configured_url || dev.capabilities?.ws_gateway?.active_url || '',
+      auth_strict: dev.capabilities?.auth_strict,
+    }),
+  )
 
   if (dev.status !== 'online' && !dev.ws_online) return
   try {
     const cfg = await unifiedApi.proxyGet(dev.device_id, '/api/system/config')
-    if (cfg.hub_url) inspect.cfgForm.hub_url = cfg.hub_url
-    if (cfg.ws_gateway_url) inspect.cfgForm.ws_gateway_url = cfg.ws_gateway_url
+    Object.assign(inspect.cfgForm, normalizeWsConfigForm({ ...inspect.cfgForm, ...cfg }))
     if (cfg.wifi_ssid) inspect.cfgForm.wifi_ssid = cfg.wifi_ssid
   } catch { /* ignore */ }
 
@@ -292,17 +327,21 @@ async function togglePin(pin, nextVal) {
 
 async function saveShadowConfig() {
   const dev = inspect.device
-  if (inspect.cfgForm.name && inspect.cfgForm.name !== dev.name) {
-    await unifiedApi.claimDevice(dev.device_id, { name: inspect.cfgForm.name, claimed: true })
-  }
-  const patch = {
-    mdns_host: inspect.cfgForm.mdns_host,
-    hub_url: inspect.cfgForm.hub_url,
-    ws_gateway_url: inspect.cfgForm.ws_gateway_url,
-  }
-  if (inspect.cfgForm.wifi_ssid) patch.wifi_ssid = inspect.cfgForm.wifi_ssid
-  if (inspect.cfgForm.wifi_pass) patch.wifi_pass = inspect.cfgForm.wifi_pass
+  const patch = buildUnifiedConfigPatch(inspect.cfgForm)
   const res = await unifiedApi.pushConfig(dev.device_id, patch)
+  const metaPayload = { claimed: true }
+  let needMeta = false
+  if (inspect.cfgForm.name && inspect.cfgForm.name !== dev.name) {
+    metaPayload.name = inspect.cfgForm.name
+    needMeta = true
+  }
+  if (inspect.cfgForm.api_token && inspect.cfgForm.api_token.trim()) {
+    metaPayload.api_token = inspect.cfgForm.api_token.trim()
+    needMeta = true
+  }
+  if (needMeta) {
+    await unifiedApi.claimDevice(dev.device_id, metaPayload)
+  }
   ElMessage.success(res.pushed_live ? '配置已实时生效并同步影子' : '配置已写入影子队列')
   pollDevices()
 }
@@ -404,6 +443,55 @@ async function submitBatchOta() {
   }
 }
 
+function openScanDialog() {
+  scanDialog.visible = true
+  if (!scanDialog.results.length && !scanDialog.scanning) {
+    runLanDiscover()
+  }
+}
+
+async function runLanDiscover() {
+  scanDialog.scanning = true
+  try {
+    const res = await unifiedApi.discoverLan({
+      subnet: scanDialog.subnet.trim(),
+      use_mdns: scanDialog.use_mdns,
+      use_http_scan: scanDialog.use_http_scan,
+    })
+    scanDialog.results = res.devices || []
+    ElMessage.success(`局域网扫描完成：发现 ${scanDialog.results.length} 台统一节点`)
+  } finally {
+    scanDialog.scanning = false
+  }
+}
+
+async function adoptScannedDevice(row) {
+  const ip = String(row?.ip || scanDialog.manualIp || '').trim()
+  const port = Number(row?.port || scanDialog.manualPort || 80)
+  if (!ip) {
+    ElMessage.warning('请输入目标设备 IPv4 地址')
+    return
+  }
+  scanDialog.adoptingIp = ip
+  try {
+    const res = await unifiedApi.adoptDevice({
+      ip,
+      port,
+      api_token: scanDialog.apiKey,
+      name: row?.local_name || row?.mdns_host || undefined,
+      claimed: true,
+      set_hub_url: scanDialog.setHubUrl,
+      set_ws_gateway: scanDialog.setWsGateway,
+      ws_gateway_url: scanDialog.wsGatewayUrl.trim() || undefined,
+      ws_enabled: scanDialog.wsEnabled,
+    })
+    ElMessage.success(`已通过密钥校验并接入 ${res.device?.device_id || ip}`)
+    await pollDevices()
+  } finally {
+    scanDialog.adoptingIp = ''
+  }
+}
+
 onMounted(() => {
   refreshAll()
   devicesTimer = setInterval(pollDevices, 8000)
@@ -432,6 +520,9 @@ onBeforeUnmount(() => {
         <el-tag type="info" effect="dark">总节点 {{ devices.length }}</el-tag>
         <el-tag type="success" effect="dark">在线 {{ onlineCount }}</el-tag>
         <el-tag type="primary" effect="dark">固件产物 {{ firmwares.length }}</el-tag>
+        <el-button type="primary" plain @click="openScanDialog">
+          <el-icon><Connection /></el-icon> 局域网扫描 / 密钥接入
+        </el-button>
         <el-button :loading="loading" @click="refreshAll">
           <el-icon><Refresh /></el-icon> 刷新
         </el-button>
@@ -666,7 +757,30 @@ onBeforeUnmount(() => {
           <el-form-item label="Wi-Fi SSID"><el-input v-model="inspect.cfgForm.wifi_ssid" /></el-form-item>
           <el-form-item label="Wi-Fi 密码"><el-input v-model="inspect.cfgForm.wifi_pass" type="password" placeholder="留空不修改" /></el-form-item>
           <el-form-item label="Hub URL"><el-input v-model="inspect.cfgForm.hub_url" /></el-form-item>
-          <el-form-item label="HID WS URL"><el-input v-model="inspect.cfgForm.ws_gateway_url" placeholder="ws://<host>:8000/ws/device" /></el-form-item>
+          <el-form-item label="Hub mDNS回退">
+            <div style="display: flex; gap: 12px; align-items: center">
+              <el-switch v-model="inspect.cfgForm.hub_fallback_mdns" />
+              <span style="font-size: 12px; opacity: 0.75">心跳周期(ms)</span>
+              <el-input-number v-model="inspect.cfgForm.hb_interval_ms" :min="2000" :max="120000" :step="1000" />
+            </div>
+          </el-form-item>
+          <el-form-item label="WS 出站客户端">
+            <div style="display: flex; gap: 12px; align-items: center">
+              <el-switch v-model="inspect.cfgForm.ws_enabled" />
+              <span style="font-size: 12px; opacity: 0.75">重连(ms)</span>
+              <el-input-number v-model="inspect.cfgForm.ws_reconnect_ms" :min="500" :max="60000" :step="500" />
+            </div>
+          </el-form-item>
+          <el-form-item label="WS 网关 URL"><el-input v-model="inspect.cfgForm.ws_gateway_url" placeholder="ws://<host>:8000/ws/device (留空按 Hub 推导)" /></el-form-item>
+          <el-form-item label="WS 心跳(ms)">
+            <el-input-number v-model="inspect.cfgForm.ws_heartbeat_ms" :min="2000" :max="120000" :step="1000" />
+          </el-form-item>
+          <el-form-item label="严格密钥鉴权">
+            <div style="display: flex; gap: 12px; align-items: center; width: 100%">
+              <el-switch v-model="inspect.cfgForm.auth_strict" />
+              <el-input v-model="inspect.cfgForm.api_token" type="password" show-password placeholder="设置/更新访问 Key (留空不改)" />
+            </div>
+          </el-form-item>
           <el-button type="primary" size="small" @click="saveShadowConfig">下发配置并同步影子</el-button>
         </el-form>
 
@@ -734,6 +848,69 @@ onBeforeUnmount(() => {
         <el-button @click="otaDialog.visible = false">取消</el-button>
         <el-button type="primary" :loading="otaDialog.submitting" @click="submitBatchOta">确认下发</el-button>
       </template>
+    </el-dialog>
+
+    <!-- LAN Scan & Key Adoption Dialog -->
+    <el-dialog v-model="scanDialog.visible" title="局域网发现与密钥跨网接入 (_esp-unified._tcp)" width="760px">
+      <el-form label-width="110px" size="small">
+        <el-form-item label="扫描网段 / 方式">
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 100%">
+            <el-input v-model="scanDialog.subnet" placeholder="可选 CIDR (如 192.168.68.0/24, 留空自动识别)" style="max-width: 280px" />
+            <el-checkbox v-model="scanDialog.use_mdns">mDNS (_esp-unified._tcp)</el-checkbox>
+            <el-checkbox v-model="scanDialog.use_http_scan">HTTP 网段探测</el-checkbox>
+            <el-button type="primary" :loading="scanDialog.scanning" @click="runLanDiscover">开始扫描</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="接入凭证 Key">
+          <el-input v-model="scanDialog.apiKey" type="password" show-password placeholder="设备 X-API-Key / api_token / device_secret（无密码设备可留空）" />
+        </el-form-item>
+        <el-form-item label="重绑定目标网关">
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 100%">
+            <el-checkbox v-model="scanDialog.setHubUrl">绑定当前 Hub</el-checkbox>
+            <el-checkbox v-model="scanDialog.setWsGateway">绑定 WS 客户端网关</el-checkbox>
+            <el-switch v-model="scanDialog.wsEnabled" active-text="启用 WS" />
+            <el-input v-model="scanDialog.wsGatewayUrl" placeholder="自定义 ws://host:port/ws/device (留空随 Hub 推导)" style="flex: 1; min-width: 240px" />
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <el-table :data="scanDialog.results" size="small" max-height="260" style="width: 100%; margin-bottom: 12px">
+        <el-table-column prop="device_id" label="设备 ID" min-width="145" />
+        <el-table-column label="地址" width="150">
+          <template #default="{ row }">{{ row.ip }}:{{ row.port || 80 }}</template>
+        </el-table-column>
+        <el-table-column prop="chip" label="芯片" width="95" />
+        <el-table-column label="发现/鉴权" width="165">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ (row.via || []).join('+') }}</el-tag>
+            <el-tag size="small" :type="row.auth_strict ? 'danger' : (row.auth_required ? 'warning' : 'success')" style="margin-left: 4px">
+              {{ row.auth_strict ? '严格 Key' : (row.auth_required ? '写鉴权' : '开放') }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="success"
+              :disabled="row.can_adopt === false"
+              :loading="scanDialog.adoptingIp === row.ip"
+              @click="adoptScannedDevice(row)"
+            >
+              校验并接入
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div style="display: flex; gap: 8px; align-items: center; padding-top: 4px">
+        <span style="font-size: 12px; opacity: 0.8; white-space: nowrap">手动直连 IP：</span>
+        <el-input v-model="scanDialog.manualIp" size="small" placeholder="例如 192.168.68.143" style="max-width: 190px" />
+        <el-input-number v-model="scanDialog.manualPort" size="small" :min="1" :max="65535" />
+        <el-button size="small" type="primary" plain :loading="Boolean(scanDialog.adoptingIp)" @click="adoptScannedDevice(null)">
+          校验密钥并接入
+        </el-button>
+      </div>
     </el-dialog>
   </div>
 </template>
