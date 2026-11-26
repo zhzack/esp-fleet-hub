@@ -228,7 +228,7 @@ async function loadInspectDisplay(dev = inspect.device) {
   inspect.displayLoading = true
   inspect.displayError = ''
   try {
-    inspect.displayStatus = await unifiedApi.proxyGet(dev.device_id, '/api/display/status')
+    inspect.displayStatus = await unifiedApi.proxyGet(dev.device_id, '/api/display/status', true)
   } catch (e) {
     inspect.displayError = e?.response?.data?.detail || e?.message || '读取屏幕配置失败'
   } finally {

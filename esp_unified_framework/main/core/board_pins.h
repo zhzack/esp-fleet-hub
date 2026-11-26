@@ -81,13 +81,14 @@ size_t board_pins_populate_gpio(gpio_pin_desc_t *dst, size_t max_items);
 #define BOARD_JOY_RIGHT       13
 #define BOARD_JOY_CENTER       4
 
-/* ================= Generic SPI Display Mapping (ST7789 / ST7735 Non-Camera) ================= */
+/* ================= Generic SPI Display Mapping (E-Paper SSD1683 / ST7789 LCD) ================= */
 #if CONFIG_IDF_TARGET_ESP32S3 && !CONFIG_FEATURE_CAMERA
     #define BOARD_DISP_MOSI   11
     #define BOARD_DISP_CLK    12
     #define BOARD_DISP_CS     10
     #define BOARD_DISP_DC     13
     #define BOARD_DISP_RST     9
+    #define BOARD_DISP_BUSY   14
     #define BOARD_DISP_BCKL   48
 #elif CONFIG_IDF_TARGET_ESP32 && !CONFIG_FEATURE_CAMERA
     #define BOARD_DISP_MOSI   23
@@ -95,6 +96,7 @@ size_t board_pins_populate_gpio(gpio_pin_desc_t *dst, size_t max_items);
     #define BOARD_DISP_CS      5
     #define BOARD_DISP_DC     16
     #define BOARD_DISP_RST    17
+    #define BOARD_DISP_BUSY   -1
     #define BOARD_DISP_BCKL   19
 #else
     #define BOARD_DISP_MOSI   -1
@@ -102,6 +104,7 @@ size_t board_pins_populate_gpio(gpio_pin_desc_t *dst, size_t max_items);
     #define BOARD_DISP_CS     -1
     #define BOARD_DISP_DC     -1
     #define BOARD_DISP_RST    -1
+    #define BOARD_DISP_BUSY   -1
     #define BOARD_DISP_BCKL   -1
 #endif
 

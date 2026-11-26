@@ -90,11 +90,27 @@ static void apply_defaults(app_config_t *cfg)
 
 #if CONFIG_FEATURE_PC_MONITOR
     strlcpy(cfg->display.mode, "monitor", sizeof(cfg->display.mode));
+    strlcpy(cfg->display.panel, "st7735_160", sizeof(cfg->display.panel));
+#elif CONFIG_IDF_TARGET_ESP32S3
+    strlcpy(cfg->display.mode, "status", sizeof(cfg->display.mode));
+    strlcpy(cfg->display.panel, "epd_213_bwr", sizeof(cfg->display.panel));
 #else
     strlcpy(cfg->display.mode, "text", sizeof(cfg->display.mode));
+    strlcpy(cfg->display.panel, "st7789_240", sizeof(cfg->display.panel));
 #endif
     cfg->display.backlight = 100;
     strlcpy(cfg->display.theme, "cyber", sizeof(cfg->display.theme));
+    cfg->display.rotation = 0;
+    cfg->display.invert = false;
+    cfg->display.partial_refresh = true;
+    cfg->display.refresh_sec = 0;
+    cfg->display.red_mask = 0x40; // Header bar highlighted in red on 3-color EPD
+    cfg->display.pin_mosi = -1;
+    cfg->display.pin_clk = -1;
+    cfg->display.pin_cs = -1;
+    cfg->display.pin_dc = -1;
+    cfg->display.pin_rst = -1;
+    cfg->display.pin_busy = -1;
     cfg->display.header_text[0] = '\0';
     cfg->display.footer_text[0] = '\0';
     cfg->display.show_clock = true;
@@ -116,7 +132,15 @@ static bool valid_disp_mode(const char *m)
 static bool valid_disp_theme(const char *t)
 {
     return t && (strcmp(t, "cyber") == 0 || strcmp(t, "emerald") == 0 ||
-                 strcmp(t, "amber") == 0 || strcmp(t, "mono") == 0);
+                 strcmp(t, "amber") == 0 || strcmp(t, "mono") == 0 ||
+                 strcmp(t, "paper") == 0 || strcmp(t, "red_bar") == 0);
+}
+
+static bool valid_disp_panel(const char *p)
+{
+    return p && (strcmp(p, "auto") == 0 || strcmp(p, "st7735_160") == 0 ||
+                 strcmp(p, "st7789_240") == 0 || strcmp(p, "epd_213_bw") == 0 ||
+                 strcmp(p, "epd_213_bwr") == 0 || strcmp(p, "epd_420_bwr") == 0);
 }
 
 void app_config_display_to_cjson(const app_display_config_t *disp, void *cjson_obj)
@@ -126,6 +150,19 @@ void app_config_display_to_cjson(const app_display_config_t *disp, void *cjson_o
     cJSON_AddStringToObject(d, "mode", disp->mode[0] ? disp->mode : "monitor");
     cJSON_AddNumberToObject(d, "backlight", disp->backlight);
     cJSON_AddStringToObject(d, "theme", disp->theme[0] ? disp->theme : "cyber");
+    cJSON_AddStringToObject(d, "panel", disp->panel[0] ? disp->panel : "auto");
+    cJSON_AddNumberToObject(d, "rotation", disp->rotation);
+    cJSON_AddBoolToObject(d, "invert", disp->invert);
+    cJSON_AddBoolToObject(d, "partial_refresh", disp->partial_refresh);
+    cJSON_AddNumberToObject(d, "refresh_sec", disp->refresh_sec);
+    cJSON_AddNumberToObject(d, "red_mask", disp->red_mask);
+    cJSON *jpins = cJSON_AddObjectToObject(d, "pins");
+    cJSON_AddNumberToObject(jpins, "mosi", disp->pin_mosi);
+    cJSON_AddNumberToObject(jpins, "clk", disp->pin_clk);
+    cJSON_AddNumberToObject(jpins, "cs", disp->pin_cs);
+    cJSON_AddNumberToObject(jpins, "dc", disp->pin_dc);
+    cJSON_AddNumberToObject(jpins, "rst", disp->pin_rst);
+    cJSON_AddNumberToObject(jpins, "busy", disp->pin_busy);
     cJSON_AddStringToObject(d, "header_text", disp->header_text);
     cJSON_AddStringToObject(d, "footer_text", disp->footer_text);
     cJSON_AddBoolToObject(d, "show_clock", disp->show_clock);
@@ -138,6 +175,19 @@ void app_config_display_to_cjson(const app_display_config_t *disp, void *cjson_o
     for (int i = 0; i < APP_DISPLAY_MAX_LINES; i++) {
         cJSON_AddItemToArray(arr, cJSON_CreateString(disp->lines[i]));
     }
+}
+
+static bool parse_disp_pin(const cJSON *obj, const char *key, int8_t *field)
+{
+    const cJSON *jp = cJSON_GetObjectItem(obj, key);
+    if (!cJSON_IsNumber(jp)) return false;
+    int v = jp->valueint;
+    if (v < -1 || v > 48) return false;
+    if (*field != (int8_t)v) {
+        *field = (int8_t)v;
+        return true;
+    }
+    return false;
 }
 
 static bool parse_display_cjson_obj(const cJSON *j_disp, app_config_t *updated, bool switch_text_on_lines)
@@ -173,6 +223,88 @@ static bool parse_display_cjson_obj(const cJSON *j_disp, app_config_t *updated, 
             strlcpy(updated->display.theme, jt->valuestring, sizeof(updated->display.theme));
             changed = true;
         }
+    }
+
+    const cJSON *jp = cJSON_GetObjectItem(j_disp, "panel");
+    if (cJSON_IsString(jp) && valid_disp_panel(jp->valuestring)) {
+        if (strcmp(updated->display.panel, jp->valuestring) != 0) {
+            strlcpy(updated->display.panel, jp->valuestring, sizeof(updated->display.panel));
+            changed = true;
+        }
+    }
+
+    const cJSON *jrot = cJSON_GetObjectItem(j_disp, "rotation");
+    if (cJSON_IsNumber(jrot)) {
+        int r = ((jrot->valueint % 360) + 360) % 360;
+        if (r == 0 || r == 90 || r == 180 || r == 270) {
+            if (updated->display.rotation != (uint16_t)r) {
+                updated->display.rotation = (uint16_t)r;
+                changed = true;
+            }
+        }
+    }
+
+    const cJSON *jinv = cJSON_GetObjectItem(j_disp, "invert");
+    if (cJSON_IsBool(jinv)) {
+        bool b = cJSON_IsTrue(jinv);
+        if (updated->display.invert != b) {
+            updated->display.invert = b;
+            changed = true;
+        }
+    }
+
+    const cJSON *jpart = cJSON_GetObjectItem(j_disp, "partial_refresh");
+    if (cJSON_IsBool(jpart)) {
+        bool b = cJSON_IsTrue(jpart);
+        if (updated->display.partial_refresh != b) {
+            updated->display.partial_refresh = b;
+            changed = true;
+        }
+    }
+
+    const cJSON *jrsec = cJSON_GetObjectItem(j_disp, "refresh_sec");
+    if (cJSON_IsNumber(jrsec)) {
+        int s = jrsec->valueint;
+        if (s < 0) s = 0;
+        if (s > 86400) s = 86400;
+        if (updated->display.refresh_sec != (uint16_t)s) {
+            updated->display.refresh_sec = (uint16_t)s;
+            changed = true;
+        }
+    }
+
+    const cJSON *jrm = cJSON_GetObjectItem(j_disp, "red_mask");
+    if (cJSON_IsNumber(jrm)) {
+        int rm = jrm->valueint & 0xFF;
+        if (updated->display.red_mask != (uint8_t)rm) {
+            updated->display.red_mask = (uint8_t)rm;
+            changed = true;
+        }
+    }
+
+    const cJSON *jrlines = cJSON_GetObjectItem(j_disp, "red_lines");
+    if (cJSON_IsArray(jrlines)) {
+        uint8_t mask = (uint8_t)(updated->display.red_mask & 0xC0);
+        const cJSON *el = NULL;
+        cJSON_ArrayForEach(el, jrlines) {
+            if (cJSON_IsNumber(el) && el->valueint >= 0 && el->valueint < APP_DISPLAY_MAX_LINES) {
+                mask |= (uint8_t)(1U << el->valueint);
+            }
+        }
+        if (updated->display.red_mask != mask) {
+            updated->display.red_mask = mask;
+            changed = true;
+        }
+    }
+
+    const cJSON *jpins = cJSON_GetObjectItem(j_disp, "pins");
+    if (cJSON_IsObject(jpins)) {
+        changed |= parse_disp_pin(jpins, "mosi", &updated->display.pin_mosi);
+        changed |= parse_disp_pin(jpins, "clk",  &updated->display.pin_clk);
+        changed |= parse_disp_pin(jpins, "cs",   &updated->display.pin_cs);
+        changed |= parse_disp_pin(jpins, "dc",   &updated->display.pin_dc);
+        changed |= parse_disp_pin(jpins, "rst",  &updated->display.pin_rst);
+        changed |= parse_disp_pin(jpins, "busy", &updated->display.pin_busy);
     }
 
     const cJSON *jh = cJSON_GetObjectItem(j_disp, "header_text");
@@ -342,9 +474,9 @@ esp_err_t app_config_load(app_config_t *cfg)
     if (nvs_get_u8(h, "cam_hmir", &u8) == ESP_OK) cfg->cam_hmirror = (u8 != 0);
     if (nvs_get_i8(h, "cam_bri", &i8) == ESP_OK) cfg->cam_brightness = i8;
 
-    char *disp_buf = calloc(1, 512);
+    char *disp_buf = calloc(1, 1024);
     if (disp_buf) {
-        size_t dlen = 512;
+        size_t dlen = 1024;
         if (nvs_get_str(h, "disp_cfg", disp_buf, &dlen) == ESP_OK && disp_buf[0] == '{') {
             app_config_apply_display_json(disp_buf, cfg, false);
         }

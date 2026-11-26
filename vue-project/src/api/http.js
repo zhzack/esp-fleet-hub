@@ -37,7 +37,9 @@ http.interceptors.response.use(
       }
     }
 
-    ElMessage.error(`[${status || 'NET'}] ${detail}`)
+    if (!err.config?.silentError) {
+      ElMessage.error(`[${status || 'NET'}] ${detail}`)
+    }
     return Promise.reject(err)
   },
 )

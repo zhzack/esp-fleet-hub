@@ -14,7 +14,19 @@ extern "C" {
 typedef struct {
     char mode[16];         // "monitor" | "text" | "status" | "off"
     uint8_t backlight;     // 0-100
-    char theme[16];        // "cyber" | "emerald" | "amber" | "mono"
+    char theme[16];        // "cyber" | "emerald" | "amber" | "mono" | "paper"
+    char panel[24];        // "epd_213_bw" | "epd_213_bwr" | "epd_420_bwr" | "st7789_240" | "st7735_160" | "auto"
+    uint16_t rotation;     // 0 | 90 | 180 | 270
+    bool invert;           // Invert black/white ink
+    bool partial_refresh;  // Fast partial update when supported (epd_213_bw)
+    uint16_t refresh_sec;  // Periodic auto-refresh seconds for EPD status/monitor (0 = manual/on-change)
+    uint8_t red_mask;      // Bitmask: bits 0..5 -> lines[0..5] in RED, bit 6 -> header, bit 7 -> footer
+    int8_t pin_mosi;       // -1 = board default
+    int8_t pin_clk;
+    int8_t pin_cs;
+    int8_t pin_dc;
+    int8_t pin_rst;
+    int8_t pin_busy;
     char header_text[24];  // Custom top bar label (empty = auto)
     char footer_text[24];  // Custom footer badge (empty = auto)
     bool show_clock;

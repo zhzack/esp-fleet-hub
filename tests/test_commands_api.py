@@ -345,5 +345,49 @@ def test_c3_display_config_and_text_e2e(client):
                 )
                 assert txt_res.status_code == 200
                 assert txt_res.json()["result"]["lines"] == ["HELLO", "WORLD"]
+
+                # E-Paper (SSD1683 2.13" / 4.2") panel/rotation/red_mask/pins pass-through + validation
+                disp_state.update({
+                    "panel": "epd_213_bwr",
+                    "rotation": 0,
+                    "invert": False,
+                    "partial_refresh": True,
+                    "refresh_sec": 0,
+                    "red_mask": 0x40,
+                    "pins": {"mosi": -1, "clk": -1, "cs": -1, "dc": -1, "rst": -1, "busy": -1},
+                })
+                epd_res = tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/config",
+                    headers=hdrs,
+                    json={
+                        "mode": "text",
+                        "panel": "epd_420_bwr",
+                        "rotation": 90,
+                        "invert": True,
+                        "partial_refresh": False,
+                        "refresh_sec": 60,
+                        "red_mask": 0x43,
+                        "full_refresh": True,
+                        "pins": {"mosi": 11, "clk": 12, "cs": 10, "dc": 13, "rst": 9, "busy": 14},
+                        "lines": ["[R]ALERT", "NORMAL"],
+                    },
+                )
+                assert epd_res.status_code == 200
+                epd_body = epd_res.json()["result"]
+                assert epd_body["panel"] == "epd_420_bwr"
+                assert epd_body["rotation"] == 90
+                assert epd_body["red_mask"] == 0x43
+                assert epd_body["pins"]["busy"] == 14
+
+                assert tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/config",
+                    headers=hdrs,
+                    json={"refresh_sec": -1},
+                ).status_code == 400
+                assert tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/config",
+                    headers=hdrs,
+                    json={"pins": {"busy": 99}},
+                ).status_code == 400
     finally:
         device_registry._live.clear()

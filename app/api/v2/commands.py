@@ -255,10 +255,23 @@ async def reboot(
     return await _send(db, user, device_uuid, "reboot", timeout_ms=1500)
 
 
+DisplayPanel = Literal["auto", "st7735_160", "st7789_240", "epd_213_bw", "epd_213_bwr", "epd_420_bwr"]
+
+
 class DisplayConfigIn(BaseModel):
     mode: Literal["monitor", "text", "status", "off"] | None = None
     backlight: int | None = None
-    theme: Literal["cyber", "emerald", "amber", "mono"] | None = None
+    theme: Literal["cyber", "emerald", "amber", "mono", "paper", "red_bar"] | None = None
+    panel: DisplayPanel | None = None
+    rotation: Literal[0, 90, 180, 270] | None = None
+    invert: bool | None = None
+    partial_refresh: bool | None = None
+    refresh_sec: int | None = None
+    red_mask: int | None = None
+    red_lines: list[int] | None = None
+    refresh: bool | None = None
+    full_refresh: bool | None = None
+    pins: dict[str, int] | None = None
     header_text: str | None = None
     footer_text: str | None = None
     show_clock: bool | None = None
@@ -283,11 +296,35 @@ class DisplayTextIn(BaseModel):
     backlight: int | None = None
     clear: bool | None = None
     mode: Literal["monitor", "text", "status", "off"] | None = None
+    panel: DisplayPanel | None = None
+    rotation: Literal[0, 90, 180, 270] | None = None
+    invert: bool | None = None
+    partial_refresh: bool | None = None
+    red_mask: int | None = None
+    refresh: bool | None = None
+    full_refresh: bool | None = None
 
 
 def _validate_backlight(backlight: int | None) -> None:
     if backlight is not None and not (0 <= backlight <= 100):
         raise HTTPException(400, "backlight must be between 0 and 100")
+
+
+def _validate_display_extras(body) -> None:
+    _validate_backlight(getattr(body, "backlight", None))
+    rsec = getattr(body, "refresh_sec", None)
+    if rsec is not None and not (0 <= rsec <= 86400):
+        raise HTTPException(400, "refresh_sec must be between 0 and 86400")
+    rmask = getattr(body, "red_mask", None)
+    if rmask is not None and not (0 <= rmask <= 255):
+        raise HTTPException(400, "red_mask must be between 0 and 255")
+    pins = getattr(body, "pins", None)
+    if pins is not None:
+        for k, v in pins.items():
+            if k not in ("mosi", "clk", "cs", "dc", "rst", "busy"):
+                raise HTTPException(400, f"unsupported display pin key: {k}")
+            if not (-1 <= int(v) <= 48):
+                raise HTTPException(400, f"pin {k} out of range (-1..48)")
 
 
 @router.get("/{device_uuid}/display/status")
@@ -314,7 +351,7 @@ async def display_config(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    _validate_backlight(body.backlight)
+    _validate_display_extras(body)
     return await _send(
         db,
         user,
@@ -334,7 +371,7 @@ async def display_text(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    _validate_backlight(body.backlight)
+    _validate_display_extras(body)
     return await _send(
         db,
         user,

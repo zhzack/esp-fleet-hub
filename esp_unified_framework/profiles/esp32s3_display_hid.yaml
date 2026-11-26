@@ -1,6 +1,6 @@
 name: esp32s3_display_hid
 target: esp32s3
-description: "ESP32-S3 全功能控制坞 (带 USB-OTG 虚拟键鼠注入、ST7789 显示驱动与 OTA)"
+description: "ESP32-S3 全功能控制坞 (USB-OTG 键鼠 + 2.13\"/4.2\" SSD1683 墨水屏 + ST7789 + OTA)"
 features:
   http_server: true
   web_ui: true

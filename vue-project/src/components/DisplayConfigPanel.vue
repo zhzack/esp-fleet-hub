@@ -1,11 +1,21 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import {
   DISPLAY_MODE_OPTIONS,
+  DISPLAY_PANEL_OPTIONS,
+  DISPLAY_ROTATION_OPTIONS,
   DISPLAY_THEME_OPTIONS,
+  EPD_DEFAULT_PINS,
+  EPD_WIRING_GUIDE,
   buildDisplayPayload,
   clipScreenText,
+  getPanelDimensions,
+  getPanelSpec,
+  hasRedInk,
+  isEpdPanel,
+  isLineRed,
   normalizeDisplayConfig,
+  stripRedPrefix,
 } from '@/utils/displayPresets'
 
 const props = defineProps({
@@ -20,6 +30,7 @@ const props = defineProps({
 const emit = defineEmits(['refresh', 'save'])
 
 const form = reactive(normalizeDisplayConfig(props.status, props.pcMonitorDefault))
+const showWiring = ref(false)
 
 watch(
   () => props.status,
@@ -31,30 +42,63 @@ watch(
   { immediate: true, deep: true },
 )
 
+const activePanelSpec = computed(() => getPanelSpec(form.panel))
+const isEpd = computed(() => isEpdPanel(form.panel))
+const isThreeColor = computed(() => hasRedInk(form.panel))
+const dims = computed(() => getPanelDimensions(form.panel, form.rotation))
+const maxCharsPerLine = computed(() => (dims.value.w >= 300 ? 22 : dims.value.w >= 200 ? 28 : 14))
+
+const availablePanels = computed(() => {
+  if (props.pcMonitorDefault) return DISPLAY_PANEL_OPTIONS
+  return DISPLAY_PANEL_OPTIONS.filter((p) => p.value !== 'st7735_160')
+})
+
 const activeTheme = computed(
   () => DISPLAY_THEME_OPTIONS.find((t) => t.value === form.theme) || DISPLAY_THEME_OPTIONS[0],
 )
 
 const previewOpacity = computed(() => {
+  if (isEpd.value) return 1
   if (form.mode === 'off' || form.backlight <= 0) return 0.16
   return 0.35 + (form.backlight / 100) * 0.65
 })
 
 const previewHeader = computed(() => {
-  if (form.header_text) return clipScreenText(form.header_text, 7)
-  if (form.mode === 'monitor' && form.show_clock) {
+  if (form.header_text) return clipScreenText(form.header_text, maxCharsPerLine.value)
+  if (form.mode === 'monitor' && form.show_clock && props.pcMonitorDefault) {
     return props.status?.metrics?.time && props.status.metrics.time !== '00:00:00'
       ? clipScreenText(props.status.metrics.time, 8)
       : 'C3-DISP'
   }
-  return clipScreenText(props.deviceName || 'ESP-DISP', 10)
+  return clipScreenText(props.deviceName || 'ESP-DISP', maxCharsPerLine.value)
 })
 
 const previewFooter = computed(() => {
-  if (form.footer_text) return clipScreenText(form.footer_text, 10)
+  if (form.footer_text) return clipScreenText(form.footer_text, maxCharsPerLine.value)
+  if (isEpd.value) {
+    const cnt = props.status?.refresh_count ? ` #${props.status.refresh_count}` : ''
+    return `${form.panel}${cnt}`
+  }
   if (form.mode === 'text') return 'CUSTOM TXT'
   if (form.mode === 'status') return '[ONLINE]'
   return props.status?.telemetry_active ? '[LIVE OK]' : '[WAIT PC]'
+})
+
+const epdPreviewStyle = computed(() => {
+  const { w, h } = dims.value
+  const targetMaxPx = props.compact ? 220 : 250
+  const scale = Math.min(targetMaxPx / Math.max(w, h), w >= 300 ? 0.62 : 0.96)
+  return {
+    width: `${Math.max(118, Math.round(w * scale))}px`,
+    height: `${Math.max(118, Math.round(h * scale))}px`,
+  }
+})
+
+const epdHeaderBg = computed(() => {
+  if (!isEpd.value) return 'transparent'
+  const wantRedHdr = isThreeColor.value && ((form.red_mask & 0x40) !== 0 || form.theme === 'red_bar') && form.theme !== 'mono'
+  if (wantRedHdr) return '#b91c1c'
+  return form.invert ? '#f6f4ec' : '#18181b'
 })
 
 const previewMetrics = computed(() => ({
@@ -66,20 +110,47 @@ const previewMetrics = computed(() => ({
   uptime: props.status?.metrics?.uptime || '2h15m',
 }))
 
+function toggleLineRed(idx) {
+  form.red_mask = Number(form.red_mask || 0) ^ (1 << idx)
+}
+
+function toggleHeaderRed() {
+  form.red_mask = Number(form.red_mask || 0) ^ 0x40
+}
+
+function isRedBit(idx) {
+  return (Number(form.red_mask || 0) & (1 << idx)) !== 0
+}
+
+function previewLineText(raw) {
+  return clipScreenText(stripRedPrefix(raw).text, maxCharsPerLine.value)
+}
+
 function clearLines() {
   form.lines = ['', '', '', '', '', '']
 }
 
 function fillDemoLines() {
   form.mode = 'text'
-  form.lines = [
-    clipScreenText(props.deviceName || 'DESK-C3', 10),
-    'STATUS: OK',
-    'MODE: SIGN',
-    'WIFI LINK',
-    'HUB READY',
-    'EDIT ME :)',
-  ]
+  if (isEpd.value) {
+    form.lines = [
+      clipScreenText(props.deviceName || 'ESP32-S3 DESK', 20),
+      '[R]STATUS: ONLINE',
+      'PANEL: ' + activePanelSpec.value.shortLabel.slice(0, 14),
+      'WIFI: CONNECTED',
+      'SSD1683 E-INK OK',
+      'HUB AUTO SYNC',
+    ]
+  } else {
+    form.lines = [
+      clipScreenText(props.deviceName || 'DESK-C3', 10),
+      'STATUS: OK',
+      'MODE: SIGN',
+      'WIFI LINK',
+      'HUB READY',
+      'EDIT ME :)',
+    ]
+  }
 }
 
 function applyPreset(preset) {
@@ -113,101 +184,197 @@ function applyPreset(preset) {
   }
 }
 
-function submit() {
-  emit('save', buildDisplayPayload(form))
+function submit(extras = null) {
+  emit('save', buildDisplayPayload(form, extras))
 }
+
+function resetPinsDefault() {
+  form.pins = { mosi: -1, clk: -1, cs: -1, dc: -1, rst: -1, busy: -1 }
+}
+
+const effectivePins = computed(() => {
+  const rp = props.status?.resolved_pins || {}
+  return {
+    mosi: form.pins.mosi >= 0 ? form.pins.mosi : (rp.mosi ?? EPD_DEFAULT_PINS.mosi),
+    clk: form.pins.clk >= 0 ? form.pins.clk : (rp.clk ?? EPD_DEFAULT_PINS.clk),
+    cs: form.pins.cs >= 0 ? form.pins.cs : (rp.cs ?? EPD_DEFAULT_PINS.cs),
+    dc: form.pins.dc >= 0 ? form.pins.dc : (rp.dc ?? EPD_DEFAULT_PINS.dc),
+    rst: form.pins.rst >= 0 ? form.pins.rst : (rp.rst ?? EPD_DEFAULT_PINS.rst),
+    busy: form.pins.busy >= 0 ? form.pins.busy : (rp.busy ?? EPD_DEFAULT_PINS.busy),
+  }
+})
 </script>
 
 <template>
-  <div class="display-config-wrap" :class="{ 'is-compact': compact }">
+  <div class="display-config-wrap" :class="{ 'is-compact': compact, 'is-epd': isEpd }">
     <div v-if="errorMessage" class="legacy-fw-alert">
       <strong>提示：</strong>{{ errorMessage }}
       <span v-if="errorMessage.includes('E404') || errorMessage.includes('disabled')">
-        （当前设备运行的固件尚未开启可配置屏幕协议，请在「统一芯片 &amp; 云编译中心」对 `esp32c3_pc_monitor.bin` 执行一次无线 Pull OTA 后即可生效）
+        （当前设备运行的固件尚未开启可配置屏幕协议，请在「统一芯片中心」对最新固件执行一次无线 Pull OTA 后即可生效）
       </span>
     </div>
 
+    <div v-if="status?.busy_timeout" class="epd-warn-alert">
+      <strong>⚠️ 墨水屏 BUSY 信号超时：</strong>
+      请检查驱动板 v1.4 与 S3 接线（特别是 <code>BUSY -> GPIO{{ effectivePins.busy }}</code>、<code>3V3</code> 供电、FPC 金手指插紧，并将驱动板底部采样电阻开关拨向右侧 <b>0.47Ω</b>）。
+    </div>
+
     <div class="display-grid">
-      <!-- Live 80x160 ST7735 Simulator -->
+      <!-- Live LCD / E-Paper Preview Column -->
       <div class="screen-preview-col">
-        <div class="preview-caption">80×160 竖屏效果预览</div>
-        <div class="st7735-bezel">
-          <div class="st7735-screen" :style="{ opacity: previewOpacity }">
+        <div class="preview-caption">
+          {{ activePanelSpec.shortLabel }} · {{ dims.w }}×{{ dims.h }}
+          <span v-if="isThreeColor" class="bwr-pill">红黑白三色</span>
+          <span v-else-if="isEpd" class="bw-pill">黑白墨水</span>
+        </div>
+
+        <div class="screen-bezel" :class="{ 'epd-bezel': isEpd }">
+          <div
+            class="screen-surface"
+            :class="{
+              'epd-paper': isEpd,
+              'epd-inverted': isEpd && form.invert,
+            }"
+            :style="{ ...(isEpd ? epdPreviewStyle : {}), opacity: previewOpacity }"
+          >
             <template v-if="form.mode === 'off'">
-              <div class="screen-off-state">BACKLIGHT OFF</div>
+              <div class="screen-off-state">
+                {{ isEpd ? 'E-INK CLEARED / SLEEP' : 'BACKLIGHT OFF' }}
+              </div>
             </template>
             <template v-else>
-              <div class="scr-hdr" :style="{ color: activeTheme.header }">
+              <div
+                class="scr-hdr"
+                :class="{ 'epd-hdr': isEpd }"
+                :style="{
+                  background: epdHeaderBg,
+                  color: isEpd ? (form.invert && epdHeaderBg === '#f6f4ec' ? '#18181b' : '#ffffff') : activeTheme.header,
+                }"
+              >
                 <span>{{ previewHeader }}</span>
-                <span v-if="form.mode === 'monitor'" :style="{ color: status?.telemetry_active ? activeTheme.ok : '#ef4444' }">
+                <span
+                  v-if="isEpd"
+                  style="font-size: 9px; opacity: 0.9"
+                >
+                  {{ form.mode.toUpperCase() }}
+                </span>
+                <span
+                  v-else-if="form.mode === 'monitor'"
+                  :style="{ color: status?.telemetry_active ? activeTheme.ok : '#ef4444' }"
+                >
                   {{ status?.telemetry_active ? 'OK' : '--' }}
                 </span>
               </div>
-              <div class="scr-divider" />
+              <div v-if="!isEpd" class="scr-divider" />
 
-              <div v-if="form.mode === 'text'" class="scr-body scr-lines">
+              <div v-if="form.mode === 'text'" class="scr-body scr-lines" :style="isEpd ? { padding: '4px 5px' } : {}">
                 <div
                   v-for="(ln, idx) in form.lines"
                   :key="idx"
                   class="scr-line"
-                  :style="{ color: idx === 0 ? activeTheme.a1 : idx === 5 ? activeTheme.a2 : '#f8fafc' }"
+                  :style="{
+                    color: isEpd
+                      ? (isLineRed(form, idx) ? '#b91c1c' : (form.invert ? '#f6f4ec' : '#18181b'))
+                      : (idx === 0 ? activeTheme.a1 : idx === 5 ? activeTheme.a2 : '#f8fafc'),
+                    fontSize: isEpd && dims.w >= 300 ? '12px' : undefined,
+                  }"
                 >
-                  {{ clipScreenText(ln, 10) || '\u00a0' }}
+                  {{ previewLineText(ln) || '\u00a0' }}
                 </div>
               </div>
 
-              <div v-else-if="form.mode === 'status'" class="scr-body scr-lines">
-                <div class="scr-line" :style="{ color: activeTheme.ok }">WF:CONNECTED</div>
-                <div class="scr-line" style="color: #fff">IP:192.168</div>
-                <div class="scr-line" :style="{ color: activeTheme.a1 }">.68.210</div>
-                <div class="scr-line" :style="{ color: activeTheme.a2 }">MEM:112K</div>
-                <div class="scr-line" :style="{ color: activeTheme.a3 }">UP:{{ previewMetrics.uptime }}</div>
-                <div class="scr-line" style="color: #cbd5e1">{{ clipScreenText(form.lines[0], 10) }}</div>
+              <div v-else-if="form.mode === 'status'" class="scr-body scr-lines" :style="isEpd ? { padding: '4px 5px' } : {}">
+                <div class="scr-line" :style="{ color: isEpd ? (isThreeColor ? '#b91c1c' : '#18181b') : activeTheme.ok }">
+                  IP:192.168.68.143
+                </div>
+                <div class="scr-line" :style="{ color: isEpd ? '#18181b' : activeTheme.a1 }">
+                  WF:Connected (-22dBm)
+                </div>
+                <div class="scr-line" :style="{ color: isEpd ? '#18181b' : activeTheme.a2 }">
+                  HEAP:320K PSRAM:8M
+                </div>
+                <div class="scr-line" :style="{ color: isEpd ? '#18181b' : activeTheme.a3 }">
+                  UP:{{ previewMetrics.uptime }}
+                </div>
+                <div class="scr-line" :style="{ color: isEpd && isLineRed(form, 0) ? '#b91c1c' : undefined }">
+                  {{ previewLineText(form.lines[0]) || 'Ready' }}
+                </div>
               </div>
 
-              <div v-else class="scr-body scr-mon">
+              <div v-else class="scr-body scr-mon" :style="isEpd ? { padding: '4px 5px' } : {}">
                 <div v-if="form.show_cpu" class="mon-blk">
                   <div class="mon-row">
-                    <span :style="{ color: activeTheme.a1 }">CPU:</span>
+                    <span :style="{ color: isEpd ? '#18181b' : activeTheme.a1 }">CPU:</span>
                     <span>{{ previewMetrics.cpu }}%</span>
                   </div>
-                  <div class="mon-bar"><div class="mon-fill" :style="{ width: `${previewMetrics.cpu}%`, background: activeTheme.ok }" /></div>
+                  <div class="mon-bar" :style="{ borderColor: isEpd ? '#18181b' : '#475569' }">
+                    <div
+                      class="mon-fill"
+                      :style="{
+                        width: `${previewMetrics.cpu}%`,
+                        background: isEpd ? (isThreeColor ? '#b91c1c' : '#18181b') : activeTheme.ok,
+                      }"
+                    />
+                  </div>
                 </div>
                 <div v-if="form.show_ram" class="mon-blk">
                   <div class="mon-row">
-                    <span :style="{ color: activeTheme.a2 }">RAM:</span>
+                    <span :style="{ color: isEpd ? '#18181b' : activeTheme.a2 }">RAM:</span>
                     <span>{{ previewMetrics.ram }}%</span>
                   </div>
-                  <div class="mon-bar"><div class="mon-fill" :style="{ width: `${previewMetrics.ram}%`, background: activeTheme.a1 }" /></div>
+                  <div class="mon-bar" :style="{ borderColor: isEpd ? '#18181b' : '#475569' }">
+                    <div
+                      class="mon-fill"
+                      :style="{
+                        width: `${previewMetrics.ram}%`,
+                        background: isEpd ? '#18181b' : activeTheme.a1,
+                      }"
+                    />
+                  </div>
                 </div>
                 <div v-if="form.show_disk" class="mon-blk">
                   <div class="mon-row">
-                    <span :style="{ color: activeTheme.a3 }">DISK:</span>
+                    <span :style="{ color: isEpd ? '#18181b' : activeTheme.a3 }">DISK:</span>
                     <span>{{ previewMetrics.disk }}%</span>
                   </div>
-                  <div class="mon-bar"><div class="mon-fill" :style="{ width: `${previewMetrics.disk}%`, background: activeTheme.a3 }" /></div>
+                  <div class="mon-bar" :style="{ borderColor: isEpd ? '#18181b' : '#475569' }">
+                    <div
+                      class="mon-fill"
+                      :style="{
+                        width: `${previewMetrics.disk}%`,
+                        background: isEpd ? '#18181b' : activeTheme.a3,
+                      }"
+                    />
+                  </div>
                 </div>
                 <div v-if="form.show_net" class="mon-net">
-                  <div><span :style="{ color: activeTheme.ok }">D:</span> {{ previewMetrics.down }}</div>
-                  <div><span :style="{ color: activeTheme.a1 }">U:</span> {{ previewMetrics.up }}</div>
-                </div>
-                <div v-if="form.show_uptime" class="mon-up">
-                  <span style="color: #facc15">UP:</span> {{ previewMetrics.uptime }}
-                </div>
-                <div v-if="form.lines[0]" class="mon-note" :style="{ color: activeTheme.a1 }">
-                  {{ clipScreenText(form.lines[0], 10) }}
+                  <span>D:{{ previewMetrics.down }} U:{{ previewMetrics.up }}</span>
                 </div>
               </div>
 
-              <div class="scr-divider" />
-              <div class="scr-ftr" :style="{ color: form.footer_text ? activeTheme.header : '#94a3b8' }">
+              <div class="scr-divider" :style="{ background: isEpd ? '#18181b' : '#475569' }" />
+              <div
+                class="scr-ftr"
+                :style="{
+                  color: isEpd
+                    ? ((isThreeColor && (form.red_mask & 0x80)) ? '#b91c1c' : '#3f3f46')
+                    : (form.footer_text ? activeTheme.header : '#94a3b8'),
+                  padding: isEpd ? '0 4px 2px' : undefined,
+                }"
+              >
                 {{ previewFooter }}
               </div>
             </template>
           </div>
         </div>
+
         <div class="preview-meta">
-          <div>驱动: <code>{{ status?.driver || 'ST7735_80x160' }}</code></div>
+          <div>驱动: <code>{{ status?.driver || activePanelSpec.chip }}</code></div>
+          <div v-if="isEpd && status">
+            刷新: <b>{{ status.refresh_count || 0 }}</b> 次
+            <span v-if="status.last_refresh_ms">· 耗时 {{ status.last_refresh_ms }}ms</span>
+            <el-tag v-if="status.refreshing" size="small" type="warning" style="margin-left: 4px">刷屏中...</el-tag>
+          </div>
           <div v-if="status?.last_key">摇杆: <code>{{ status.last_key }}</code> (#{{ status.joystick_seq || 0 }})</div>
         </div>
       </div>
@@ -216,13 +383,40 @@ function submit() {
       <div class="screen-form-col">
         <div class="toolbar-row">
           <div class="quick-presets">
-            <el-button size="small" @click="applyPreset('monitor')">完整监控</el-button>
-            <el-button size="small" @click="applyPreset('compact_net')">精简监控</el-button>
-            <el-button size="small" @click="applyPreset('status')">独立状态卡</el-button>
-            <el-button size="small" @click="fillDemoLines">自定义看板示例</el-button>
-            <el-button size="small" type="warning" plain @click="applyPreset('off')">息屏</el-button>
+            <el-button size="small" @click="applyPreset('status')">节点状态卡</el-button>
+            <el-button size="small" @click="fillDemoLines">自定义看板</el-button>
+            <el-button size="small" @click="applyPreset('monitor')">监控仪表</el-button>
+            <el-button size="small" type="warning" plain @click="applyPreset('off')">
+              {{ isEpd ? '清屏休眠' : '息屏' }}
+            </el-button>
           </div>
           <el-button size="small" :loading="loading" @click="emit('refresh')">读取当前</el-button>
+        </div>
+
+        <!-- Panel Selector & Rotation (for E-Paper / S3 Display) -->
+        <div v-if="!pcMonitorDefault || isEpd" class="cfg-two-col">
+          <div class="cfg-block">
+            <div class="cfg-label">硬件屏幕型号</div>
+            <el-select v-model="form.panel" size="small" style="width: 100%">
+              <el-option
+                v-for="p in availablePanels"
+                :key="p.value"
+                :label="p.label"
+                :value="p.value"
+              />
+            </el-select>
+          </div>
+          <div class="cfg-block">
+            <div class="cfg-label">显示方向</div>
+            <el-select v-model="form.rotation" size="small" style="width: 100%">
+              <el-option
+                v-for="r in DISPLAY_ROTATION_OPTIONS"
+                :key="r.value"
+                :label="r.label"
+                :value="r.value"
+              />
+            </el-select>
+          </div>
         </div>
 
         <div class="cfg-block">
@@ -243,14 +437,35 @@ function submit() {
         </div>
 
         <div class="cfg-two-col">
-          <div class="cfg-block">
+          <div v-if="!isEpd" class="cfg-block">
             <div class="cfg-label">背光亮度 ({{ form.backlight }}%)</div>
             <el-slider v-model="form.backlight" :min="0" :max="100" :step="5" />
           </div>
+          <div v-else class="cfg-block">
+            <div class="cfg-label">墨水屏选项</div>
+            <div class="epd-toggles">
+              <el-checkbox v-model="form.invert">黑白反色</el-checkbox>
+              <el-checkbox v-if="activePanelSpec.partial" v-model="form.partial_refresh">
+                局部快刷 (仅2.13黑白)
+              </el-checkbox>
+              <el-checkbox v-if="isThreeColor" :model-value="isRedBit(6)" @change="toggleHeaderRed">
+                顶部红底高亮
+              </el-checkbox>
+            </div>
+          </div>
 
           <div class="cfg-block">
-            <div class="cfg-label">色彩主题</div>
-            <el-select v-model="form.theme" size="small" style="width: 100%">
+            <div class="cfg-label">{{ isEpd ? '自动周期刷新间隔 (秒, 0=仅更改时刷)' : '色彩主题' }}</div>
+            <el-input-number
+              v-if="isEpd"
+              v-model="form.refresh_sec"
+              size="small"
+              :min="0"
+              :max="86400"
+              :step="30"
+              style="width: 100%"
+            />
+            <el-select v-else v-model="form.theme" size="small" style="width: 100%">
               <el-option v-for="t in DISPLAY_THEME_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
             </el-select>
           </div>
@@ -258,12 +473,12 @@ function submit() {
 
         <div class="cfg-two-col">
           <div class="cfg-block">
-            <div class="cfg-label">顶部标题 (留空自动, 建议≤10 ASCII)</div>
-            <el-input v-model="form.header_text" size="small" maxlength="20" clearable placeholder="如 DESK-C3 / NAS" />
+            <div class="cfg-label">顶部标题 (留空显示设备 ID)</div>
+            <el-input v-model="form.header_text" size="small" maxlength="20" clearable placeholder="如 DESK-EINK / NOTICE" />
           </div>
           <div class="cfg-block">
-            <div class="cfg-label">底部角标 (留空自动)</div>
-            <el-input v-model="form.footer_text" size="small" maxlength="20" clearable placeholder="如 [MONITOR]" />
+            <div class="cfg-label">底部角标 (留空自动状态)</div>
+            <el-input v-model="form.footer_text" size="small" maxlength="20" clearable placeholder="如 [S3 EPD]" />
           </div>
         </div>
 
@@ -282,7 +497,7 @@ function submit() {
         <div class="cfg-block">
           <div class="cfg-label-row">
             <span class="cfg-label">
-              {{ form.mode === 'text' ? '自定义文本内容（第 0~5 行，每行约 10 英文/数字字符）' : '自定义备注行（自定义看板全显，监控/状态底部展示第 0 行）' }}
+              {{ form.mode === 'text' ? '自定义文本内容（第 0~5 行，三色屏可点「红」字或加 [R] 前缀）' : '自定义备注行（自定义看板全显，状态/监控展示第 0 行）' }}
             </span>
             <el-button size="small" link @click="clearLines">清空行内容</el-button>
           </div>
@@ -292,16 +507,67 @@ function submit() {
               :key="idx"
               v-model="form.lines[idx]"
               size="small"
-              maxlength="36"
+              maxlength="38"
               :placeholder="`第 ${idx} 行`"
             >
               <template #prepend>L{{ idx }}</template>
+              <template v-if="isThreeColor" #append>
+                <button
+                  type="button"
+                  class="red-chip-btn"
+                  :class="{ active: isRedBit(idx) }"
+                  title="切换该行红色墨水高亮"
+                  @click="toggleLineRed(idx)"
+                >
+                  红
+                </button>
+              </template>
             </el-input>
           </div>
         </div>
 
+        <!-- E-Paper Driver Board Wiring & Custom Pins Collapsible -->
+        <div v-if="isEpd" class="wiring-box">
+          <div class="wiring-head" @click="showWiring = !showWiring">
+            <span>墨水屏驱动板 v1.4 <-> ESP32-S3 接线与引脚定义 (默认采样开关: <b>0.47Ω</b>)</span>
+            <el-button size="small" link>{{ showWiring ? '收起' : '展开接线/改引脚' }}</el-button>
+          </div>
+          <div v-if="showWiring" class="wiring-body">
+            <div class="wiring-note">
+              ⚠️ 驱动板底部「采样电阻选择」拨杆务必拨向右侧 <b>0.47Ω</b>；单芯片排线默认只接 <code>CS1</code>（<code>CS2</code> 悬空）。
+            </div>
+            <div class="wiring-grid">
+              <div v-for="w in EPD_WIRING_GUIDE" :key="w.boardPin" class="wiring-item">
+                <b>{{ w.boardPin }}</b> -> <code>{{ w.s3Pin }}</code>
+                <span class="wiring-desc">{{ w.note }}</span>
+              </div>
+            </div>
+            <div class="pin-override-row">
+              <span class="cfg-label" style="grid-column: span 3">自定义引脚映射 (-1 = S3 默认引脚):</span>
+              <div class="pin-cell"><span class="pin-lbl">SDA/MOSI</span><el-input-number v-model="form.pins.mosi" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">SCK/CLK</span><el-input-number v-model="form.pins.clk" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">CS1</span><el-input-number v-model="form.pins.cs" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">DC</span><el-input-number v-model="form.pins.dc" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">RST</span><el-input-number v-model="form.pins.rst" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">BUSY</span><el-input-number v-model="form.pins.busy" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <el-button size="small" link @click="resetPinsDefault">恢复默认(-1)</el-button>
+            </div>
+          </div>
+        </div>
+
         <div class="submit-row">
-          <el-button type="primary" :loading="loading" @click="submit">保存并应用到 C3 屏幕</el-button>
+          <el-button
+            v-if="isEpd"
+            size="default"
+            plain
+            :loading="loading"
+            @click="submit({ full_refresh: true, refresh: true })"
+          >
+            强制全刷消残影
+          </el-button>
+          <el-button type="primary" :loading="loading" @click="submit({ refresh: true })">
+            {{ isEpd ? '保存并刷新墨水屏' : '保存并应用到设备屏幕' }}
+          </el-button>
         </div>
       </div>
     </div>
@@ -325,9 +591,19 @@ function submit() {
   line-height: 1.5;
 }
 
+.epd-warn-alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .display-grid {
   display: grid;
-  grid-template-columns: 164px 1fr;
+  grid-template-columns: 245px 1fr;
   gap: 16px;
   align-items: start;
 }
@@ -347,9 +623,29 @@ function submit() {
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-muted, #64748b);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.st7735-bezel {
+.bwr-pill {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.bw-pill {
+  background: #e2e8f0;
+  color: #334155;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.screen-bezel {
   padding: 8px;
   border-radius: 12px;
   background: #0f172a;
@@ -357,7 +653,14 @@ function submit() {
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.25);
 }
 
-.st7735-screen {
+.screen-bezel.epd-bezel {
+  padding: 9px;
+  background: #e5e7eb;
+  border: 2px solid #cbd5e1;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.screen-surface {
   width: 120px;
   height: 240px;
   background: #000000;
@@ -372,6 +675,18 @@ function submit() {
   transition: opacity 0.15s ease;
 }
 
+.screen-surface.epd-paper {
+  background: #f6f4ec;
+  color: #18181b;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+}
+
+.screen-surface.epd-paper.epd-inverted {
+  background: #18181b;
+  color: #f6f4ec;
+}
+
 .screen-off-state {
   margin: auto;
   color: #64748b;
@@ -382,9 +697,15 @@ function submit() {
 .scr-hdr, .scr-ftr {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.epd-hdr {
+  padding: 3px 6px;
+  font-size: 11px;
 }
 
 .scr-divider {
@@ -429,7 +750,7 @@ function submit() {
   height: 100%;
 }
 
-.mon-net, .mon-up, .mon-note {
+.mon-net {
   font-size: 10.5px;
   white-space: nowrap;
   overflow: hidden;
@@ -510,10 +831,10 @@ function submit() {
   color: var(--color-primary, #2563eb);
 }
 
-.toggle-grid {
+.epd-toggles, .toggle-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
+  gap: 4px 12px;
 }
 
 .lines-grid {
@@ -522,14 +843,106 @@ function submit() {
   gap: 8px;
 }
 
+.red-chip-btn {
+  border: none;
+  background: transparent;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.red-chip-btn.active {
+  color: #b91c1c;
+  background: #fee2e2;
+  border-radius: 3px;
+}
+
+.wiring-box {
+  background: var(--color-bg-base, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.wiring-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-text-primary, #1e293b);
+}
+
+.wiring-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wiring-note {
+  font-size: 11.5px;
+  color: #9a3412;
+  background: #ffedd5;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.wiring-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 10px;
+  font-size: 11.5px;
+}
+
+.wiring-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wiring-desc {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.pin-override-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.pin-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pin-cell :deep(.el-input-number) {
+  width: 100%;
+}
+
+.pin-lbl {
+  font-size: 11px;
+  color: #475569;
+  font-weight: 600;
+}
+
 .submit-row {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding-top: 4px;
 }
 
 @media (max-width: 640px) {
-  .display-grid, .cfg-two-col, .lines-grid, .mode-pills {
+  .display-grid, .cfg-two-col, .lines-grid, .mode-pills, .wiring-grid, .pin-override-row {
     grid-template-columns: 1fr;
   }
 }

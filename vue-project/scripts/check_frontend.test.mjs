@@ -2,7 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveApiBase, resolveWsBase, buildWsUrl } from '../src/utils/network.js'
 import { getCapabilityFlags } from '../src/utils/capabilities.js'
-import { buildDisplayPayload, normalizeDisplayConfig } from '../src/utils/displayPresets.js'
+import {
+  buildDisplayPayload,
+  getPanelDimensions,
+  hasRedInk,
+  isEpdPanel,
+  isLineRed,
+  normalizeDisplayConfig,
+} from '../src/utils/displayPresets.js'
 import {
   buildTimerPayload,
   createDefaultTimerForm,
@@ -113,4 +120,37 @@ test('getCapabilityFlags supportsGpio & timerPresets helpers shape schedules/act
   assert.match(formatScheduleSummary(built), /15 秒/)
   assert.match(formatActionSummary(built), /GPIO #12 -> ON · 5s 后复原/)
   assert.equal(formatCountdown(105, 100), '5 秒 后')
+})
+
+test('epd presets support 2.13 BW, 2.13 BWR, and 4.2 BWR dimensions, rotation, and red highlights', () => {
+  assert.equal(isEpdPanel('epd_213_bw'), true)
+  assert.equal(hasRedInk('epd_213_bw'), false)
+  assert.equal(hasRedInk('epd_213_bwr'), true)
+  assert.equal(hasRedInk('epd_420_bwr'), true)
+  assert.equal(isEpdPanel('st7789_240'), false)
+
+  assert.deepEqual(getPanelDimensions('epd_213_bwr', 0), { w: 122, h: 250 })
+  assert.deepEqual(getPanelDimensions('epd_213_bwr', 90), { w: 250, h: 122 })
+  assert.deepEqual(getPanelDimensions('epd_420_bwr', 0), { w: 400, h: 300 })
+  assert.deepEqual(getPanelDimensions('epd_420_bwr', 270), { w: 300, h: 400 })
+
+  const s3Default = normalizeDisplayConfig({
+    panel: 'epd_420_bwr',
+    rotation: 90,
+    invert: true,
+    refresh_sec: 120,
+    red_mask: 0x42,
+    pins: { busy: 14, mosi: 11 },
+    lines: ['Header', '[R]Alert', 'Normal', '', '', ''],
+  }, false)
+  assert.equal(s3Default.panel, 'epd_420_bwr')
+  assert.equal(s3Default.rotation, 90)
+  assert.equal(s3Default.pins.busy, 14)
+  assert.equal(isLineRed(s3Default, 1), true)
+  assert.equal(isLineRed(s3Default, 2), false)
+
+  const epdPayload = buildDisplayPayload(s3Default, { full_refresh: true })
+  assert.equal(epdPayload.panel, 'epd_420_bwr')
+  assert.equal(epdPayload.full_refresh, true)
+  assert.equal(epdPayload.red_mask, 0x42)
 })

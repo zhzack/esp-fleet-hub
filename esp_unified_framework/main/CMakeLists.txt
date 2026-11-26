@@ -20,6 +20,7 @@ idf_component_register(
         "hal/hal_camera.c"
         "hal/hal_storage.c"
         "hal/hal_display.c"
+        "hal/hal_epd.c"
         "modules/mod_gpio.c"
         "modules/mod_camera.c"
         "modules/mod_storage.c"

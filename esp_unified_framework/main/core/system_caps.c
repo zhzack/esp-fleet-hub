@@ -16,6 +16,9 @@
 #include "board_pins.h"
 #include "fleet_agent.h"
 #include "ws_gateway.h"
+#if CONFIG_FEATURE_DISPLAY
+#include "hal_epd.h"
+#endif
 
 #ifdef CONFIG_APP_FW_VERSION
 #define FW_VERSION_STR CONFIG_APP_FW_VERSION
@@ -179,6 +182,25 @@ size_t system_caps_to_json(char *dst, size_t max_len)
 #if CONFIG_FEATURE_PC_MONITOR
     cJSON_AddNumberToObject(disp, "width", 80);
     cJSON_AddNumberToObject(disp, "height", 160);
+#elif CONFIG_FEATURE_DISPLAY
+#if CONFIG_IDF_TARGET_ESP32S3
+    bool is_epd = (strcmp(cfg.display.panel, "st7789_240") != 0);
+#else
+    bool is_epd = hal_epd_is_epd_panel_name(cfg.display.panel);
+#endif
+    if (is_epd) {
+        hal_epd_info_t einfo;
+        hal_epd_get_info(&einfo);
+        cJSON_AddStringToObject(disp, "kind", "epd");
+        cJSON_AddStringToObject(disp, "panel", einfo.panel_id ? einfo.panel_id : "epd_213_bwr");
+        cJSON_AddNumberToObject(disp, "width", einfo.width ? einfo.width : 122);
+        cJSON_AddNumberToObject(disp, "height", einfo.height ? einfo.height : 250);
+    } else {
+        cJSON_AddStringToObject(disp, "kind", "lcd");
+        cJSON_AddStringToObject(disp, "panel", "st7789_240");
+        cJSON_AddNumberToObject(disp, "width", 240);
+        cJSON_AddNumberToObject(disp, "height", 240);
+    }
 #endif
     cJSON_AddBoolToObject(cJSON_AddObjectToObject(caps, "usb_otg"), "enabled", c.feat_usb_otg);
 

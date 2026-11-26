@@ -37,6 +37,9 @@
 #if CONFIG_FEATURE_DISPLAY
 #include "hal_display.h"
 #endif
+#if CONFIG_FEATURE_DISPLAY || CONFIG_FEATURE_PC_MONITOR
+#include "mod_display.h"
+#endif
 #if CONFIG_FEATURE_PC_MONITOR
 #include "mod_pc_monitor.h"
 #endif
@@ -515,47 +518,24 @@ static void ws_worker_task(void *pv)
             send_ack(msgid, false, 0, "E404", "gpio disabled");
 #endif
         } else if (strcmp(mtype, "display.status") == 0) {
-#if CONFIG_FEATURE_PC_MONITOR
-            cJSON *ds = mod_pc_monitor_build_status_json();
+#if CONFIG_FEATURE_PC_MONITOR || CONFIG_FEATURE_DISPLAY
+            cJSON *ds = mod_display_build_status_json();
             send_ack_with_payload(msgid, ds != NULL, 1, ds, "E500", "oom");
-#elif CONFIG_FEATURE_DISPLAY
-            cJSON *ds = cJSON_CreateObject();
-            cJSON_AddBoolToObject(ds, "ready", hal_display_is_ready());
-            cJSON_AddStringToObject(ds, "driver", hal_display_driver_name());
-            app_config_display_to_cjson(&app_config_ptr()->display, ds);
-            send_ack_with_payload(msgid, true, 1, ds, NULL, NULL);
 #else
             send_ack(msgid, false, 0, "E404", "display disabled");
 #endif
         } else if ((strcmp(mtype, "display.text") == 0 || strcmp(mtype, "display.config") == 0) && cJSON_IsObject(pl)) {
-#if CONFIG_FEATURE_PC_MONITOR
+#if CONFIG_FEATURE_PC_MONITOR || CONFIG_FEATURE_DISPLAY
             bool switch_text = (strcmp(mtype, "display.text") == 0);
             char *ptxt = cJSON_PrintUnformatted(pl);
-            esp_err_t derr = ptxt ? mod_pc_monitor_update_display_json(ptxt, switch_text) : ESP_ERR_NO_MEM;
+            esp_err_t derr = ptxt ? mod_display_update_json(ptxt, switch_text) : ESP_ERR_NO_MEM;
             if (ptxt) cJSON_free(ptxt);
             if (derr == ESP_OK) {
-                cJSON *ds = mod_pc_monitor_build_status_json();
+                cJSON *ds = mod_display_build_status_json();
                 send_ack_with_payload(msgid, ds != NULL, 2, ds, "E500", "oom");
             } else {
                 send_ack(msgid, false, 2, "E400", esp_err_to_name(derr));
             }
-#elif CONFIG_FEATURE_DISPLAY
-            bool switch_text = (strcmp(mtype, "display.text") == 0);
-            char *ptxt = cJSON_PrintUnformatted(pl);
-            app_config_t updated;
-            app_config_get(&updated);
-            bool changed = ptxt ? app_config_apply_display_json(ptxt, &updated, switch_text) : false;
-            if (ptxt) cJSON_free(ptxt);
-            if (changed) {
-                updated.config_ver++;
-                app_config_save(&updated);
-            }
-            hal_display_apply_config();
-            cJSON *ds = cJSON_CreateObject();
-            cJSON_AddBoolToObject(ds, "ready", hal_display_is_ready());
-            cJSON_AddStringToObject(ds, "driver", hal_display_driver_name());
-            app_config_display_to_cjson(&app_config_ptr()->display, ds);
-            send_ack_with_payload(msgid, true, 2, ds, NULL, NULL);
 #else
             send_ack(msgid, false, 0, "E404", "display disabled");
 #endif

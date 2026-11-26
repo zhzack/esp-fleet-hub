@@ -23,7 +23,8 @@ static bool is_pin_reserved(int pin)
 #if CONFIG_FEATURE_DISPLAY && !CONFIG_FEATURE_PC_MONITOR
     if (pin >= 0 && (pin == BOARD_DISP_MOSI || pin == BOARD_DISP_CLK ||
         pin == BOARD_DISP_CS || pin == BOARD_DISP_DC ||
-        pin == BOARD_DISP_RST || pin == BOARD_DISP_BCKL)) {
+        pin == BOARD_DISP_RST || pin == BOARD_DISP_BUSY ||
+        pin == BOARD_DISP_BCKL)) {
         return true;
     }
 #endif

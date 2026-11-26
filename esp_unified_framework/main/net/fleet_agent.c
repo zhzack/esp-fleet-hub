@@ -27,6 +27,8 @@
 #endif
 #if CONFIG_FEATURE_PC_MONITOR
 #include "mod_pc_monitor.h"
+#elif CONFIG_FEATURE_DISPLAY
+#include "hal_display.h"
 #endif
 #if CONFIG_FEATURE_OTA
 #include "ota_mgr.h"
@@ -253,6 +255,10 @@ static void apply_shadow_sync(cJSON *sync_cfg)
 #if CONFIG_FEATURE_PC_MONITOR
         if (changes.display_changed) {
             mod_pc_monitor_apply_config();
+        }
+#elif CONFIG_FEATURE_DISPLAY
+        if (changes.display_changed) {
+            hal_display_apply_config();
         }
 #endif
         if (changes.wifi_changed) {

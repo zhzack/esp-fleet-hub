@@ -19,9 +19,10 @@ export const unifiedApi = {
   deleteDevice(deviceId) {
     return http.delete(`/v2/unified/devices/${encodeURIComponent(deviceId)}`)
   },
-  proxyGet(deviceId, path) {
+  proxyGet(deviceId, path, silent = false) {
     return http.get(`/v2/unified/devices/${encodeURIComponent(deviceId)}/proxy`, {
       params: { path },
+      silentError: silent,
     })
   },
   proxyPost(deviceId, path, payload = {}) {

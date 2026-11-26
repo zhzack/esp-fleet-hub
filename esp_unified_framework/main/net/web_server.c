@@ -41,6 +41,7 @@
 
 #if CONFIG_FEATURE_DISPLAY
 #include "mod_display.h"
+#include "hal_display.h"
 #endif
 
 #if CONFIG_FEATURE_USB_OTG

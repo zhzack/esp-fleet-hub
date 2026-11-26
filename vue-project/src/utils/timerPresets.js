@@ -126,6 +126,7 @@ export function buildActionPayload(form) {
       const cfg = {
         mode: form.display_mode || 'monitor',
         backlight: clampInt(form.display_backlight, 0, 100, 80),
+        refresh: true,
       }
       if (cfg.mode === 'text' && String(form.display_text || '').trim()) {
         cfg.lines = String(form.display_text)
