@@ -21,6 +21,7 @@ bool mod_usb_otg_mouse_move(int8_t dx, int8_t dy);
 bool mod_usb_otg_mouse_scroll(int8_t vertical, int8_t horizontal);
 bool mod_usb_otg_mouse_click(uint8_t button);
 bool mod_usb_otg_mouse_btn(uint8_t button, bool down);
+bool mod_usb_otg_consumer_tap(const char *key_name);
 bool mod_usb_otg_exec_action(const void *cjson_step, char *err_code, char *err_msg);
 
 #ifdef __cplusplus

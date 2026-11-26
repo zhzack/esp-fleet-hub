@@ -16,6 +16,7 @@ from app.core.config.config import settings, validate_runtime_security
 from app.core.logger.logger import logger
 from app.services import unified_bridge
 from app.services.device_executor import cancel_all_pulses
+from app.services.ha_mqtt_bridge import start_ha_bridge, stop_ha_bridge
 from app.services.timer_scheduler import start_timer_scheduler, stop_timer_scheduler
 from app.services.unified_store import reconcile_stale_online_devices
 
@@ -34,12 +35,14 @@ async def lifespan(app: FastAPI):
         unified_port = int(os.environ.get("PORT", "8000") or 8000)
         unified_bridge.start_mdns_hub(port=unified_port)
         start_timer_scheduler()
+        await start_ha_bridge()
     logger.info(
         f"🚀 {settings.PROJECT_NAME} v{settings.VERSION} 启动"
         f" | DB={settings.MYSQL_DB} | Queue={settings.QUEUE_BACKEND}"
     )
     yield
     if "pytest" not in sys.modules:
+        await stop_ha_bridge()
         stop_timer_scheduler()
         cancel_all_pulses()
         unified_bridge.stop_mdns_hub()

@@ -20,12 +20,14 @@
 
 static const char *TAG = "mod_usb_otg";
 
-#define RID_KBD   1
-#define RID_MOUSE 2
+#define RID_KBD      1
+#define RID_MOUSE    2
+#define RID_CONSUMER 3
 
 static const uint8_t s_hid_report_desc[] = {
     TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(RID_KBD)),
     TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(RID_MOUSE)),
+    TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(RID_CONSUMER)),
 };
 
 static const tusb_desc_device_t s_dev_desc = {
@@ -203,6 +205,42 @@ static bool lookup_key_name(const char *raw, uint8_t *out_code, uint8_t *out_mod
     return false;
 }
 
+static bool lookup_consumer_name(const char *raw, uint16_t *out_code)
+{
+    if (!raw || !raw[0] || !out_code) return false;
+    const char *n = (strncasecmp(raw, "KEY_", 4) == 0) ? (raw + 4) : raw;
+    if (strcasecmp(n, "MUTE") == 0 || strcasecmp(n, "MEDIA_MUTE") == 0) { *out_code = 0x00E2; return true; }
+    if (strcasecmp(n, "VOL_UP") == 0 || strcasecmp(n, "VOLUME_UP") == 0) { *out_code = 0x00E9; return true; }
+    if (strcasecmp(n, "VOL_DOWN") == 0 || strcasecmp(n, "VOLUME_DOWN") == 0) { *out_code = 0x00EA; return true; }
+    if (strcasecmp(n, "PLAY_PAUSE") == 0) { *out_code = 0x00CD; return true; }
+    if (strcasecmp(n, "NEXT_TRACK") == 0 || strcasecmp(n, "NEXT") == 0) { *out_code = 0x00B5; return true; }
+    if (strcasecmp(n, "PREV_TRACK") == 0 || strcasecmp(n, "PREV") == 0) { *out_code = 0x00B6; return true; }
+    if (strcasecmp(n, "STOP") == 0) { *out_code = 0x00B7; return true; }
+    if (strcasecmp(n, "POWER") == 0) { *out_code = 0x0030; return true; }
+    if (strcasecmp(n, "SLEEP") == 0) { *out_code = 0x0032; return true; }
+    if (n[0] == '0' && (n[1] == 'x' || n[1] == 'X')) {
+        unsigned long v = strtoul(n + 2, NULL, 16);
+        if (v > 0 && v <= 0xFFFF) { *out_code = (uint16_t)v; return true; }
+    }
+    return false;
+}
+
+bool mod_usb_otg_consumer_tap(const char *key_name)
+{
+    uint16_t code = 0;
+    if (!lookup_consumer_name(key_name, &code)) return false;
+    if (!s_usb_mounted || !tud_ready()) return false;
+    uint32_t w = 0;
+    while (!tud_hid_ready() && w++ < 25) vTaskDelay(pdMS_TO_TICKS(2));
+    if (!tud_hid_report(RID_CONSUMER, &code, sizeof(code))) return false;
+    s_reports_sent++;
+    vTaskDelay(pdMS_TO_TICKS(15));
+    code = 0;
+    tud_hid_report(RID_CONSUMER, &code, sizeof(code));
+    s_reports_sent++;
+    return true;
+}
+
 bool mod_usb_otg_type_text(const char *text, int interval_ms)
 {
     if (!text) return false;
@@ -359,7 +397,9 @@ static bool exec_action_internal(const cJSON *step, char *err_code, char *err_ms
     }
     const char *t = jt->valuestring;
     if (strcmp(t, "delay") == 0) {
-        int ms = cJSON_IsNumber(cJSON_GetObjectItem(step, "delay_ms")) ? cJSON_GetObjectItem(step, "delay_ms")->valueint : 0;
+        const cJSON *j_dm = cJSON_GetObjectItem(step, "delay_ms");
+        const cJSON *j_ms = cJSON_GetObjectItem(step, "ms");
+        int ms = cJSON_IsNumber(j_dm) ? j_dm->valueint : (cJSON_IsNumber(j_ms) ? j_ms->valueint : 0);
         if (ms > 30000) ms = 30000;
         if (ms > 0) vTaskDelay(pdMS_TO_TICKS(ms));
         return true;
@@ -426,6 +466,10 @@ static bool exec_action_internal(const cJSON *step, char *err_code, char *err_ms
     if (strcmp(t, "keyboard_up") == 0) {
         const cJSON *jk = cJSON_GetObjectItem(step, "key");
         return cJSON_IsString(jk) && mod_usb_otg_key_up(jk->valuestring);
+    }
+    if (strcmp(t, "consumer") == 0 || strcmp(t, "media") == 0) {
+        const cJSON *jk = cJSON_GetObjectItem(step, "key");
+        return cJSON_IsString(jk) && mod_usb_otg_consumer_tap(jk->valuestring);
     }
     if (strcmp(t, "text") == 0 || strcmp(t, "text_input") == 0) {
         const cJSON *jc = cJSON_GetObjectItem(step, "content");
@@ -506,9 +550,13 @@ static esp_err_t hid_key_post_handler(httpd_req_t *req)
         else if (strcasecmp(op, "up") == 0) sent = send_kbd_report(0, 0);
         else sent = send_kbd_tap(mod, (uint8_t)j_code->valueint);
     } else if (cJSON_IsString(j_key)) {
-        if (strcasecmp(op, "down") == 0) sent = mod_usb_otg_key_down(j_key->valuestring, mod);
+        if (strcasecmp(op, "consumer") == 0) sent = mod_usb_otg_consumer_tap(j_key->valuestring);
+        else if (strcasecmp(op, "down") == 0) sent = mod_usb_otg_key_down(j_key->valuestring, mod);
         else if (strcasecmp(op, "up") == 0) sent = mod_usb_otg_key_up(j_key->valuestring);
-        else sent = mod_usb_otg_key_tap(j_key->valuestring, mod);
+        else {
+            sent = mod_usb_otg_key_tap(j_key->valuestring, mod);
+            if (!sent) sent = mod_usb_otg_consumer_tap(j_key->valuestring);
+        }
     }
     cJSON_Delete(root);
 
@@ -654,6 +702,7 @@ bool mod_usb_otg_mouse_move(int8_t dx, int8_t dy) { (void)dx;(void)dy; return fa
 bool mod_usb_otg_mouse_scroll(int8_t v, int8_t h) { (void)v;(void)h; return false; }
 bool mod_usb_otg_mouse_click(uint8_t b) { (void)b; return false; }
 bool mod_usb_otg_mouse_btn(uint8_t b, bool d) { (void)b;(void)d; return false; }
+bool mod_usb_otg_consumer_tap(const char *k) { (void)k; return false; }
 bool mod_usb_otg_exec_action(const void *s, char *ec, char *em) { (void)s;(void)ec;(void)em; return false; }
 
 #endif

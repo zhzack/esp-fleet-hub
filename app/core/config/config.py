@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # --- 队列后端：memory | redis ---
     QUEUE_BACKEND: str = Field(default="memory")
 
+    # --- Home Assistant / MQTT 集成（默认关闭，可通过 API / UI / .env 动态配置） ---
+    HA_MQTT_ENABLED: bool = Field(default=False)
+    HA_MQTT_HOST: str = Field(default="")
+    HA_MQTT_PORT: int = Field(default=1883)
+    HA_MQTT_USER: str = Field(default="")
+    HA_MQTT_PASS: str = Field(default="")
+    HA_DISCOVERY_PREFIX: str = Field(default="homeassistant")
+    HA_TOPIC_PREFIX: str = Field(default="esp_hub")
+    HA_SYNC_INTERVAL_SEC: int = Field(default=10)
+
     # --- 远端固件编译流水线 & Hub 外网可达地址（可选环境变量覆盖） ---
     IDF_BUILD_CMD: str = Field(default="idf-build")
     IDF_BUILD_SSH_HOST: str = Field(default="b1ue@192.168.68.146")

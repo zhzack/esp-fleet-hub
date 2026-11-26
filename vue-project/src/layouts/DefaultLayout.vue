@@ -28,6 +28,7 @@ const menus = [
   { path: '/macros', title: '宏编排库', icon: MagicStick },
   { path: '/firmware', title: '固件与 OTA', icon: SetUp },
   { path: '/unified', title: '统一芯片中心', icon: Connection },
+  { path: '/ha', title: 'Home Assistant', icon: House },
   { path: '/logs', title: '动作审计日志', icon: DocumentCopy },
 ]
 
