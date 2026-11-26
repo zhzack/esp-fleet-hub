@@ -140,11 +140,12 @@ test('epd presets support 2.13 BW, 2.13 BWR, and 4.2 BWR dimensions, rotation, a
     invert: true,
     refresh_sec: 120,
     red_mask: 0x42,
-    pins: { busy: 14, mosi: 11 },
+    pins: { clk: 9, mosi: 10, rst: 11, dc: 12, cs: 13, busy: 14 },
     lines: ['Header', '[R]Alert', 'Normal', '', '', ''],
   }, false)
   assert.equal(s3Default.panel, 'epd_420_bwr')
   assert.equal(s3Default.rotation, 90)
+  assert.equal(s3Default.pins.clk, 9)
   assert.equal(s3Default.pins.busy, 14)
   assert.equal(isLineRed(s3Default, 1), true)
   assert.equal(isLineRed(s3Default, 2), false)

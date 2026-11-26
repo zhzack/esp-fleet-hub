@@ -368,7 +368,7 @@ def test_c3_display_config_and_text_e2e(client):
                         "refresh_sec": 60,
                         "red_mask": 0x43,
                         "full_refresh": True,
-                        "pins": {"mosi": 11, "clk": 12, "cs": 10, "dc": 13, "rst": 9, "busy": 14},
+                        "pins": {"clk": 9, "mosi": 10, "rst": 11, "dc": 12, "cs": 13, "busy": 14},
                         "lines": ["[R]ALERT", "NORMAL"],
                     },
                 )
@@ -377,6 +377,7 @@ def test_c3_display_config_and_text_e2e(client):
                 assert epd_body["panel"] == "epd_420_bwr"
                 assert epd_body["rotation"] == 90
                 assert epd_body["red_mask"] == 0x43
+                assert epd_body["pins"]["clk"] == 9
                 assert epd_body["pins"]["busy"] == 14
 
                 assert tc.post(

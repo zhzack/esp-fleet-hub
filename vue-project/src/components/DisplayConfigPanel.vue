@@ -529,12 +529,12 @@ const effectivePins = computed(() => {
         <!-- E-Paper Driver Board Wiring & Custom Pins Collapsible -->
         <div v-if="isEpd" class="wiring-box">
           <div class="wiring-head" @click="showWiring = !showWiring">
-            <span>墨水屏驱动板 v1.4 <-> ESP32-S3 接线与引脚定义 (默认采样开关: <b>0.47Ω</b>)</span>
+            <span>驱动板 v1.4 接线: <b>SCK..BUSY 直插 S3 GPIO 9~14 (6P 不交叉连排)</b> · 开关 <b>0.47Ω</b></span>
             <el-button size="small" link>{{ showWiring ? '收起' : '展开接线/改引脚' }}</el-button>
           </div>
           <div v-if="showWiring" class="wiring-body">
             <div class="wiring-note">
-              ⚠️ 驱动板底部「采样电阻选择」拨杆务必拨向右侧 <b>0.47Ω</b>；单芯片排线默认只接 <code>CS1</code>（<code>CS2</code> 悬空）。
+              ✨ <b>6P 连续免交叉：</b>驱动板第 3~8 脚（<code>SCK, SDA, RST, DC, CS1, BUSY</code>）与 S3 左侧 <code>GPIO 9, 10, 11, 12, 13, 14</code> 顺序完全一一对应，可直接用一排 6 芯连体杜邦线直插！底部「采样电阻」开关请务必拨向右侧 <b>0.47Ω</b>。
             </div>
             <div class="wiring-grid">
               <div v-for="w in EPD_WIRING_GUIDE" :key="w.boardPin" class="wiring-item">
@@ -544,12 +544,12 @@ const effectivePins = computed(() => {
             </div>
             <div class="pin-override-row">
               <span class="cfg-label" style="grid-column: span 3">自定义引脚映射 (-1 = S3 默认引脚):</span>
-              <div class="pin-cell"><span class="pin-lbl">SDA/MOSI</span><el-input-number v-model="form.pins.mosi" size="small" :min="-1" :max="48" controls-position="right" /></div>
-              <div class="pin-cell"><span class="pin-lbl">SCK/CLK</span><el-input-number v-model="form.pins.clk" size="small" :min="-1" :max="48" controls-position="right" /></div>
-              <div class="pin-cell"><span class="pin-lbl">CS1</span><el-input-number v-model="form.pins.cs" size="small" :min="-1" :max="48" controls-position="right" /></div>
-              <div class="pin-cell"><span class="pin-lbl">DC</span><el-input-number v-model="form.pins.dc" size="small" :min="-1" :max="48" controls-position="right" /></div>
-              <div class="pin-cell"><span class="pin-lbl">RST</span><el-input-number v-model="form.pins.rst" size="small" :min="-1" :max="48" controls-position="right" /></div>
-              <div class="pin-cell"><span class="pin-lbl">BUSY</span><el-input-number v-model="form.pins.busy" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">SCK (默认9)</span><el-input-number v-model="form.pins.clk" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">SDA (默认10)</span><el-input-number v-model="form.pins.mosi" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">RST (默认11)</span><el-input-number v-model="form.pins.rst" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">DC (默认12)</span><el-input-number v-model="form.pins.dc" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">CS1 (默认13)</span><el-input-number v-model="form.pins.cs" size="small" :min="-1" :max="48" controls-position="right" /></div>
+              <div class="pin-cell"><span class="pin-lbl">BUSY (默认14)</span><el-input-number v-model="form.pins.busy" size="small" :min="-1" :max="48" controls-position="right" /></div>
               <el-button size="small" link @click="resetPinsDefault">恢复默认(-1)</el-button>
             </div>
           </div>

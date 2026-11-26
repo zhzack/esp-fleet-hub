@@ -83,11 +83,12 @@ size_t board_pins_populate_gpio(gpio_pin_desc_t *dst, size_t max_items);
 
 /* ================= Generic SPI Display Mapping (E-Paper SSD1683 / ST7789 LCD) ================= */
 #if CONFIG_IDF_TARGET_ESP32S3 && !CONFIG_FEATURE_CAMERA
-    #define BOARD_DISP_MOSI   11
-    #define BOARD_DISP_CLK    12
-    #define BOARD_DISP_CS     10
-    #define BOARD_DISP_DC     13
-    #define BOARD_DISP_RST     9
+    /* Aligned 1-to-1 sequentially with Driver Board v1.4 (SCK,SDA,RST,DC,CS1,BUSY -> GPIO 9..14) */
+    #define BOARD_DISP_CLK     9
+    #define BOARD_DISP_MOSI   10
+    #define BOARD_DISP_RST    11
+    #define BOARD_DISP_DC     12
+    #define BOARD_DISP_CS     13
     #define BOARD_DISP_BUSY   14
     #define BOARD_DISP_BCKL   48
 #elif CONFIG_IDF_TARGET_ESP32 && !CONFIG_FEATURE_CAMERA

@@ -80,23 +80,23 @@ export const DISPLAY_ROTATION_OPTIONS = [
 ]
 
 export const EPD_DEFAULT_PINS = {
-  mosi: 11,
-  clk: 12,
-  cs: 10,
-  dc: 13,
-  rst: 9,
+  clk: 9,
+  mosi: 10,
+  rst: 11,
+  dc: 12,
+  cs: 13,
   busy: 14,
 }
 
 export const EPD_WIRING_GUIDE = [
-  { boardPin: 'GND', s3Pin: 'GND', note: '共地' },
-  { boardPin: '3V3', s3Pin: '3.3V', note: '仅接 3.3V，严禁接 5V' },
-  { boardPin: 'SCK', s3Pin: 'GPIO 12', note: 'SPI 时钟 (可自定义)' },
-  { boardPin: 'SDA', s3Pin: 'GPIO 11', note: 'SPI MOSI (可自定义)' },
-  { boardPin: 'CS1', s3Pin: 'GPIO 10', note: '主片选 (CS2 悬空不接)' },
-  { boardPin: 'DC', s3Pin: 'GPIO 13', note: '数据/命令切换' },
-  { boardPin: 'RST', s3Pin: 'GPIO 9', note: '硬件复位' },
-  { boardPin: 'BUSY', s3Pin: 'GPIO 14', note: '高电平忙检测' },
+  { boardPin: '1. GND', s3Pin: 'GND (左下角)', note: '共地（避开旁边 5V）' },
+  { boardPin: '2. 3V3', s3Pin: '3.3V (左上角)', note: '仅接 3.3V，严禁接 5V' },
+  { boardPin: '3. SCK', s3Pin: 'GPIO 9  [连排#1]', note: '↓ 以下 6 针严格顺序连续' },
+  { boardPin: '4. SDA', s3Pin: 'GPIO 10 [连排#2]', note: 'MOSI 数据线' },
+  { boardPin: '5. RST', s3Pin: 'GPIO 11 [连排#3]', note: '硬件复位' },
+  { boardPin: '6. DC',  s3Pin: 'GPIO 12 [连排#4]', note: '数据/命令切换' },
+  { boardPin: '7. CS1', s3Pin: 'GPIO 13 [连排#5]', note: '主片选 (CS2 悬空不接)' },
+  { boardPin: '8. BUSY', s3Pin: 'GPIO 14 [连排#6]', note: '高电平忙检测' },
 ]
 
 export function getPanelSpec(panel) {
