@@ -9,26 +9,16 @@ from sqlalchemy.orm import Session
 from app.core.security import ensure_device_access, get_current_user
 from app.database.models.user import User
 from app.database.session import get_db
-from app.services import dispatcher
+from app.services.capabilities import (
+    BLE_CAPS as _BLE_CAPS,
+    DISPLAY_CAPS as _DISPLAY_CAPS,
+    GPIO_CAPS as _GPIO_CAPS,
+    USB_CAPS as _USB_CAPS,
+    require_device_capability as _require_capability,
+)
+from app.services.device_executor import execute_device_command, execute_gpio_control
 
 router = APIRouter()
-
-_BLE_CAPS = {"ble", "ble_hid", "ble_keyboard", "ble_mouse", "ble_scanner"}
-_USB_CAPS = {"usb", "usb_otg", "usb_hid", "usb_keyboard", "usb_mouse"}
-_DISPLAY_CAPS = {"display", "pc_monitor"}
-
-
-def _require_capability(dev, allowed_caps: set[str], label: str) -> None:
-    """Block incompatible commands immediately when a device already reported non-empty capabilities."""
-    caps = dev.capabilities
-    if not isinstance(caps, list) or not caps:
-        return
-    normalized = {str(c).strip().lower() for c in caps if str(c).strip()}
-    if normalized and not (normalized & allowed_caps):
-        raise HTTPException(
-            status_code=400,
-            detail=f"设备未启用 {label} 能力（已上报能力: {', '.join(sorted(normalized))}）",
-        )
 
 
 async def _send(
@@ -44,12 +34,12 @@ async def _send(
     dev = ensure_device_access(db, user, device_uuid)
     if required_caps:
         _require_capability(dev, required_caps, cap_label)
-    return await dispatcher.deliver_command(
+    return await execute_device_command(
         db,
+        user_id=user.id,
         device_uuid=device_uuid,
         cmd_type=cmd_type,
         payload=payload or {},
-        user_id=user.id,
         timeout_ms=timeout_ms,
     )
 
@@ -354,4 +344,56 @@ async def display_text(
         timeout_ms=4000,
         required_caps=_DISPLAY_CAPS,
         cap_label="屏幕显示",
+    )
+
+
+class GpioSetIn(BaseModel):
+    pin: int
+    val: int | None = None
+    duty: int | None = None
+    op: Literal["on", "off", "toggle", "pwm"] | None = None
+    duration_sec: int = 0
+
+
+@router.get("/{device_uuid}/gpio/pins")
+async def gpio_pins(
+    device_uuid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "gpio.pins",
+        timeout_ms=3500,
+        required_caps=_GPIO_CAPS,
+        cap_label="GPIO 外设",
+    )
+
+
+@router.post("/{device_uuid}/gpio/set")
+async def gpio_set(
+    device_uuid: str,
+    body: GpioSetIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if body.pin < 0 or body.pin > 48:
+        raise HTTPException(400, "pin must be between 0 and 48")
+    if body.duty is not None and not (0 <= body.duty <= 100):
+        raise HTTPException(400, "duty must be between 0 and 100")
+    if body.duration_sec < 0 or body.duration_sec > 86400:
+        raise HTTPException(400, "duration_sec must be between 0 and 86400")
+    dev = ensure_device_access(db, user, device_uuid)
+    _require_capability(dev, _GPIO_CAPS, "GPIO 外设")
+    return await execute_gpio_control(
+        db,
+        user_id=user.id,
+        device_uuid=device_uuid,
+        pin=body.pin,
+        val=body.val,
+        duty=body.duty,
+        op=body.op,
+        duration_sec=body.duration_sec,
     )

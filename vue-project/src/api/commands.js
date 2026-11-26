@@ -30,6 +30,10 @@ export const commandsApi = {
   displayConfig(uuid, body)    { return http.post(`${base(uuid)}/display/config`, body) },
   displayText(uuid, body)      { return http.post(`${base(uuid)}/display/text`, body) },
 
+  // GPIO 电平 / PWM / 自动复原脉冲控制
+  gpioPins(uuid)               { return http.get(`${base(uuid)}/gpio/pins`) },
+  gpioSet(uuid, body)          { return http.post(`${base(uuid)}/gpio/set`, body) },
+
   // slot CRUD
   listSlots(uuid)                    { return http.get(`${base(uuid)}/slots`) },
   putSlot(uuid, idx, body)           { return http.put(`${base(uuid)}/slots/${idx}`, body) },

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   House, Cpu, VideoCamera, MagicStick, DocumentCopy, SwitchButton, Grid,
-  Aim, Fold, Expand, UserFilled, Lock, Check, SetUp, Connection,
+  Aim, Fold, Expand, UserFilled, Lock, Check, SetUp, Connection, Timer,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -22,6 +22,7 @@ const menus = [
   { path: '/dashboard', title: '总览仪表盘', icon: House },
   { path: '/devices', title: '设备管理', icon: Cpu },
   { path: '/device-groups', title: '设备分组', icon: Grid },
+  { path: '/timers', title: '定时与触发', icon: Timer },
   { path: '/trackpad', title: '虚拟触控板', icon: Aim },
   { path: '/console', title: '动作控制台', icon: VideoCamera },
   { path: '/macros', title: '宏编排库', icon: MagicStick },

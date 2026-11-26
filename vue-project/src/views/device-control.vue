@@ -3,7 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { commandsApi } from '@/api/commands'
 import { devicesApi } from '@/api/devices'
+import { macrosApi } from '@/api/macros'
 import DisplayConfigPanel from '@/components/DisplayConfigPanel.vue'
+import TimerConfigPanel from '@/components/TimerConfigPanel.vue'
 import { getCapabilityFlags } from '@/utils/capabilities'
 
 const props = defineProps({
@@ -32,6 +34,13 @@ const bleScanList = ref([])
 const transportData = ref(null)
 const displayStatusData = ref(null)
 const displayErrorMsg = ref('')
+const gpioPinsData = ref([])
+const gpioBoardName = ref('')
+const gpioErrorMsg = ref('')
+const gpioPulseSec = ref(0)
+const gpioPulseHint = ref('')
+const macrosList = ref([])
+const timerSeed = ref(null)
 const slotsList = ref([])     // {slot_index, addr_type, addr, name, last_used_at}
 const wifiKnownList = ref([]) // [{ssid, label, has_password, last_seen_at}]
 
@@ -111,6 +120,95 @@ async function saveDisplayConfig(payload) {
   } finally {
     loading.value = false
   }
+}
+
+async function loadGpioPins(silent = true) {
+  if (!capFlags.value.supportsGpio) return
+  loading.value = true
+  gpioErrorMsg.value = ''
+  try {
+    const resp = await commandsApi.gpioPins(props.deviceUuid)
+    lastResult.value = resp
+    if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
+      const msg = `${resp.error_code || resp.status}: ${resp.error_message || '读取引脚失败'}`
+      gpioErrorMsg.value = msg
+      if (!silent) ElMessage.warning(`读取 GPIO 引脚失败: ${msg}`)
+      return
+    }
+    const r = extractResult(resp)
+    gpioBoardName.value = r?.board || ''
+    gpioPinsData.value = (Array.isArray(r?.pins) ? r.pins : []).map((p) => ({
+      ...p,
+      _draftDuty: p.duty ?? 50,
+    }))
+    if (!silent) ElMessage.success(`已刷新 ${gpioPinsData.value.length} 个 GPIO 引脚状态`)
+  } catch (e) {
+    gpioErrorMsg.value = e?.response?.data?.detail || e?.message || '读取 GPIO 状态失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function applyGpioPin(pinRow, { op = null, val = null, duty = null, durationSec = undefined } = {}) {
+  loading.value = true
+  gpioErrorMsg.value = ''
+  const targetUuid = props.deviceUuid
+  const pulse = op === 'off' ? 0 : Number(durationSec !== undefined ? durationSec : gpioPulseSec.value) || 0
+  try {
+    const resp = await commandsApi.gpioSet(targetUuid, {
+      pin: pinRow.pin,
+      op,
+      val,
+      duty,
+      duration_sec: pulse,
+    })
+    lastResult.value = resp
+    if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
+      const msg = `${resp.error_code || resp.status}: ${resp.error_message || 'GPIO 控制未应答'}`
+      gpioErrorMsg.value = msg
+      ElMessage.warning(msg)
+      return
+    }
+    if (resp?.pulse_restore_sec > 0) {
+      gpioPulseHint.value = `GPIO ${pinRow.pin} 已开启，将在 ${resp.pulse_restore_sec} 秒后自动复原关闭`
+      ElMessage.success(gpioPulseHint.value)
+      setTimeout(() => {
+        if (props.modelValue && props.deviceUuid === targetUuid && tab.value === 'gpio') {
+          gpioPulseHint.value = ''
+          loadGpioPins(true)
+        }
+      }, (resp.pulse_restore_sec + 1) * 1000)
+    } else {
+      gpioPulseHint.value = ''
+      ElMessage.success(`GPIO ${pinRow.pin} 状态已更新`)
+    }
+    await loadGpioPins(true)
+  } catch (e) {
+    gpioErrorMsg.value = e?.response?.data?.detail || e?.message || 'GPIO 控制失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function scheduleTimerForPin(pinRow, op = 'on') {
+  timerSeed.value = {
+    _ts: Date.now(),
+    name: `${pinRow.label || `GPIO ${pinRow.pin}`} 定时${op === 'off' ? '关闭' : '开启'}`,
+    schedule_type: 'countdown',
+    delay_sec: 10,
+    action_type: 'gpio_set',
+    gpio_pin: pinRow.pin,
+    gpio_op: op,
+    gpio_duty: pinRow._draftDuty ?? 50,
+    gpio_duration_sec: gpioPulseSec.value || 0,
+  }
+  tab.value = 'timers'
+}
+
+async function loadMacrosOnce() {
+  if (macrosList.value.length) return
+  try { macrosList.value = (await macrosApi.list()) || [] }
+  catch { macrosList.value = [] }
 }
 
 async function loadStatus(silent = true) {
@@ -317,6 +415,12 @@ watch(() => props.modelValue, async (v) => {
     transportData.value = null
     displayStatusData.value = null
     displayErrorMsg.value = ''
+    gpioPinsData.value = []
+    gpioBoardName.value = ''
+    gpioErrorMsg.value = ''
+    gpioPulseSec.value = 0
+    gpioPulseHint.value = ''
+    timerSeed.value = null
     slotsList.value = []
     wifiKnownList.value = []
     lastResult.value = null
@@ -339,6 +443,13 @@ watch(() => props.modelValue, async (v) => {
 watch(tab, (t) => {
   if (t === 'display' && props.modelValue && props.deviceUuid && capFlags.value.supportsDisplay && !displayStatusData.value) {
     loadDisplayStatus(true)
+  } else if (t === 'gpio' && props.modelValue && props.deviceUuid && capFlags.value.supportsGpio && !gpioPinsData.value.length) {
+    loadGpioPins(true)
+  } else if (t === 'timers' && props.modelValue && props.deviceUuid) {
+    loadMacrosOnce()
+    if (capFlags.value.supportsGpio && !gpioPinsData.value.length) {
+      loadGpioPins(true)
+    }
   }
 })
 </script>
@@ -541,6 +652,74 @@ watch(tab, (t) => {
           </div>
         </el-tab-pane>
 
+        <!-- 3.5 GPIO & Pulse Control Tab -->
+        <el-tab-pane v-if="capFlags.supportsGpio" label="GPIO 外设" name="gpio">
+          <div class="tab-pane-content">
+            <div class="action-strip gpio-toolbar">
+              <el-button size="small" type="primary" @click="loadGpioPins(false)" :loading="loading" class="control-action-btn">
+                读取引脚状态
+              </el-button>
+              <div class="gpio-pulse-picker">
+                <span class="gpio-pulse-label">脉冲自动关闭:</span>
+                <el-select v-model="gpioPulseSec" size="small" style="width: 126px">
+                  <el-option :value="0" label="保持常驻 (0s)" />
+                  <el-option :value="2" label="2 秒脉冲" />
+                  <el-option :value="5" label="5 秒脉冲" />
+                  <el-option :value="10" label="10 秒脉冲" />
+                  <el-option :value="30" label="30 秒脉冲" />
+                  <el-option :value="60" label="60 秒脉冲" />
+                </el-select>
+              </div>
+              <span v-if="gpioBoardName" class="badge-tag badge-blue">{{ gpioBoardName }}</span>
+            </div>
+
+            <el-alert v-if="gpioErrorMsg" :title="gpioErrorMsg" type="warning" show-icon :closable="false" />
+            <el-alert v-if="gpioPulseHint" :title="gpioPulseHint" type="success" show-icon :closable="false" />
+
+            <div v-if="gpioPinsData.length" class="gpio-grid">
+              <div v-for="pin in gpioPinsData" :key="pin.pin" class="gpio-card" :class="{ active: pin.val || pin.duty > 0 }">
+                <div class="gpio-card-top">
+                  <div>
+                    <div class="gpio-pin-title">GPIO {{ pin.pin }} <span class="gpio-pin-alias">{{ pin.label || '引脚' }}</span></div>
+                    <div class="gpio-pin-tags">
+                      <span class="badge-tag badge-blue">{{ pin.pwm ? 'PWM' : '数字输出' }}</span>
+                      <span v-if="pin.active_low" class="badge-tag badge-green">低有效</span>
+                    </div>
+                  </div>
+                  <div class="gpio-state-badge" :class="(pin.val || pin.duty > 0) ? 'on' : 'off'">
+                    {{ pin.duty > 0 ? `PWM ${pin.duty}%` : pin.val ? 'ON (HIGH)' : 'OFF (LOW)' }}
+                  </div>
+                </div>
+
+                <div class="gpio-btn-row">
+                  <el-button size="small" type="success" :disabled="loading || !pin.output" @click="applyGpioPin(pin, { op: 'on' })">
+                    {{ gpioPulseSec > 0 ? `开启(${gpioPulseSec}s)` : '开启' }}
+                  </el-button>
+                  <el-button size="small" type="info" :disabled="loading || !pin.output" @click="applyGpioPin(pin, { op: 'off' })">
+                    关闭
+                  </el-button>
+                  <el-button size="small" :disabled="loading || !pin.output" @click="applyGpioPin(pin, { op: 'toggle' })">
+                    翻转
+                  </el-button>
+                  <el-button size="small" link type="primary" @click="scheduleTimerForPin(pin, 'on')">
+                    设定时
+                  </el-button>
+                </div>
+
+                <div v-if="pin.pwm" class="gpio-pwm-row">
+                  <span class="gpio-pwm-label">PWM:</span>
+                  <el-slider v-model="pin._draftDuty" :min="0" :max="100" size="small" style="flex: 1" />
+                  <el-button size="small" type="primary" plain :disabled="loading" @click="applyGpioPin(pin, { op: 'pwm', duty: pin._draftDuty })">
+                    {{ pin._draftDuty }}%
+                  </el-button>
+                </div>
+              </div>
+            </div>
+
+            <el-empty v-else description="点击“读取引脚状态”获取当前芯片 GPIO 列表" :image-size="56" />
+          </div>
+        </el-tab-pane>
+
         <!-- 4. BLE Tab (仅在支持 BLE 或尚未上报能力时显示) -->
         <el-tab-pane v-if="capFlags.supportsBle" label="BLE 蓝牙" name="ble">
           <div class="tab-pane-content">
@@ -703,6 +882,20 @@ watch(tab, (t) => {
             </div>
 
             <el-empty v-else description="点击上方刷新加载当前硬件传输状态" :image-size="60" />
+          </div>
+        </el-tab-pane>
+
+        <!-- 4.5 Timers & Automation Tab -->
+        <el-tab-pane label="定时任务" name="timers">
+          <div class="tab-pane-content">
+            <TimerConfigPanel
+              :device-uuid="deviceUuid"
+              :device-caps="capFlags.list"
+              :gpio-pins="gpioPinsData"
+              :macros="macrosList"
+              :seed-form="timerSeed"
+              compact
+            />
           </div>
         </el-tab-pane>
 
@@ -1078,5 +1271,109 @@ watch(tab, (t) => {
   border-radius: var(--radius-sm);
   font-family: monospace;
   font-size: 12px;
+}
+
+.gpio-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.gpio-pulse-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gpio-pulse-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.gpio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.gpio-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.gpio-card.active {
+  border-color: #86efac;
+  background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%);
+}
+
+.gpio-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.gpio-pin-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.gpio-pin-alias {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-left: 4px;
+}
+
+.gpio-pin-tags {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.gpio-state-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.gpio-state-badge.on {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.gpio-state-badge.off {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.gpio-btn-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gpio-pwm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.gpio-pwm-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 </style>

@@ -15,6 +15,7 @@ from app.database.models.macro import Macro  # noqa: F401
 from app.database.models.device_group import DeviceGroup, DeviceGroupMember  # noqa: F401
 from app.database.models.firmware import Firmware  # noqa: F401
 from app.database.models.device_host_meta import DeviceHostMeta  # noqa: F401
+from app.database.models.device_timer import DeviceTimer  # noqa: F401
 from app.database.models.unified_fleet import (  # noqa: F401
     UnifiedDevice,
     UnifiedDeviceConfig,

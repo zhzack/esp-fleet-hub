@@ -3,6 +3,14 @@ import assert from 'node:assert/strict'
 import { resolveApiBase, resolveWsBase, buildWsUrl } from '../src/utils/network.js'
 import { getCapabilityFlags } from '../src/utils/capabilities.js'
 import { buildDisplayPayload, normalizeDisplayConfig } from '../src/utils/displayPresets.js'
+import {
+  buildTimerPayload,
+  createDefaultTimerForm,
+  formatActionSummary,
+  formatCountdown,
+  formatScheduleSummary,
+  getAllowedActionOptions,
+} from '../src/utils/timerPresets.js'
 
 test('resolveApiBase uses backend port on loopback dev server and relative /api in prod', () => {
   const devLoc = { hostname: 'localhost', port: '5173', protocol: 'http:', host: 'localhost:5173' }
@@ -75,4 +83,34 @@ test('displayPresets normalizeDisplayConfig and buildDisplayPayload clamp and st
   assert.equal(payload.backlight, 0)
   assert.equal(payload.header_text, 'DESK-C3')
   assert.equal(payload.lines.length, 6)
+})
+
+test('getCapabilityFlags supportsGpio & timerPresets helpers shape schedules/actions', () => {
+  const c3 = getCapabilityFlags(['gpio', 'display'])
+  assert.equal(c3.hasGpio, true)
+  assert.equal(c3.supportsGpio, true)
+
+  const displayOnly = getCapabilityFlags(['display'])
+  assert.equal(displayOnly.hasGpio, false)
+  assert.equal(displayOnly.supportsGpio, false)
+  assert.equal(getCapabilityFlags([]).supportsGpio, true)
+
+  const allowedDisplayOnly = getAllowedActionOptions(displayOnly).map((o) => o.value)
+  assert.equal(allowedDisplayOnly.includes('gpio_set'), false)
+  assert.equal(allowedDisplayOnly.includes('display_config'), true)
+  assert.equal(allowedDisplayOnly.includes('reboot'), true)
+
+  const form = createDefaultTimerForm('esp32c3-72f320', c3, {
+    schedule_type: 'countdown',
+    delay_sec: 15,
+    action_type: 'gpio_set',
+    action_payload: { pin: 12, op: 'on', duration_sec: 5 },
+  })
+  const built = buildTimerPayload(form)
+  assert.equal(built.device_uuid, 'esp32c3-72f320')
+  assert.equal(built.delay_sec, 15)
+  assert.deepEqual(built.action_payload, { pin: 12, op: 'on', duration_sec: 5 })
+  assert.match(formatScheduleSummary(built), /15 秒/)
+  assert.match(formatActionSummary(built), /GPIO #12 -> ON · 5s 后复原/)
+  assert.equal(formatCountdown(105, 100), '5 秒 后')
 })
