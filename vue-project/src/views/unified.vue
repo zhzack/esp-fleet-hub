@@ -339,6 +339,22 @@ async function saveUnifiedDisplayConfig(payload) {
   }
 }
 
+async function sendUnifiedDisplayImage(payload) {
+  if (!inspect.device) return
+  inspect.displayLoading = true
+  inspect.displayError = ''
+  try {
+    const res = await unifiedApi.sendCommand(inspect.device.device_id, 'display_image', payload)
+    if (res?.response) inspect.displayStatus = res.response
+    else await loadInspectDisplay(inspect.device)
+    ElMessage.success('图片已推送到墨水屏')
+  } catch (e) {
+    inspect.displayError = e?.response?.data?.detail || e?.message || '墨水屏图片推送失败'
+  } finally {
+    inspect.displayLoading = false
+  }
+}
+
 async function sendHidText() {
   if (!inspect.hidText) return
   await unifiedApi.sendCommand(inspect.device.device_id, 'hid_text', { text: inspect.hidText })
@@ -685,6 +701,7 @@ onBeforeUnmount(() => {
             :error-message="inspect.displayError"
             @refresh="loadInspectDisplay()"
             @save="saveUnifiedDisplayConfig"
+            @send-image="sendUnifiedDisplayImage"
           />
         </template>
 

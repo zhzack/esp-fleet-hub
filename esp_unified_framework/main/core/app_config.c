@@ -126,7 +126,8 @@ static void apply_defaults(app_config_t *cfg)
 static bool valid_disp_mode(const char *m)
 {
     return m && (strcmp(m, "monitor") == 0 || strcmp(m, "text") == 0 ||
-                 strcmp(m, "status") == 0 || strcmp(m, "off") == 0);
+                 strcmp(m, "status") == 0 || strcmp(m, "image") == 0 ||
+                 strcmp(m, "off") == 0);
 }
 
 static bool valid_disp_theme(const char *t)

@@ -29,6 +29,7 @@ export const commandsApi = {
   displayStatus(uuid)          { return http.get(`${base(uuid)}/display/status`) },
   displayConfig(uuid, body)    { return http.post(`${base(uuid)}/display/config`, body) },
   displayText(uuid, body)      { return http.post(`${base(uuid)}/display/text`, body) },
+  displayImage(uuid, body)     { return http.post(`${base(uuid)}/display/image`, body, { timeout: 15000 }) },
 
   // GPIO 电平 / PWM / 自动复原脉冲控制
   gpioPins(uuid)               { return http.get(`${base(uuid)}/gpio/pins`) },

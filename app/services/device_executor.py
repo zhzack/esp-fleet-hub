@@ -26,6 +26,7 @@ _HTTP_POST_ROUTES: dict[str, str] = {
     "gpio.set": "/api/gpio/set",
     "display.config": "/api/display/config",
     "display.text": "/api/display/text",
+    "display.image": "/api/display/image",
     "reboot": "/api/system/reboot",
 }
 

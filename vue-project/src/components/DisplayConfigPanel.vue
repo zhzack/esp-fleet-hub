@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import {
   DISPLAY_MODE_OPTIONS,
   DISPLAY_PANEL_OPTIONS,
@@ -17,6 +17,11 @@ import {
   normalizeDisplayConfig,
   stripRedPrefix,
 } from '@/utils/displayPresets'
+import {
+  buildEpdImagePayload,
+  generateTestPatternRgba,
+  quantizeRgbaToEpd,
+} from '@/utils/epdImage'
 
 const props = defineProps({
   status: { type: Object, default: null },
@@ -27,10 +32,26 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['refresh', 'save'])
+const emit = defineEmits(['refresh', 'save', 'sendImage'])
 
 const form = reactive(normalizeDisplayConfig(props.status, props.pcMonitorDefault))
 const showWiring = ref(false)
+
+// E-Paper Image Studio state
+const fileInputRef = ref(null)
+const epdCanvasRef = ref(null)
+const sourceImageEl = ref(null)
+const imgState = reactive({
+  name: '',
+  colorMode: 'bwr', // 'bwr' (tri-color) | 'bw' (monochrome)
+  algorithm: 'dither', // 'dither' | 'threshold'
+  fit: 'contain', // 'contain' | 'cover'
+  brightness: 0,
+  redSensitivity: 1.0,
+  prepared: false,
+  stats: null,
+  lastBuilt: null,
+})
 
 watch(
   () => props.status,
@@ -52,6 +73,21 @@ const availablePanels = computed(() => {
   if (props.pcMonitorDefault) return DISPLAY_PANEL_OPTIONS
   return DISPLAY_PANEL_OPTIONS.filter((p) => p.value !== 'st7735_160')
 })
+const availableModes = computed(() =>
+  isEpd.value ? DISPLAY_MODE_OPTIONS : DISPLAY_MODE_OPTIONS.filter((m) => m.value !== 'image'),
+)
+
+watch(
+  isThreeColor,
+  (hasRed) => {
+    if (!hasRed && imgState.colorMode === 'bwr') {
+      imgState.colorMode = 'bw'
+    } else if (hasRed && !imgState.prepared) {
+      imgState.colorMode = 'bwr'
+    }
+  },
+  { immediate: true },
+)
 
 const activeTheme = computed(
   () => DISPLAY_THEME_OPTIONS.find((t) => t.value === form.theme) || DISPLAY_THEME_OPTIONS[0],
@@ -185,7 +221,133 @@ function applyPreset(preset) {
 }
 
 function submit(extras = null) {
+  if (isEpd.value && form.mode === 'image' && imgState.lastBuilt) {
+    submitImage(extras?.full_refresh !== undefined ? Boolean(extras.full_refresh) : true)
+    return
+  }
   emit('save', buildDisplayPayload(form, extras))
+}
+
+function renderImageCanvas() {
+  if (!isEpd.value || form.mode !== 'image') return
+  const canvas = epdCanvasRef.value
+  if (!canvas) return
+  const { w, h } = dims.value
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return
+
+  let srcRgba = null
+  if (sourceImageEl.value) {
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    const img = sourceImageEl.value
+    const sw = img.naturalWidth || img.width || w
+    const sh = img.naturalHeight || img.height || h
+    const scale =
+      imgState.fit === 'cover' ? Math.max(w / sw, h / sh) : Math.min(w / sw, h / sh)
+    const dw = sw * scale
+    const dh = sh * scale
+    const dx = (w - dw) / 2
+    const dy = (h - dh) / 2
+    ctx.drawImage(img, dx, dy, dw, dh)
+    srcRgba = ctx.getImageData(0, 0, w, h).data
+  } else if (imgState.prepared) {
+    srcRgba = generateTestPatternRgba(w, h, imgState.colorMode)
+  } else {
+    imgState.lastBuilt = null
+    imgState.stats = null
+    return
+  }
+
+  const q = quantizeRgbaToEpd(srcRgba, w, h, {
+    colorMode: imgState.colorMode,
+    algorithm: imgState.algorithm,
+    invert: form.invert,
+    brightness: imgState.brightness,
+    redSensitivity: imgState.redSensitivity,
+  })
+  const outImgData = new ImageData(q.previewRgba, w, h)
+  ctx.putImageData(outImgData, 0, 0)
+  imgState.stats = q.stats
+  imgState.lastBuilt = {
+    bw: q.bw,
+    red: q.red,
+    width: w,
+    height: h,
+    colorMode: imgState.colorMode,
+  }
+}
+
+watch(
+  [
+    () => form.mode,
+    () => form.panel,
+    () => form.rotation,
+    () => form.invert,
+    () => imgState.colorMode,
+    () => imgState.algorithm,
+    () => imgState.fit,
+    () => imgState.brightness,
+    () => imgState.redSensitivity,
+    () => imgState.prepared,
+  ],
+  async () => {
+    if (isEpd.value && form.mode === 'image' && imgState.prepared) {
+      await nextTick()
+      renderImageCanvas()
+    }
+  },
+)
+
+function triggerImagePicker() {
+  fileInputRef.value?.click()
+}
+
+function onImageFileSelected(ev) {
+  const file = ev?.target?.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const img = new Image()
+    img.onload = async () => {
+      sourceImageEl.value = img
+      imgState.name = file.name
+      imgState.prepared = true
+      form.mode = 'image'
+      await nextTick()
+      renderImageCanvas()
+    }
+    img.src = String(reader.result || '')
+  }
+  reader.readAsDataURL(file)
+  if (ev?.target) ev.target.value = ''
+}
+
+async function loadTestPattern(mode) {
+  sourceImageEl.value = null
+  imgState.colorMode = mode
+  imgState.name = mode === 'bwr' ? '三色测试样张 (B/W/R)' : '黑白测试样张 (B/W)'
+  imgState.prepared = true
+  form.mode = 'image'
+  await nextTick()
+  renderImageCanvas()
+}
+
+function submitImage(fullRefresh = true) {
+  if (!imgState.lastBuilt) {
+    emit('save', buildDisplayPayload(form, { mode: 'image', refresh: true, full_refresh: fullRefresh }))
+    return
+  }
+  const payload = buildEpdImagePayload({
+    ...imgState.lastBuilt,
+    panel: form.panel,
+    rotation: form.rotation,
+    invert: form.invert,
+    fullRefresh,
+  })
+  emit('sendImage', payload)
 }
 
 function resetPinsDefault() {
@@ -240,6 +402,16 @@ const effectivePins = computed(() => {
             <template v-if="form.mode === 'off'">
               <div class="screen-off-state">
                 {{ isEpd ? 'E-INK CLEARED / SLEEP' : 'BACKLIGHT OFF' }}
+              </div>
+            </template>
+            <template v-else-if="form.mode === 'image' && isEpd">
+              <canvas v-show="imgState.prepared" ref="epdCanvasRef" class="epd-img-canvas" />
+              <div v-if="!imgState.prepared" class="screen-off-state" style="text-align: center; padding: 10px">
+                {{
+                  status?.has_image
+                    ? `设备已存图片 (${status.image_width}×${status.image_height} · ${status.image_color_mode === 'bwr' ? '三色' : '黑白'})`
+                    : '请选择图片或点击测试图'
+                }}
               </div>
             </template>
             <template v-else>
@@ -423,7 +595,7 @@ const effectivePins = computed(() => {
           <div class="cfg-label">显示模式</div>
           <div class="mode-pills">
             <button
-              v-for="m in DISPLAY_MODE_OPTIONS"
+              v-for="m in availableModes"
               :key="m.value"
               type="button"
               class="mode-pill"
@@ -471,6 +643,76 @@ const effectivePins = computed(() => {
           </div>
         </div>
 
+        <!-- E-Paper Image Converter Studio (B/W & Tri-Color B/W/R) -->
+        <div v-if="isEpd && form.mode === 'image'" class="img-studio-box">
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/*"
+            style="display: none"
+            @change="onImageFileSelected"
+          />
+          <div class="img-toolbar">
+            <el-button size="small" type="primary" @click="triggerImagePicker">选择本地图片</el-button>
+            <el-button
+              v-if="isThreeColor"
+              size="small"
+              type="danger"
+              plain
+              @click="loadTestPattern('bwr')"
+            >
+              三色测试图 (B/W/R)
+            </el-button>
+            <el-button size="small" plain @click="loadTestPattern('bw')">黑白测试图 (B/W)</el-button>
+          </div>
+
+          <div class="cfg-two-col">
+            <div class="cfg-block">
+              <div class="cfg-label">墨水色彩输出</div>
+              <el-radio-group v-model="imgState.colorMode" size="small">
+                <el-radio-button value="bwr" :disabled="!isThreeColor">黑白红三色</el-radio-button>
+                <el-radio-button value="bw">纯黑白</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div class="cfg-block">
+              <div class="cfg-label">点阵处理算法</div>
+              <el-select v-model="imgState.algorithm" size="small" style="width: 100%">
+                <el-option value="dither" label="照片抖动 (Floyd-Steinberg)" />
+                <el-option value="threshold" label="锐利二值 (Logo / 二维码)" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="cfg-two-col">
+            <div class="cfg-block">
+              <div class="cfg-label">缩放与构图</div>
+              <el-select v-model="imgState.fit" size="small" style="width: 100%">
+                <el-option value="contain" label="完整适配 (留白不裁剪)" />
+                <el-option value="cover" label="铺满屏幕 (居中裁切)" />
+              </el-select>
+            </div>
+            <div class="cfg-block">
+              <div class="cfg-label">亮度补偿 ({{ imgState.brightness > 0 ? `+${imgState.brightness}` : imgState.brightness }})</div>
+              <el-slider v-model="imgState.brightness" :min="-60" :max="60" :step="5" />
+            </div>
+          </div>
+
+          <div v-if="imgState.colorMode === 'bwr' && isThreeColor" class="cfg-block">
+            <div class="cfg-label">红色提取灵敏度 ({{ imgState.redSensitivity.toFixed(1) }}×)</div>
+            <el-slider v-model="imgState.redSensitivity" :min="0.4" :max="1.8" :step="0.1" />
+          </div>
+
+          <div v-if="imgState.stats" class="img-stats-bar">
+            <span>来源: <b>{{ imgState.name }}</b></span>
+            <span>
+              {{ imgState.stats.width }}×{{ imgState.stats.height }} ·
+              白 {{ imgState.stats.whiteCount }} / 黑 {{ imgState.stats.blackCount }}
+              <template v-if="imgState.colorMode === 'bwr'"> / <b style="color:#b91c1c">红 {{ imgState.stats.redCount }}</b></template>
+            </span>
+          </div>
+        </div>
+
+        <template v-if="form.mode !== 'image'">
         <div class="cfg-two-col">
           <div class="cfg-block">
             <div class="cfg-label">顶部标题 (留空显示设备 ID)</div>
@@ -525,6 +767,7 @@ const effectivePins = computed(() => {
             </el-input>
           </div>
         </div>
+        </template>
 
         <!-- E-Paper Driver Board Wiring & Custom Pins Collapsible -->
         <div v-if="isEpd" class="wiring-box">
@@ -556,18 +799,34 @@ const effectivePins = computed(() => {
         </div>
 
         <div class="submit-row">
-          <el-button
-            v-if="isEpd"
-            size="default"
-            plain
-            :loading="loading"
-            @click="submit({ full_refresh: true, refresh: true })"
-          >
-            强制全刷消残影
-          </el-button>
-          <el-button type="primary" :loading="loading" @click="submit({ refresh: true })">
-            {{ isEpd ? '保存并刷新墨水屏' : '保存并应用到设备屏幕' }}
-          </el-button>
+          <template v-if="isEpd && form.mode === 'image' && imgState.lastBuilt">
+            <el-button
+              v-if="activePanelSpec.partial"
+              size="default"
+              plain
+              :loading="loading"
+              @click="submitImage(false)"
+            >
+              局部快刷推图
+            </el-button>
+            <el-button type="primary" :loading="loading" @click="submitImage(true)">
+              推送图片到墨水屏 ({{ imgState.colorMode === 'bwr' ? '三色' : '黑白' }})
+            </el-button>
+          </template>
+          <template v-else>
+            <el-button
+              v-if="isEpd"
+              size="default"
+              plain
+              :loading="loading"
+              @click="submit({ full_refresh: true, refresh: true })"
+            >
+              强制全刷消残影
+            </el-button>
+            <el-button type="primary" :loading="loading" @click="submit({ refresh: true })">
+              {{ isEpd ? '保存并刷新墨水屏' : '保存并应用到设备屏幕' }}
+            </el-button>
+          </template>
         </div>
       </div>
     </div>
@@ -694,6 +953,13 @@ const effectivePins = computed(() => {
   letter-spacing: 0.5px;
 }
 
+.epd-img-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+
 .scr-hdr, .scr-ftr {
   display: flex;
   justify-content: space-between;
@@ -809,8 +1075,35 @@ const effectivePins = computed(() => {
 
 .mode-pills {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   gap: 6px;
+}
+
+.img-studio-box {
+  background: var(--color-bg-base, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.img-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.img-stats-bar {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: #475569;
+  padding-top: 4px;
+  border-top: 1px dashed #cbd5e1;
 }
 
 .mode-pill {

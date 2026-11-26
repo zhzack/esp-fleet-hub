@@ -306,6 +306,12 @@ def test_c3_display_config_and_text_e2e(client):
                             if "lines" in pl and isinstance(pl["lines"], list):
                                 disp_state["lines"] = pl["lines"]
                             disp_state["mode"] = pl.get("mode", "text")
+                        elif mt == "display.image":
+                            disp_state["mode"] = "image"
+                            disp_state["has_image"] = True
+                            disp_state["image_width"] = pl.get("width", 122)
+                            disp_state["image_height"] = pl.get("height", 250)
+                            disp_state["image_color_mode"] = pl.get("color_mode", "bwr")
                         res_pl = {"ok": True, "status": "ok", "exec_time_ms": 2, **disp_state}
                         ws.send_json({
                             "header": {"msg_id": str(uuid.uuid4()), "ref_msg_id": mid, "type": "ack", "timestamp": 0},
@@ -389,6 +395,46 @@ def test_c3_display_config_and_text_e2e(client):
                     "/api/v2/devices/esp32c3_disp_e2e/display/config",
                     headers=hdrs,
                     json={"pins": {"busy": 99}},
+                ).status_code == 400
+
+                # E-Paper Image upload (tri-color BWR & monochrome BW) + validation
+                img_bwr = tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/image",
+                    headers=hdrs,
+                    json={
+                        "width": 122,
+                        "height": 250,
+                        "color_mode": "bwr",
+                        "encoding": "rle",
+                        "bw_b64": "gP8=",
+                        "red_b64": "gAA=",
+                        "panel": "epd_213_bwr",
+                    },
+                )
+                assert img_bwr.status_code == 200
+                assert img_bwr.json()["result"]["mode"] == "image"
+                assert img_bwr.json()["result"]["has_image"] is True
+                assert img_bwr.json()["result"]["image_color_mode"] == "bwr"
+
+                img_bw = tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/image",
+                    headers=hdrs,
+                    json={
+                        "width": 400,
+                        "height": 300,
+                        "color_mode": "bw",
+                        "encoding": "rle",
+                        "bw_b64": "gP8=",
+                        "panel": "epd_420_bwr",
+                    },
+                )
+                assert img_bw.status_code == 200
+                assert img_bw.json()["result"]["image_color_mode"] == "bw"
+
+                assert tc.post(
+                    "/api/v2/devices/esp32c3_disp_e2e/display/image",
+                    headers=hdrs,
+                    json={"width": 500, "height": 300, "bw_b64": "AA=="},
                 ).status_code == 400
     finally:
         device_registry._live.clear()

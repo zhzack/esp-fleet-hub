@@ -368,7 +368,7 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = cfg.web_port ? cfg.web_port : 80;
     config.ctrl_port = 32768;
-    config.max_uri_handlers = 36;
+    config.max_uri_handlers = 42;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;

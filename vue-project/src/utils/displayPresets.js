@@ -1,6 +1,7 @@
 export const DISPLAY_MODE_OPTIONS = [
   { value: 'status', label: '节点状态', desc: '本地展示 WiFi / IP / RSSI / Heap 与备注' },
   { value: 'text', label: '自定义文本', desc: '固定展示最多 6 行自定义看板文字，墨水屏断电持久保留' },
+  { value: 'image', label: '图片展示', desc: '上传图片转换为纯黑白或黑白红三色点阵并持久留在墨水屏' },
   { value: 'monitor', label: 'PC 监控', desc: '实时展示 CPU / 内存 / 磁盘 / 网速 / 运行时长' },
   { value: 'off', label: '清屏/休眠', desc: '墨水屏清屏进入深睡休眠 / LCD 关闭背光' },
 ]

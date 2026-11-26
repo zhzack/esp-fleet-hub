@@ -256,10 +256,11 @@ async def reboot(
 
 
 DisplayPanel = Literal["auto", "st7735_160", "st7789_240", "epd_213_bw", "epd_213_bwr", "epd_420_bwr"]
+DisplayMode = Literal["monitor", "text", "status", "image", "off"]
 
 
 class DisplayConfigIn(BaseModel):
-    mode: Literal["monitor", "text", "status", "off"] | None = None
+    mode: DisplayMode | None = None
     backlight: int | None = None
     theme: Literal["cyber", "emerald", "amber", "mono", "paper", "red_bar"] | None = None
     panel: DisplayPanel | None = None
@@ -295,7 +296,7 @@ class DisplayTextIn(BaseModel):
     lines: list[str] | None = None
     backlight: int | None = None
     clear: bool | None = None
-    mode: Literal["monitor", "text", "status", "off"] | None = None
+    mode: DisplayMode | None = None
     panel: DisplayPanel | None = None
     rotation: Literal[0, 90, 180, 270] | None = None
     invert: bool | None = None
@@ -303,6 +304,19 @@ class DisplayTextIn(BaseModel):
     red_mask: int | None = None
     refresh: bool | None = None
     full_refresh: bool | None = None
+
+
+class DisplayImageIn(BaseModel):
+    width: int
+    height: int
+    color_mode: Literal["bw", "bwr"] = "bwr"
+    encoding: Literal["raw", "rle"] = "rle"
+    bw_b64: str
+    red_b64: str | None = None
+    panel: DisplayPanel | None = None
+    rotation: Literal[0, 90, 180, 270] | None = None
+    invert: bool | None = None
+    full_refresh: bool | None = True
 
 
 def _validate_backlight(backlight: int | None) -> None:
@@ -379,6 +393,32 @@ async def display_text(
         "display.text",
         payload=body.model_dump(exclude_none=True),
         timeout_ms=4000,
+        required_caps=_DISPLAY_CAPS,
+        cap_label="屏幕显示",
+    )
+
+
+@router.post("/{device_uuid}/display/image")
+async def display_image(
+    device_uuid: str,
+    body: DisplayImageIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if not (1 <= body.width <= 400 and 1 <= body.height <= 400):
+        raise HTTPException(400, "width and height must be between 1 and 400")
+    plane_len = ((body.width + 7) // 8) * body.height
+    if plane_len > 15000:
+        raise HTTPException(400, "image buffer exceeds maximum EPD framebuffer size (15000 bytes)")
+    if not body.bw_b64:
+        raise HTTPException(400, "bw_b64 is required")
+    return await _send(
+        db,
+        user,
+        device_uuid,
+        "display.image",
+        payload=body.model_dump(exclude_none=True),
+        timeout_ms=8000,
         required_caps=_DISPLAY_CAPS,
         cap_label="屏幕显示",
     )

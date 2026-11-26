@@ -11,6 +11,12 @@ import {
   normalizeDisplayConfig,
 } from '../src/utils/displayPresets.js'
 import {
+  buildEpdImagePayload,
+  encodePackBits,
+  generateTestPatternRgba,
+  quantizeRgbaToEpd,
+} from '../src/utils/epdImage.js'
+import {
   buildTimerPayload,
   createDefaultTimerForm,
   formatActionSummary,
@@ -154,4 +160,64 @@ test('epd presets support 2.13 BW, 2.13 BWR, and 4.2 BWR dimensions, rotation, a
   assert.equal(epdPayload.panel, 'epd_420_bwr')
   assert.equal(epdPayload.full_refresh, true)
   assert.equal(epdPayload.red_mask, 0x42)
+})
+
+function decodePackBitsJs(src, expectedLen) {
+  const out = new Uint8Array(expectedLen)
+  let ip = 0
+  let op = 0
+  while (ip < src.length && op < expectedLen) {
+    let hdr = src[ip++]
+    if (hdr > 127) hdr -= 256
+    if (hdr >= 0) {
+      const cnt = hdr + 1
+      for (let k = 0; k < cnt; k++) out[op++] = src[ip++]
+    } else if (hdr !== -128) {
+      const cnt = 1 - hdr
+      const v = src[ip++]
+      for (let k = 0; k < cnt; k++) out[op++] = v
+    }
+  }
+  assert.equal(op, expectedLen)
+  return out
+}
+
+test('epdImage supports monochrome (bw) and tri-color (bwr) quantization and PackBits RLE roundtrip', () => {
+  const bwRgba = generateTestPatternRgba(122, 250, 'bw')
+  const qBw = quantizeRgbaToEpd(bwRgba, 122, 250, { colorMode: 'bw', algorithm: 'dither' })
+  assert.equal(qBw.bw.length, 16 * 250)
+  assert.equal(qBw.stats.redCount, 0)
+  assert.ok(qBw.stats.blackCount > 1000 && qBw.stats.whiteCount > 1000)
+  assert.equal(qBw.red.every((b) => b === 0), true)
+
+  const bwrRgba = generateTestPatternRgba(122, 250, 'bwr')
+  const qBwr = quantizeRgbaToEpd(bwrRgba, 122, 250, { colorMode: 'bwr', algorithm: 'dither' })
+  assert.equal(qBwr.bw.length, 4000)
+  assert.ok(qBwr.stats.redCount > 500)
+  assert.ok(qBwr.stats.blackCount > 500)
+
+  // Neutral gray strip must NOT emit red pixels in tri-color quantization
+  const grayStrip = new Uint8ClampedArray(32 * 4 * 4)
+  for (let i = 0; i < 32 * 4; i++) {
+    grayStrip[i * 4] = 128
+    grayStrip[i * 4 + 1] = 128
+    grayStrip[i * 4 + 2] = 128
+    grayStrip[i * 4 + 3] = 255
+  }
+  const qGray = quantizeRgbaToEpd(grayStrip, 32, 4, { colorMode: 'bwr', algorithm: 'dither' })
+  assert.equal(qGray.stats.redCount, 0)
+
+  // PackBits roundtrip verification
+  const rleBw = encodePackBits(qBwr.bw)
+  const decodedBw = decodePackBitsJs(rleBw, qBwr.bw.length)
+  assert.deepEqual(decodedBw, qBwr.bw)
+
+  const pBwr = buildEpdImagePayload({ ...qBwr, width: 122, height: 250, colorMode: 'bwr', panel: 'epd_213_bwr' })
+  assert.equal(pBwr.color_mode, 'bwr')
+  assert.equal(pBwr.encoding, 'rle')
+  assert.ok(pBwr.red_b64 && pBwr.red_b64.length > 0)
+
+  const pBw = buildEpdImagePayload({ ...qBw, width: 122, height: 250, colorMode: 'bw', panel: 'epd_213_bw' })
+  assert.equal(pBw.color_mode, 'bw')
+  assert.equal(pBw.red_b64, undefined)
 })

@@ -47,6 +47,8 @@ _WS_PROXY_POST: dict[str, tuple[str, int]] = {
     "/api/gpio/set": ("gpio.set", 4000),
     "/api/display/text": ("display.text", 4000),
     "/api/display/config": ("display.config", 4000),
+    "/api/display/image": ("display.image", 8000),
+    "/api/monitor/push": ("monitor.push", 3000),
     "/api/camera/flash": ("camera.flash", 4000),
     "/api/flash": ("camera.flash", 4000),
     "/api/camera/config": ("camera.config", 4000),
@@ -60,6 +62,7 @@ _WS_CMD_MAP: dict[str, str] = {
     "camera_flash": "camera.flash",
     "display_text": "display.text",
     "display_config": "display.config",
+    "display_image": "display.image",
     "reboot": "reboot",
     "ota_pull": "ota.start",
 }

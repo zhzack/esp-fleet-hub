@@ -36,6 +36,7 @@
 #endif
 #if CONFIG_FEATURE_DISPLAY
 #include "hal_display.h"
+#include "hal_epd.h"
 #endif
 #if CONFIG_FEATURE_DISPLAY || CONFIG_FEATURE_PC_MONITOR
 #include "mod_display.h"
@@ -60,7 +61,7 @@ static volatile bool s_online = false;
 static volatile bool s_connected = false;
 static char s_auth_nonce[65] = "";
 
-#define WS_RX_MAX_FRAME_LEN 16384
+#define WS_RX_MAX_FRAME_LEN 65536
 static char *s_rx_frag_buf = NULL;
 static size_t s_rx_frag_cap = 0;
 static size_t s_rx_frag_len = 0;
@@ -536,6 +537,43 @@ static void ws_worker_task(void *pv)
             } else {
                 send_ack(msgid, false, 2, "E400", esp_err_to_name(derr));
             }
+#else
+            send_ack(msgid, false, 0, "E404", "display disabled");
+#endif
+        } else if (strcmp(mtype, "display.image") == 0 && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_DISPLAY && !CONFIG_FEATURE_PC_MONITOR
+            char *ptxt = cJSON_PrintUnformatted(pl);
+            esp_err_t derr = ptxt ? mod_display_update_image_json(ptxt) : ESP_ERR_NO_MEM;
+            if (ptxt) cJSON_free(ptxt);
+            if (derr == ESP_OK) {
+                cJSON *ds = mod_display_build_status_json();
+                send_ack_with_payload(msgid, ds != NULL, 4, ds, "E500", "oom");
+            } else {
+                send_ack(msgid, false, 4, "E400", esp_err_to_name(derr));
+            }
+#else
+            send_ack(msgid, false, 0, "E404", "epd image unsupported on this device");
+#endif
+        } else if (strcmp(mtype, "monitor.push") == 0 && cJSON_IsObject(pl)) {
+#if CONFIG_FEATURE_PC_MONITOR || CONFIG_FEATURE_DISPLAY
+            float cpu = (float)(cJSON_IsNumber(cJSON_GetObjectItem(pl, "cpu")) ? cJSON_GetObjectItem(pl, "cpu")->valuedouble : 0.0);
+            float ram = (float)(cJSON_IsNumber(cJSON_GetObjectItem(pl, "ram")) ? cJSON_GetObjectItem(pl, "ram")->valuedouble : 0.0);
+            float disk = (float)(cJSON_IsNumber(cJSON_GetObjectItem(pl, "disk")) ? cJSON_GetObjectItem(pl, "disk")->valuedouble : 0.0);
+            const char *dl = cJSON_IsString(cJSON_GetObjectItem(pl, "down")) ? cJSON_GetObjectItem(pl, "down")->valuestring : "0K/s";
+            const char *ul = cJSON_IsString(cJSON_GetObjectItem(pl, "up")) ? cJSON_GetObjectItem(pl, "up")->valuestring : "0K/s";
+            const char *up = cJSON_IsString(cJSON_GetObjectItem(pl, "uptime")) ? cJSON_GetObjectItem(pl, "uptime")->valuestring : "--";
+            const char *tm = cJSON_IsString(cJSON_GetObjectItem(pl, "time")) ? cJSON_GetObjectItem(pl, "time")->valuestring : "--:--";
+#if CONFIG_FEATURE_PC_MONITOR
+            (void)up;
+            mod_pc_monitor_update_metrics(cpu, ram, disk, dl, ul, tm);
+#else
+            hal_epd_update_metrics(cpu, ram, disk, dl, ul, up, tm);
+            if (cJSON_IsTrue(cJSON_GetObjectItem(pl, "refresh")) &&
+                strcmp(app_config_ptr()->display.mode, "monitor") == 0) {
+                hal_epd_request_refresh(false, false);
+            }
+#endif
+            send_ack(msgid, true, 1, NULL, NULL);
 #else
             send_ack(msgid, false, 0, "E404", "display disabled");
 #endif

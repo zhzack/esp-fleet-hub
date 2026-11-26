@@ -12,7 +12,7 @@ extern "C" {
 #define APP_DISPLAY_MAX_LINES 6
 
 typedef struct {
-    char mode[16];         // "monitor" | "text" | "status" | "off"
+    char mode[16];         // "monitor" | "text" | "status" | "image" | "off"
     uint8_t backlight;     // 0-100
     char theme[16];        // "cyber" | "emerald" | "amber" | "mono" | "paper"
     char panel[24];        // "epd_213_bw" | "epd_213_bwr" | "epd_420_bwr" | "st7789_240" | "st7735_160" | "auto"

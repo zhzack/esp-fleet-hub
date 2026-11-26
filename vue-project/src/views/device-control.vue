@@ -122,6 +122,28 @@ async function saveDisplayConfig(payload) {
   }
 }
 
+async function sendDisplayImage(payload) {
+  loading.value = true
+  displayErrorMsg.value = ''
+  try {
+    const resp = await commandsApi.displayImage(props.deviceUuid, payload)
+    lastResult.value = resp
+    if (resp?.status && resp.status !== 'acked' && resp.status !== 'ok') {
+      const msg = `${resp.error_code || resp.status}: ${resp.error_message || '推图失败'}`
+      displayErrorMsg.value = msg
+      ElMessage.warning(`图片下发未生效 (${msg})`)
+      return
+    }
+    const r = extractResult(resp)
+    if (r) displayStatusData.value = r
+    ElMessage.success('图片已推送到墨水屏并开始刷屏')
+  } catch (e) {
+    displayErrorMsg.value = e?.response?.data?.detail || e?.message || '墨水屏图片下发失败'
+  } finally {
+    loading.value = false
+  }
+}
+
 async function loadGpioPins(silent = true) {
   if (!capFlags.value.supportsGpio) return
   loading.value = true
@@ -648,6 +670,7 @@ watch(tab, (t) => {
               :error-message="displayErrorMsg"
               @refresh="loadDisplayStatus(false)"
               @save="saveDisplayConfig"
+              @send-image="sendDisplayImage"
             />
           </div>
         </el-tab-pane>

@@ -334,6 +334,11 @@ void hal_display_populate_status_cjson(void *cjson_obj)
         cJSON_AddBoolToObject(root, "busy_timeout", info.busy_timeout);
         cJSON_AddNumberToObject(root, "refresh_count", info.refresh_count);
         cJSON_AddNumberToObject(root, "last_refresh_ms", info.last_refresh_ms);
+        cJSON_AddBoolToObject(root, "has_image", info.has_image);
+        cJSON_AddNumberToObject(root, "image_width", info.image_w);
+        cJSON_AddNumberToObject(root, "image_height", info.image_h);
+        cJSON_AddStringToObject(root, "image_color_mode",
+                                info.has_image ? (info.image_has_red ? "bwr" : "bw") : "none");
 
         cJSON *rp = cJSON_AddObjectToObject(root, "resolved_pins");
         cJSON_AddNumberToObject(rp, "mosi", info.pin_mosi);

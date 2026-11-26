@@ -6,12 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include "esp_log.h"
 
 #if CONFIG_FEATURE_DISPLAY && !CONFIG_FEATURE_PC_MONITOR
 
 #include "board_pins.h"
+#include "cJSON.h"
 #include "font8x16.h"
+#include "hal_storage.h"
+#include "mbedtls/base64.h"
 #include "system_caps.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -86,19 +90,41 @@ typedef struct {
     float disk;
     char dl[20];
     char ul[20];
+    char uptime[16];
     char time_str[16];
     int64_t updated_ms;
 } epd_metrics_t;
+
+#define EPD_IMG_FILE_PATH "/storage/epd_img.bin"
+#define EPD_IMG_MAGIC     0x49445045U
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint16_t width;
+    uint16_t height;
+    uint8_t has_red;
+    uint8_t reserved[3];
+    uint32_t plane_len;
+} epd_img_file_hdr_t;
 
 static spi_device_handle_t s_spi = NULL;
 static bool s_bus_owned = false;
 static bool s_initialized = false;
 static SemaphoreHandle_t s_lock = NULL;
+static SemaphoreHandle_t s_img_lock = NULL;
 static TaskHandle_t s_worker = NULL;
 
 static uint8_t *s_bw_buf = NULL;
 static uint8_t *s_red_buf = NULL;
 static uint8_t *s_prev_bw_buf = NULL;
+
+static uint8_t *s_img_bw = NULL;
+static uint8_t *s_img_red = NULL;
+static uint16_t s_img_w = 0;
+static uint16_t s_img_h = 0;
+static bool s_img_has_red = false;
+static bool s_img_loaded = false;
+static volatile bool s_img_dirty = false;
 
 static int s_pin_mosi = -1;
 static int s_pin_clk = -1;
@@ -125,9 +151,173 @@ static epd_metrics_t s_metrics = {
     .disk = 0.0f,
     .dl = "0K/s",
     .ul = "0K/s",
+    .uptime = "--",
     .time_str = "--:--",
     .updated_ms = 0,
 };
+
+static bool ensure_img_buffers_locked(void)
+{
+    if (!s_img_bw) {
+        s_img_bw = calloc(1, EPD_MAX_BUF_SIZE);
+    }
+    if (!s_img_red) {
+        s_img_red = calloc(1, EPD_MAX_BUF_SIZE);
+    }
+    return (s_img_bw != NULL && s_img_red != NULL);
+}
+
+static bool decode_packbits(const uint8_t *in, size_t in_len, uint8_t *out, size_t expected_len)
+{
+    size_t ip = 0;
+    size_t op = 0;
+    while (ip < in_len && op < expected_len) {
+        int8_t hdr = (int8_t)in[ip++];
+        if (hdr >= 0) {
+            size_t cnt = (size_t)hdr + 1U;
+            if (ip + cnt > in_len || op + cnt > expected_len) return false;
+            memcpy(out + op, in + ip, cnt);
+            ip += cnt;
+            op += cnt;
+        } else if (hdr != -128) {
+            size_t cnt = (size_t)(1 - (int)hdr);
+            if (ip >= in_len || op + cnt > expected_len) return false;
+            memset(out + op, in[ip++], cnt);
+            op += cnt;
+        }
+    }
+    return (op == expected_len);
+}
+
+static bool decode_plane_b64(const char *b64_str, bool use_rle, size_t expected_len, uint8_t *out_buf)
+{
+    if (!b64_str || !b64_str[0] || !out_buf || expected_len == 0 || expected_len > EPD_MAX_BUF_SIZE) {
+        return false;
+    }
+    size_t b64_len = strlen(b64_str);
+    size_t raw_cap = 0;
+    int rc = mbedtls_base64_decode(NULL, 0, &raw_cap, (const unsigned char *)b64_str, b64_len);
+    if (rc != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL && rc != 0) return false;
+    if (raw_cap == 0 || raw_cap > (EPD_MAX_BUF_SIZE + 1024U)) return false;
+
+    uint8_t *raw = malloc(raw_cap);
+    if (!raw) return false;
+    size_t raw_len = 0;
+    rc = mbedtls_base64_decode(raw, raw_cap, &raw_len, (const unsigned char *)b64_str, b64_len);
+    bool ok = false;
+    if (rc == 0) {
+        if (use_rle) {
+            ok = decode_packbits(raw, raw_len, out_buf, expected_len);
+        } else if (raw_len == expected_len) {
+            memcpy(out_buf, raw, expected_len);
+            ok = true;
+        }
+    }
+    free(raw);
+    return ok;
+}
+
+static void load_image_from_storage_if_needed(void)
+{
+    if (s_img_loaded || !hal_storage_is_mounted() || !s_img_lock) return;
+    FILE *f = fopen(EPD_IMG_FILE_PATH, "rb");
+    if (!f) {
+        s_img_loaded = true;
+        return;
+    }
+
+    epd_img_file_hdr_t hdr = {0};
+    bool valid = (fread(&hdr, 1, sizeof(hdr), f) == sizeof(hdr) &&
+                  hdr.magic == EPD_IMG_MAGIC &&
+                  hdr.width >= 1 && hdr.width <= 400 &&
+                  hdr.height >= 1 && hdr.height <= 400);
+    size_t expected = valid ? (((size_t)hdr.width + 7U) / 8U) * (size_t)hdr.height : 0;
+    if (!valid || hdr.plane_len != expected || expected == 0 || expected > EPD_MAX_BUF_SIZE) {
+        fclose(f);
+        s_img_loaded = true;
+        return;
+    }
+
+    uint8_t *bw = calloc(1, EPD_MAX_BUF_SIZE);
+    uint8_t *red = calloc(1, EPD_MAX_BUF_SIZE);
+    if (!bw || !red) {
+        free(bw);
+        free(red);
+        fclose(f);
+        return;
+    }
+    memset(bw, 0xFF, EPD_MAX_BUF_SIZE);
+    bool ok = (fread(bw, 1, expected, f) == expected);
+    if (ok && hdr.has_red) {
+        ok = (fread(red, 1, expected, f) == expected);
+    }
+    fclose(f);
+
+    if (ok && xSemaphoreTake(s_img_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
+        if (ensure_img_buffers_locked()) {
+            memcpy(s_img_bw, bw, expected);
+            memcpy(s_img_red, red, expected);
+            s_img_w = hdr.width;
+            s_img_h = hdr.height;
+            s_img_has_red = (hdr.has_red != 0);
+        }
+        xSemaphoreGive(s_img_lock);
+    }
+    free(bw);
+    free(red);
+    s_img_loaded = true;
+}
+
+static void save_dirty_image_to_storage(void)
+{
+    if (!s_img_dirty || !hal_storage_is_mounted() || !s_img_lock) return;
+
+    epd_img_file_hdr_t hdr = {0};
+    uint8_t *bw_copy = malloc(EPD_MAX_BUF_SIZE);
+    uint8_t *red_copy = malloc(EPD_MAX_BUF_SIZE);
+    if (!bw_copy || !red_copy) {
+        free(bw_copy);
+        free(red_copy);
+        return;
+    }
+
+    size_t plen = 0;
+    if (xSemaphoreTake(s_img_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
+        if (s_img_bw && s_img_w >= 1 && s_img_h >= 1) {
+            plen = (((size_t)s_img_w + 7U) / 8U) * (size_t)s_img_h;
+            if (plen <= EPD_MAX_BUF_SIZE) {
+                hdr.magic = EPD_IMG_MAGIC;
+                hdr.width = s_img_w;
+                hdr.height = s_img_h;
+                hdr.has_red = s_img_has_red ? 1 : 0;
+                hdr.plane_len = (uint32_t)plen;
+                memcpy(bw_copy, s_img_bw, plen);
+                if (s_img_has_red && s_img_red) {
+                    memcpy(red_copy, s_img_red, plen);
+                }
+            }
+        }
+        s_img_dirty = false;
+        xSemaphoreGive(s_img_lock);
+    }
+
+    if (hdr.magic == EPD_IMG_MAGIC && plen > 0) {
+        FILE *f = fopen(EPD_IMG_FILE_PATH, "wb");
+        if (f) {
+            fwrite(&hdr, 1, sizeof(hdr), f);
+            fwrite(bw_copy, 1, plen, f);
+            if (hdr.has_red) {
+                fwrite(red_copy, 1, plen, f);
+            }
+            fclose(f);
+            ESP_LOGI(TAG, "Saved EPD image (%ux%u, %s, %u B/plane) to %s",
+                     hdr.width, hdr.height, hdr.has_red ? "bwr" : "bw",
+                     (unsigned)plen, EPD_IMG_FILE_PATH);
+        }
+    }
+    free(bw_copy);
+    free(red_copy);
+}
 
 bool hal_epd_is_epd_panel_name(const char *panel_name)
 {
@@ -543,11 +733,73 @@ static void format_uptime(uint32_t sec, char *dst, size_t cap)
     }
 }
 
+static void render_image_mode(const epd_canvas_t *c)
+{
+    bool painted = false;
+    if (s_img_lock && xSemaphoreTake(s_img_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
+        if (s_img_bw && s_img_w > 0 && s_img_h > 0) {
+            size_t stride = ((size_t)s_img_w + 7U) / 8U;
+            if (s_img_w == c->cw && s_img_h == c->ch) {
+                for (int y = 0; y < (int)c->ch; y++) {
+                    size_t row_off = (size_t)y * stride;
+                    for (int x = 0; x < (int)c->cw; x++) {
+                        size_t idx = row_off + (size_t)(x >> 3);
+                        uint8_t bit = (uint8_t)(0x80U >> (x & 7));
+                        bool is_red = (s_img_has_red && s_img_red && (s_img_red[idx] & bit) != 0);
+                        bool is_white = ((s_img_bw[idx] & bit) != 0);
+                        epd_color_t col = is_red ? EPD_RED : (is_white ? EPD_WHITE : EPD_BLACK);
+                        canvas_set_px(c, x, y, col);
+                    }
+                }
+            } else {
+                // Aspect-preserving centered scaling if rotation/panel changed after image upload
+                uint32_t sx_num = (uint32_t)c->cw * (uint32_t)s_img_h;
+                uint32_t sy_num = (uint32_t)c->ch * (uint32_t)s_img_w;
+                int draw_w = (sx_num <= sy_num) ? (int)c->cw : (int)(sy_num / s_img_h);
+                int draw_h = (sx_num <= sy_num) ? (int)((uint32_t)c->cw * s_img_h / s_img_w) : (int)c->ch;
+                if (draw_w < 1) draw_w = 1;
+                if (draw_h < 1) draw_h = 1;
+                int ox = ((int)c->cw - draw_w) / 2;
+                int oy = ((int)c->ch - draw_h) / 2;
+                for (int dy = 0; dy < draw_h; dy++) {
+                    int sy = (dy * (int)s_img_h) / draw_h;
+                    if (sy >= (int)s_img_h) sy = (int)s_img_h - 1;
+                    size_t row_off = (size_t)sy * stride;
+                    for (int dx = 0; dx < draw_w; dx++) {
+                        int sx = (dx * (int)s_img_w) / draw_w;
+                        if (sx >= (int)s_img_w) sx = (int)s_img_w - 1;
+                        size_t idx = row_off + (size_t)(sx >> 3);
+                        uint8_t bit = (uint8_t)(0x80U >> (sx & 7));
+                        bool is_red = (s_img_has_red && s_img_red && (s_img_red[idx] & bit) != 0);
+                        bool is_white = ((s_img_bw[idx] & bit) != 0);
+                        epd_color_t col = is_red ? EPD_RED : (is_white ? EPD_WHITE : EPD_BLACK);
+                        canvas_set_px(c, ox + dx, oy + dy, col);
+                    }
+                }
+            }
+            painted = true;
+        }
+        xSemaphoreGive(s_img_lock);
+    }
+
+    if (!painted) {
+        int cy = (int)c->ch / 2 - 20;
+        if (cy < 4) cy = 4;
+        canvas_draw_rect(c, 4, cy - 6, c->cw - 8, 52, EPD_BLACK);
+        canvas_draw_str(c, 12, cy, "IMAGE MODE", c->spec->has_red ? EPD_RED : EPD_BLACK, 1);
+        canvas_draw_str(c, 12, cy + 20, "No image loaded", EPD_BLACK, 1);
+    }
+}
+
 static void render_epd_frame(const app_config_t *cfg, const epd_canvas_t *c, hal_epd_panel_t panel_id)
 {
     const app_display_config_t *d = &cfg->display;
     if (strcmp(d->mode, "off") == 0) {
         return; // Clean blank white frame already prepared by canvas_begin
+    }
+    if (strcmp(d->mode, "image") == 0) {
+        render_image_mode(c);
+        return;
     }
 
     bool is_large = (c->cw >= 300);
@@ -786,7 +1038,11 @@ static void epd_worker_task(void *arg)
             s_pending_clear = false;
             s_pending_redraw = false;
 
+            save_dirty_image_to_storage();
             app_config_get(&cfg);
+            if (strcmp(cfg.display.mode, "image") == 0 && !s_img_loaded) {
+                load_image_from_storage_if_needed();
+            }
             hal_epd_panel_t pid = hal_epd_parse_panel(cfg.display.panel);
             const epd_panel_spec_t *spec = &s_specs[pid];
 
@@ -883,6 +1139,7 @@ static esp_err_t setup_spi_and_pins(void)
 esp_err_t hal_epd_init(void)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_img_lock) s_img_lock = xSemaphoreCreateMutex();
     if (!s_bw_buf) {
         s_bw_buf = heap_caps_calloc(1, EPD_MAX_BUF_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     }
@@ -896,6 +1153,8 @@ esp_err_t hal_epd_init(void)
         ESP_LOGE(TAG, "Failed to allocate EPD DMA framebuffers");
         return ESP_ERR_NO_MEM;
     }
+
+    load_image_from_storage_if_needed();
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (!s_initialized) {
@@ -983,13 +1242,113 @@ esp_err_t hal_epd_request_refresh(bool force_full, bool clear_only)
     return ESP_OK;
 }
 
-void hal_epd_update_metrics(float cpu, float ram, float disk, const char *dl, const char *ul, const char *time_str)
+esp_err_t hal_epd_apply_image_json(const char *json_str, bool *out_force_full)
+{
+    if (!json_str) return ESP_ERR_INVALID_ARG;
+    if (!s_initialized || !s_img_lock) {
+        esp_err_t init_err = hal_epd_init();
+        if (init_err != ESP_OK && !s_img_lock) return init_err;
+    }
+
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const cJSON *jw = cJSON_GetObjectItem(root, "width");
+    const cJSON *jh = cJSON_GetObjectItem(root, "height");
+    const cJSON *jbw = cJSON_GetObjectItem(root, "bw_b64");
+    const cJSON *jred = cJSON_GetObjectItem(root, "red_b64");
+    const cJSON *jcm = cJSON_GetObjectItem(root, "color_mode");
+    const cJSON *jenc = cJSON_GetObjectItem(root, "encoding");
+    const cJSON *jff = cJSON_GetObjectItem(root, "full_refresh");
+
+    int w = cJSON_IsNumber(jw) ? jw->valueint : 0;
+    int h = cJSON_IsNumber(jh) ? jh->valueint : 0;
+    if (w < 1 || w > 400 || h < 1 || h > 400 || !cJSON_IsString(jbw) || !jbw->valuestring[0]) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t stride = ((size_t)w + 7U) / 8U;
+    size_t plane_len = stride * (size_t)h;
+    if (plane_len == 0 || plane_len > EPD_MAX_BUF_SIZE) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    bool use_rle = (cJSON_IsString(jenc) && strcmp(jenc->valuestring, "rle") == 0);
+    bool want_red = (cJSON_IsString(jcm) && strcmp(jcm->valuestring, "bwr") == 0 &&
+                     cJSON_IsString(jred) && jred->valuestring[0] != '\0');
+    bool force_full = cJSON_IsBool(jff) ? cJSON_IsTrue(jff) : true;
+
+    uint8_t *tmp_bw = calloc(1, EPD_MAX_BUF_SIZE);
+    uint8_t *tmp_red = calloc(1, EPD_MAX_BUF_SIZE);
+    if (!tmp_bw || !tmp_red) {
+        free(tmp_bw);
+        free(tmp_red);
+        cJSON_Delete(root);
+        return ESP_ERR_NO_MEM;
+    }
+
+    bool ok = decode_plane_b64(jbw->valuestring, use_rle, plane_len, tmp_bw);
+    if (ok && want_red) {
+        ok = decode_plane_b64(jred->valuestring, use_rle, plane_len, tmp_red);
+    }
+    cJSON_Delete(root);
+
+    if (!ok) {
+        free(tmp_bw);
+        free(tmp_red);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(s_img_lock, pdMS_TO_TICKS(1500)) != pdTRUE) {
+        free(tmp_bw);
+        free(tmp_red);
+        return ESP_ERR_TIMEOUT;
+    }
+    bool alloc_ok = ensure_img_buffers_locked();
+    if (alloc_ok) {
+        memset(s_img_bw, 0xFF, EPD_MAX_BUF_SIZE);
+        memset(s_img_red, 0x00, EPD_MAX_BUF_SIZE);
+        memcpy(s_img_bw, tmp_bw, plane_len);
+        if (want_red) {
+            memcpy(s_img_red, tmp_red, plane_len);
+        }
+        s_img_w = (uint16_t)w;
+        s_img_h = (uint16_t)h;
+        s_img_has_red = want_red;
+        s_img_loaded = true;
+        s_img_dirty = true;
+    }
+    xSemaphoreGive(s_img_lock);
+    free(tmp_bw);
+    free(tmp_red);
+
+    if (!alloc_ok) return ESP_ERR_NO_MEM;
+
+    app_config_t updated;
+    app_config_get(&updated);
+    app_config_apply_display_json(json_str, &updated, false);
+    strlcpy(updated.display.mode, "image", sizeof(updated.display.mode));
+    updated.config_ver++;
+    app_config_save(&updated);
+
+    if (out_force_full) *out_force_full = force_full;
+    ESP_LOGI(TAG, "Queued EPD image %dx%d (%s, %u B/plane)", w, h, want_red ? "bwr" : "bw", (unsigned)plane_len);
+    return ESP_OK;
+}
+
+void hal_epd_update_metrics(float cpu, float ram, float disk, const char *dl, const char *ul, const char *uptime, const char *time_str)
 {
     s_metrics.cpu = cpu;
     s_metrics.ram = ram;
     s_metrics.disk = disk;
     if (dl) strlcpy(s_metrics.dl, dl, sizeof(s_metrics.dl));
     if (ul) strlcpy(s_metrics.ul, ul, sizeof(s_metrics.ul));
+    if (uptime) strlcpy(s_metrics.uptime, uptime, sizeof(s_metrics.uptime));
     if (time_str) strlcpy(s_metrics.time_str, time_str, sizeof(s_metrics.time_str));
     s_metrics.updated_ms = esp_timer_get_time() / 1000LL;
 }
@@ -1009,6 +1368,10 @@ void hal_epd_get_info(hal_epd_info_t *out)
     out->busy_timeout = s_busy_timeout;
     out->has_red = spec->has_red;
     out->supports_partial = spec->supports_partial;
+    out->has_image = (s_img_bw != NULL && s_img_w > 0 && s_img_h > 0);
+    out->image_has_red = s_img_has_red;
+    out->image_w = s_img_w;
+    out->image_h = s_img_h;
     out->panel = pid;
     out->panel_id = spec->id;
     out->driver_name = spec->driver;
@@ -1030,9 +1393,14 @@ esp_err_t hal_epd_init(void) { return ESP_OK; }
 esp_err_t hal_epd_reconfigure(void) { return ESP_OK; }
 void hal_epd_deinit(void) {}
 esp_err_t hal_epd_request_refresh(bool force_full, bool clear_only) { (void)force_full; (void)clear_only; return ESP_ERR_NOT_SUPPORTED; }
-void hal_epd_update_metrics(float cpu, float ram, float disk, const char *dl, const char *ul, const char *time_str)
+esp_err_t hal_epd_apply_image_json(const char *json_str, bool *out_force_full)
 {
-    (void)cpu; (void)ram; (void)disk; (void)dl; (void)ul; (void)time_str;
+    (void)json_str; (void)out_force_full;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+void hal_epd_update_metrics(float cpu, float ram, float disk, const char *dl, const char *ul, const char *uptime, const char *time_str)
+{
+    (void)cpu; (void)ram; (void)disk; (void)dl; (void)ul; (void)uptime; (void)time_str;
 }
 void hal_epd_get_info(hal_epd_info_t *out)
 {
