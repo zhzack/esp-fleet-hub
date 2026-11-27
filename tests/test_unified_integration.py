@@ -492,7 +492,20 @@ def test_lan_discover_and_key_adopt_flow(client, monkeypatch):
         stored = ub.hub_db.get_device("esp32s3-roam01")
         assert stored["claimed"] == 1
         assert stored["api_token"] == valid_key
-        assert stored["device_secret"] == valid_key
+        # First adopt pairs a fresh random HMAC device_secret synced on both device and Hub DB
+        paired_secret = mock_cfg.get("device_secret", "")
+        assert len(paired_secret) == 32
+        assert stored["device_secret"] == paired_secret
+        assert stored["device_secret"] != valid_key
+
+        # Re-adopting an existing paired device must preserve its HMAC device_secret
+        re_adopt = client.post(
+            "/api/v2/unified/adopt",
+            json={"ip": "127.0.0.1", "port": srv.server_port, "api_token": valid_key},
+            headers=hdrs,
+        )
+        assert re_adopt.status_code == 200
+        assert ub.hub_db.get_device("esp32s3-roam01")["device_secret"] == paired_secret
 
         # Another non-admin user cannot hijack already-claimed device
         hijack = client.post(

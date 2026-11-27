@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 from pathlib import Path
+import secrets
 from typing import Any, Dict, List, Optional
 import urllib.parse
 
@@ -92,6 +93,8 @@ class AdoptIn(BaseModel):
     ip: str
     port: int = 80
     api_token: str = ""
+    device_secret: Optional[str] = None
+    rotate_device_secret: bool = False
     name: Optional[str] = None
     claimed: bool = True
     set_hub_url: bool = True
@@ -613,12 +616,24 @@ async def adopt_lan_device(
     if body.ws_enabled is not None:
         patch["ws_enabled"] = bool(body.ws_enabled)
 
+    # Pair a matching HMAC device_secret on both the device and Hub DB:
+    # never overwrite device_secret with the HTTP api_token (or autofill values).
+    paired_secret: Optional[str] = None
+    if body.device_secret is not None and body.device_secret.strip():
+        paired_secret = body.device_secret.strip()
+        patch["device_secret"] = paired_secret
+    elif "device_secret" in patch and str(patch["device_secret"]).strip():
+        paired_secret = str(patch["device_secret"]).strip()
+    elif body.rotate_device_secret or not (existing and existing.get("device_secret")):
+        paired_secret = secrets.token_hex(16)
+        patch["device_secret"] = paired_secret
+
     try:
         final_caps, cfg_res = await run_in_threadpool(
             ub.lan_discovery.adopt_device_via_http,
             ip_str,
             body.port,
-            api_token=body.api_token,
+            api_token=body.api_token if caps.get("auth_required") else "",
             config_patch=patch,
             timeout_s=4.5,
         )
@@ -629,6 +644,7 @@ async def adopt_lan_device(
     except Exception as e:
         raise HTTPException(502, str(e))
 
+    safe_cfg_applied = {k: ("***" if k == "device_secret" else v) for k, v in patch.items()}
     reg_payload = {
         "device_id": dev_id,
         "mac": final_caps.get("mac", ""),
@@ -640,16 +656,21 @@ async def adopt_lan_device(
         "web_port": final_caps.get("port") or body.port,
         "fw_version": final_caps.get("fw_version", ""),
         "capabilities": final_caps.get("capabilities", {}),
-        "config": patch,
+        "config": safe_cfg_applied,
     }
     ub.hub_db.register_or_update_device(reg_payload)
     meta_name = body.name.strip() if body.name and body.name.strip() else None
+    stored_api_token = None
+    if "api_token" in patch:
+        stored_api_token = str(patch["api_token"] or "")
+    elif caps.get("auth_required") and body.api_token:
+        stored_api_token = body.api_token
     updated = ub.hub_db.update_device_meta(
         dev_id,
         name=meta_name,
         claimed=body.claimed,
-        api_token=body.api_token if body.api_token else None,
-        device_secret=body.api_token if body.api_token else None,
+        api_token=stored_api_token,
+        device_secret=paired_secret,
     )
     app_dev = crud_device.get_by_uuid(db, dev_id)
     if app_dev is not None:
@@ -667,7 +688,7 @@ async def adopt_lan_device(
     return {
         "ok": True,
         "device": updated,
-        "config_applied": patch,
+        "config_applied": safe_cfg_applied,
         "device_response": cfg_res,
     }
 

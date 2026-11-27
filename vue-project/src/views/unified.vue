@@ -444,6 +444,7 @@ async function submitBatchOta() {
 }
 
 function openScanDialog() {
+  scanDialog.apiKey = ''
   scanDialog.visible = true
   if (!scanDialog.results.length && !scanDialog.scanning) {
     runLanDiscover()
@@ -755,7 +756,7 @@ onBeforeUnmount(() => {
           <el-form-item label="显示名称"><el-input v-model="inspect.cfgForm.name" /></el-form-item>
           <el-form-item label="mDNS 域名"><el-input v-model="inspect.cfgForm.mdns_host" /></el-form-item>
           <el-form-item label="Wi-Fi SSID"><el-input v-model="inspect.cfgForm.wifi_ssid" /></el-form-item>
-          <el-form-item label="Wi-Fi 密码"><el-input v-model="inspect.cfgForm.wifi_pass" type="password" placeholder="留空不修改" /></el-form-item>
+          <el-form-item label="Wi-Fi 密码"><el-input v-model="inspect.cfgForm.wifi_pass" type="password" autocomplete="new-password" name="esp_wifi_pass" placeholder="留空不修改" /></el-form-item>
           <el-form-item label="Hub URL"><el-input v-model="inspect.cfgForm.hub_url" /></el-form-item>
           <el-form-item label="Hub mDNS回退">
             <div style="display: flex; gap: 12px; align-items: center">
@@ -778,7 +779,7 @@ onBeforeUnmount(() => {
           <el-form-item label="严格密钥鉴权">
             <div style="display: flex; gap: 12px; align-items: center; width: 100%">
               <el-switch v-model="inspect.cfgForm.auth_strict" />
-              <el-input v-model="inspect.cfgForm.api_token" type="password" show-password placeholder="设置/更新访问 Key (留空不改)" />
+              <el-input v-model="inspect.cfgForm.api_token" type="password" autocomplete="new-password" name="esp_api_token" show-password placeholder="设置/更新访问 Key (留空不改)" />
             </div>
           </el-form-item>
           <el-button type="primary" size="small" @click="saveShadowConfig">下发配置并同步影子</el-button>
@@ -862,7 +863,7 @@ onBeforeUnmount(() => {
           </div>
         </el-form-item>
         <el-form-item label="接入凭证 Key">
-          <el-input v-model="scanDialog.apiKey" type="password" show-password placeholder="设备 X-API-Key / api_token / device_secret（无密码设备可留空）" />
+          <el-input v-model="scanDialog.apiKey" type="password" autocomplete="new-password" name="esp_adopt_key" show-password placeholder="设备 X-API-Key（未设密码的开放设备请保持留空）" />
         </el-form-item>
         <el-form-item label="重绑定目标网关">
           <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 100%">

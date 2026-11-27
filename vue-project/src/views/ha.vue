@@ -263,6 +263,8 @@ onMounted(loadAll)
               v-model="cfgForm.mqtt_pass"
               :disabled="!isAdmin"
               type="password"
+              autocomplete="new-password"
+              name="ha_mqtt_pass"
               show-password
               :placeholder="cfgForm.has_mqtt_pass ? '已配置加密密码（留空保持不变）' : '匿名 Broker 可留空'"
             />
